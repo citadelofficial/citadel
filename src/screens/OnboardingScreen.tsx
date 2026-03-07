@@ -1,809 +1,719 @@
-import { useState, useRef, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Shield,
-  BookOpen,
-  Users,
-  User,
-  Award,
-  ArrowRight,
-  ArrowLeft,
-  Sparkles,
-  School,
-  Check,
-  ChevronDown,
-  Star,
-  Heart,
-} from 'lucide-react';
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  ScrollView,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  Animated,
+  Easing,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { colors, spacing } from '../theme';
 
 interface Props {
   onGetStarted: (userData: { name: string; grade: string; school: string }) => void;
 }
 
 const grades = [
-  { label: '6th Grade' },
-  { label: '7th Grade' },
-  { label: '8th Grade' },
-  { label: '9th Grade', short: 'Freshman' },
-  { label: '10th Grade', short: 'Sophomore' },
-  { label: '11th Grade', short: 'Junior' },
-  { label: '12th Grade', short: 'Senior' },
-  { label: 'College Freshman' },
-  { label: 'College Sophomore' },
-  { label: 'College Junior' },
-  { label: 'College Senior' },
-  { label: 'Graduate Student' },
+  '6th Grade',
+  '7th Grade',
+  '8th Grade',
+  '9th Grade (Freshman)',
+  '10th Grade (Sophomore)',
+  '11th Grade (Junior)',
+  '12th Grade (Senior)',
+  'College Freshman',
+  'College Sophomore',
+  'College Junior',
+  'College Senior',
+  'Graduate Student',
 ];
 
-// Confetti component for celebration
-function Confetti({ show }: { show: boolean }) {
-  if (!show) return null;
-  const pieces = Array.from({ length: 30 }, (_, i) => ({
-    id: i,
-    x: Math.random() * 100,
-    color: ['#3D0C11', '#E8B4B8', '#FFD700', '#4CAF50', '#2196F3', '#FF6B6B'][
-      Math.floor(Math.random() * 6)
-    ],
-    delay: Math.random() * 0.5,
-    rotation: Math.random() * 360,
-    size: Math.random() * 6 + 4,
-  }));
-
-  return (
-    <div className="absolute inset-0 pointer-events-none overflow-hidden z-50">
-      {pieces.map((p) => (
-        <motion.div
-          key={p.id}
-          initial={{ y: -20, x: `${p.x}%`, opacity: 1, rotate: 0 }}
-          animate={{
-            y: '120%',
-            rotate: p.rotation + 720,
-            opacity: [1, 1, 0],
-          }}
-          transition={{
-            duration: 2 + Math.random(),
-            delay: p.delay,
-            ease: 'easeIn',
-          }}
-          className="absolute rounded-sm"
-          style={{
-            width: p.size,
-            height: p.size * 0.6,
-            backgroundColor: p.color,
-          }}
-        />
-      ))}
-    </div>
-  );
-}
+const loudounSchools = [
+  'Briar Woods High School',
+  'Broad Run High School',
+  'Dominion High School',
+  'Freedom High School',
+  'Heritage High School',
+  'Independence High School',
+  'John Champe High School',
+  'Lightridge High School',
+  'Loudoun County High School',
+  'Loudoun Valley High School',
+  'Park View High School',
+  'Potomac Falls High School',
+  'Riverside High School',
+  'Rock Ridge High School',
+  'Stone Bridge High School',
+  'Tuscarora High School',
+  'Woodgrove High School',
+  'Academies of Loudoun',
+];
 
 export function OnboardingScreen({ onGetStarted }: Props) {
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
   const [grade, setGrade] = useState('');
   const [school, setSchool] = useState('');
-  const [direction, setDirection] = useState(1);
-  const [showConfetti, setShowConfetti] = useState(false);
-  const [gradeDropdownOpen, setGradeDropdownOpen] = useState(false);
-  const nameInputRef = useRef<HTMLInputElement>(null);
-  const schoolInputRef = useRef<HTMLInputElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [showGradePicker, setShowGradePicker] = useState(false);
+  const [customSchools, setCustomSchools] = useState<string[]>([]);
+  const [hasTypedSchool, setHasTypedSchool] = useState(false);
 
-  // Auto-focus inputs
-  useEffect(() => {
-    if (step === 1) {
-      setTimeout(() => nameInputRef.current?.focus(), 400);
-    }
-    if (step === 3) {
-      setTimeout(() => schoolInputRef.current?.focus(), 400);
-    }
-  }, [step]);
+  const contentOpacity = useRef(new Animated.Value(0)).current;
+  const contentTranslate = useRef(new Animated.Value(16)).current;
+  const heroPulse = useRef(new Animated.Value(0)).current;
+  const ctaScale = useRef(new Animated.Value(1)).current;
+  const featureAnims = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
 
-  // Close dropdown when clicking outside
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setGradeDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    contentOpacity.setValue(0);
+    contentTranslate.setValue(16);
+
+    Animated.parallel([
+      Animated.timing(contentOpacity, {
+        toValue: 1,
+        duration: 300,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(contentTranslate, {
+        toValue: 0,
+        duration: 320,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    if (step !== 2) {
+      setShowGradePicker(false);
+    }
+  }, [step, contentOpacity, contentTranslate]);
+
+  useEffect(() => {
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(heroPulse, {
+          toValue: 1,
+          duration: 1500,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(heroPulse, {
+          toValue: 0,
+          duration: 1500,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+
+    pulseLoop.start();
+    return () => pulseLoop.stop();
+  }, [heroPulse]);
+
+  useEffect(() => {
+    if (step !== 0) return;
+
+    featureAnims.forEach((anim) => anim.setValue(0));
+    Animated.stagger(
+      110,
+      featureAnims.map((anim) =>
+        Animated.timing(anim, {
+          toValue: 1,
+          duration: 280,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        })
+      )
+    ).start();
+  }, [step, featureAnims]);
+
+  useEffect(() => {
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(ctaScale, {
+          toValue: 1.03,
+          duration: 850,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(ctaScale, {
+          toValue: 1,
+          duration: 850,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+
+    if (canProceed()) {
+      pulse.start();
+    } else {
+      ctaScale.setValue(1);
+    }
+
+    return () => pulse.stop();
+    // canProceed depends on local state values and is intentionally re-evaluated per render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, name, grade, school, ctaScale]);
+
+  const allSchools = useMemo(() => [...loudounSchools, ...customSchools], [customSchools]);
+
+  const filteredSchools = useMemo(() => {
+    const query = school.trim().toLowerCase();
+
+    if (!query) return loudounSchools.slice(0, 6);
+
+    return allSchools.filter((s) => s.toLowerCase().includes(query)).slice(0, 8);
+  }, [school, allSchools]);
+
+  const exactSchoolMatch = useMemo(
+    () => allSchools.some((s) => s.toLowerCase() === school.trim().toLowerCase()),
+    [allSchools, school]
+  );
+
+  const canAddNewSchool = school.trim().length > 1 && !exactSchoolMatch;
 
   const goNext = () => {
-    setDirection(1);
     if (step === 3) {
-      setShowConfetti(true);
-      setTimeout(() => {
-        onGetStarted({ name: name.trim(), grade, school: school.trim() });
-      }, 1200);
+      onGetStarted({ name: name.trim(), grade, school: school.trim() });
     } else {
       setStep((s) => s + 1);
     }
   };
 
-  const goBack = () => {
-    setDirection(-1);
-    setStep((s) => Math.max(0, s - 1));
-  };
+  const goBack = () => setStep((s) => Math.max(0, s - 1));
 
   const canProceed = () => {
     if (step === 0) return true;
     if (step === 1) return name.trim().length > 0;
     if (step === 2) return grade.length > 0;
-    if (step === 3) return school.trim().length > 0;
+    if (step === 3) return school.trim().length > 1;
     return false;
   };
 
-  // Smart school suggestions that don't duplicate suffixes
-  const getSchoolSuggestions = () => {
+  const addCustomSchool = () => {
     const trimmed = school.trim();
-    if (trimmed.length < 2) return [];
+    if (!trimmed) return;
 
-    const lowerInput = trimmed.toLowerCase();
-    const suffixes = ['high school', 'academy', 'preparatory', 'prep', 'school', 'university', 'college', 'institute', 'middle'];
-    const hasSuffix = suffixes.some((s) => lowerInput.includes(s));
-
-    if (hasSuffix) {
-      return [];
+    if (!allSchools.some((item) => item.toLowerCase() === trimmed.toLowerCase())) {
+      setCustomSchools((prev) => [...prev, trimmed]);
     }
 
-    return [
-      `${trimmed} High School`,
-      `${trimmed} Academy`,
-      `${trimmed} Preparatory School`,
-    ];
+    setSchool(trimmed);
+    setHasTypedSchool(true);
   };
 
-  const stepVariants = {
-    enter: (d: number) => ({
-      x: d > 0 ? 80 : -80,
-      opacity: 0,
-    }),
-    center: {
-      x: 0,
-      opacity: 1,
-    },
-    exit: (d: number) => ({
-      x: d > 0 ? -80 : 80,
-      opacity: 0,
-    }),
-  };
+  const heroPulseScale = heroPulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.2],
+  });
 
-  const getStepTitle = () => {
-    switch (step) {
-      case 0: return "Let's Go";
-      case 1: return 'Continue';
-      case 2: return 'Continue';
-      case 3: return showConfetti ? 'Welcome!' : 'Join Citadel';
-      default: return 'Continue';
-    }
-  };
+  const heroPulseOpacity = heroPulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.24, 0.08],
+  });
 
   return (
-    <div className="h-full w-full flex flex-col bg-white relative">
-      <Confetti show={showConfetti} />
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <View style={styles.header}>
+        {step > 0 ? (
+          <TouchableOpacity onPress={goBack} style={styles.backBtn}>
+            <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.backBtnPlaceholder} />
+        )}
 
-      {/* Top bar with logo and progress */}
-      <div className="px-7 pt-14 pb-3 z-10 shrink-0">
-        <div className="flex items-center justify-between">
-          <motion.div
-            initial={{ y: -20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ delay: 0.2 }}
-            className="flex items-center gap-2.5"
-          >
-            {step > 0 && (
-              <motion.button
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -10 }}
-                onClick={goBack}
-                className="w-9 h-9 rounded-full bg-bg-secondary flex items-center justify-center mr-1 active:scale-95 transition-transform"
-              >
-                <ArrowLeft className="w-4 h-4 text-text-primary" />
-              </motion.button>
-            )}
-            <Shield className="w-7 h-7 text-maroon" strokeWidth={1.5} />
-            <span className="font-display text-lg font-semibold text-maroon">Citadel</span>
-          </motion.div>
+        <View style={styles.logoRow}>
+          <Ionicons name="shield-checkmark" size={26} color={colors.maroon} />
+          <Text style={styles.logoText}>Citadel</Text>
+        </View>
 
-          {/* Progress indicator */}
-          {step > 0 && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="flex items-center gap-2 bg-bg-secondary rounded-full px-3 py-1.5"
-            >
-              <span className="text-xs font-body font-semibold text-maroon">{step}/3</span>
-              <div className="flex items-center gap-1">
-                {[1, 2, 3].map((s) => (
-                  <motion.div
-                    key={s}
-                    initial={false}
-                    animate={{
-                      width: s <= step ? 16 : 6,
-                      backgroundColor: s <= step ? '#3D0C11' : '#E5E5E5',
-                    }}
-                    transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-                    className="h-1.5 rounded-full"
-                  />
-                ))}
-              </div>
-            </motion.div>
-          )}
-        </div>
-      </div>
+        <View style={styles.progressWrap}>
+          <Text style={styles.progressText}>{step}/3</Text>
+          <View style={styles.progressTrack}>
+            <View style={[styles.progressFill, { width: `${(step / 3) * 100}%` }]} />
+          </View>
+        </View>
+      </View>
 
-      {/* Content area */}
-      <div className="flex-1 relative overflow-hidden min-h-0">
-        <AnimatePresence mode="wait" custom={direction}>
-          <motion.div
-            key={step}
-            custom={direction}
-            variants={stepVariants}
-            initial="enter"
-            animate="center"
-            exit="exit"
-            transition={{ type: 'tween', duration: 0.3, ease: 'easeInOut' }}
-            className="absolute inset-0 flex flex-col overflow-y-auto hide-scrollbar"
-          >
-            {/* ==================== Step 0: Welcome / Intro ==================== */}
-            {step === 0 && (
-              <div className="px-7 pb-8 flex flex-col">
-                <div className="mt-6">
-                  {/* Shield icon instead of emoji */}
-                  <motion.div
-                    initial={{ scale: 0, rotate: -20 }}
-                    animate={{ scale: 1, rotate: 0 }}
-                    transition={{ type: 'spring', stiffness: 200, damping: 12, delay: 0.2 }}
-                    className="w-16 h-16 rounded-2xl bg-maroon/10 flex items-center justify-center mb-5"
-                  >
-                    <Shield className="w-8 h-8 text-maroon" strokeWidth={1.5} />
-                  </motion.div>
-
-                  <motion.h1
-                    initial={{ y: 20, opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
-                    transition={{ delay: 0.3 }}
-                    className="font-display text-[2.6rem] leading-[1.1] font-bold text-text-primary"
-                  >
-                    Master your{' '}
-                    <span className="relative inline-block">
-                      courses
-                      <motion.div
-                        initial={{ scaleX: 0 }}
-                        animate={{ scaleX: 1 }}
-                        transition={{ delay: 0.8, duration: 0.4 }}
-                        className="absolute -bottom-1 left-0 right-0 h-[3px] bg-maroon rounded-full origin-left"
-                      />
-                    </span>
-                    .
-                  </motion.h1>
-
-                  <motion.p
-                    initial={{ y: 15, opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
-                    transition={{ delay: 0.5 }}
-                    className="font-body text-text-secondary text-[15px] mt-4 leading-relaxed"
-                  >
-                    Your fortress for organized notes, seamless collaboration, and crushing every exam.
-                  </motion.p>
-                </div>
-
-                <div className="flex flex-col gap-3.5 mt-10">
-                  {[
-                    {
-                      icon: BookOpen,
-                      title: 'Smart Notes',
-                      desc: 'Scan, organize & find anything instantly',
-                      color: 'bg-amber-50',
-                      iconColor: 'text-amber-600',
-                    },
-                    {
-                      icon: Users,
-                      title: 'Study Together',
-                      desc: 'Share notes & call classmates in real-time',
-                      color: 'bg-blue-50',
-                      iconColor: 'text-blue-600',
-                    },
-                    {
-                      icon: Award,
-                      title: 'Crush Your Exams',
-                      desc: 'Track progress & never miss a deadline',
-                      color: 'bg-green-50',
-                      iconColor: 'text-green-600',
-                    },
-                  ].map((item, i) => (
-                    <motion.div
-                      key={item.title}
-                      initial={{ x: -30, opacity: 0 }}
-                      animate={{ x: 0, opacity: 1 }}
-                      transition={{ delay: 0.6 + i * 0.15, type: 'spring', stiffness: 150 }}
-                      className="flex items-center gap-4 bg-white rounded-2xl p-4 border border-gray-100 shadow-sm"
-                    >
-                      <div className={`w-12 h-12 rounded-xl ${item.color} flex items-center justify-center shrink-0`}>
-                        <item.icon className={`w-5 h-5 ${item.iconColor}`} strokeWidth={1.8} />
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-body font-semibold text-text-primary text-sm">{item.title}</p>
-                        <p className="font-body text-text-secondary text-xs mt-0.5">{item.desc}</p>
-                      </div>
-                    </motion.div>
-                  ))}
-                </div>
-
-                {/* Social proof */}
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 1.2 }}
-                  className="mt-8 flex items-center justify-center gap-2.5"
-                >
-                  <div className="flex -space-x-2">
-                    {[
-                      { bg: '#DBEAFE', fill: '#3B82F6' },
-                      { bg: '#FCE7F3', fill: '#EC4899' },
-                      { bg: '#D1FAE5', fill: '#10B981' },
-                      { bg: '#FEF3C7', fill: '#F59E0B' },
-                    ].map((c, i) => (
-                      <div
-                        key={i}
-                        className="w-7 h-7 rounded-full border-2 border-white flex items-center justify-center"
-                        style={{ backgroundColor: c.bg }}
-                      >
-                        <User className="w-3.5 h-3.5" style={{ color: c.fill }} strokeWidth={1.5} />
-                      </div>
-                    ))}
-                  </div>
-                  <p className="font-body text-xs text-text-tertiary">
-                    Join your classmates on Citadel
-                  </p>
-                </motion.div>
-              </div>
-            )}
-
-            {/* ==================== Step 1: Name ==================== */}
-            {step === 1 && (
-              <div className="px-7 pb-8 flex flex-col">
-                <div className="mt-6">
-                  <motion.div
-                    initial={{ scale: 0, rotate: -20 }}
-                    animate={{ scale: 1, rotate: 0 }}
-                    transition={{ type: 'spring', stiffness: 200, damping: 12 }}
-                    className="w-16 h-16 rounded-2xl bg-maroon/10 flex items-center justify-center mb-5"
-                  >
-                    <Sparkles className="w-8 h-8 text-maroon" strokeWidth={1.5} />
-                  </motion.div>
-
-                  <h1 className="font-display text-[2.2rem] leading-tight font-bold text-text-primary">
-                    What should we call you?
-                  </h1>
-                  <p className="font-body text-text-secondary text-[15px] mt-3 leading-relaxed">
-                    We'll personalize everything just for you.
-                  </p>
-                </div>
-
-                <div className="mt-8">
-                  <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2.5 block flex items-center gap-1.5">
-                    <Sparkles className="w-3 h-3 text-maroon" />
-                    Your First Name
-                  </label>
-                  <div className="relative">
-                    <input
-                      ref={nameInputRef}
-                      type="text"
-                      placeholder="Type your name..."
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && canProceed() && goNext()}
-                      className="w-full h-[60px] px-6 bg-input-bg rounded-2xl font-body text-[17px] text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20 transition-all"
-                    />
-                    {name.trim().length > 0 && (
-                      <motion.div
-                        initial={{ scale: 0 }}
-                        animate={{ scale: 1 }}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-green-100 flex items-center justify-center"
-                      >
-                        <Check className="w-3.5 h-3.5 text-green-600" />
-                      </motion.div>
-                    )}
-                  </div>
-
-                  {/* Greeting without "Great Name" */}
-                  <AnimatePresence>
-                    {name.trim().length > 0 && (
-                      <motion.div
-                        initial={{ opacity: 0, y: 8, height: 0 }}
-                        animate={{ opacity: 1, y: 0, height: 'auto' }}
-                        exit={{ opacity: 0, y: -5, height: 0 }}
-                        className="overflow-hidden"
-                      >
-                        <div className="mt-4 bg-maroon/5 rounded-2xl p-4 flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-maroon flex items-center justify-center text-white font-display font-bold text-lg">
-                            {name.trim().charAt(0).toUpperCase()}
-                          </div>
-                          <div>
-                            <p className="font-body text-sm font-semibold text-text-primary">
-                              Hey {name.trim()}!
-                            </p>
-                            <p className="font-body text-xs text-text-secondary mt-0.5">
-                              Let's set up your fortress.
-                            </p>
-                          </div>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-
-                  {/* Benefits when empty */}
-                  {!name.trim() && (
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ delay: 0.5 }}
-                      className="mt-6 flex flex-col gap-3"
-                    >
-                      {[
-                        { icon: Star, text: 'Personalized study plans', color: 'text-amber-500' },
-                        { icon: Users, text: 'Connect with your classmates', color: 'text-blue-500' },
-                        { icon: Award, text: 'Custom achievement badges', color: 'text-green-500' },
-                      ].map((item, i) => (
-                        <motion.div
-                          key={i}
-                          initial={{ x: -10, opacity: 0 }}
-                          animate={{ x: 0, opacity: 1 }}
-                          transition={{ delay: 0.6 + i * 0.1 }}
-                          className="flex items-center gap-3 text-xs text-text-secondary font-body"
-                        >
-                          <div className="w-8 h-8 rounded-lg bg-bg-secondary flex items-center justify-center shrink-0">
-                            <item.icon className={`w-4 h-4 ${item.color}`} />
-                          </div>
-                          {item.text}
-                        </motion.div>
-                      ))}
-                    </motion.div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* ==================== Step 2: Grade (Dropdown) ==================== */}
-            {step === 2 && (
-              <div className="px-7 pb-8 flex flex-col">
-                <div className="mt-6">
-                  <motion.div
-                    initial={{ scale: 0, rotate: -20 }}
-                    animate={{ scale: 1, rotate: 0 }}
-                    transition={{ type: 'spring', stiffness: 200, damping: 12 }}
-                    className="w-16 h-16 rounded-2xl bg-maroon/10 flex items-center justify-center mb-5"
-                  >
-                    <BookOpen className="w-8 h-8 text-maroon" strokeWidth={1.5} />
-                  </motion.div>
-
-                  <h1 className="font-display text-[2.2rem] leading-tight font-bold text-text-primary">
-                    What grade are you in{name.trim() ? `, ${name.trim()}` : ''}?
-                  </h1>
-                  <p className="font-body text-text-secondary text-[15px] mt-3 leading-relaxed">
-                    We'll tailor content to your level.
-                  </p>
-                </div>
-
-                <div className="mt-8" ref={dropdownRef}>
-                  <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2.5 block flex items-center gap-1.5">
-                    <School className="w-3 h-3 text-maroon" />
-                    Your Grade
-                  </label>
-
-                  {/* Dropdown trigger */}
-                  <button
-                    onClick={() => setGradeDropdownOpen(!gradeDropdownOpen)}
-                    className={`w-full h-[60px] px-6 rounded-2xl font-body text-[17px] text-left flex items-center justify-between transition-all ${
-                      grade
-                        ? 'bg-input-bg text-text-primary'
-                        : 'bg-input-bg text-text-tertiary'
-                    } ${gradeDropdownOpen ? 'ring-2 ring-maroon/20' : ''}`}
-                  >
-                    <span>{grade || 'Select your grade...'}</span>
-                    <div className="flex items-center gap-2">
-                      {grade && (
-                        <motion.div
-                          initial={{ scale: 0 }}
-                          animate={{ scale: 1 }}
-                          className="w-7 h-7 rounded-full bg-green-100 flex items-center justify-center"
-                        >
-                          <Check className="w-3.5 h-3.5 text-green-600" />
-                        </motion.div>
-                      )}
-                      <motion.div
-                        animate={{ rotate: gradeDropdownOpen ? 180 : 0 }}
-                        transition={{ duration: 0.2 }}
-                      >
-                        <ChevronDown className="w-5 h-5 text-text-tertiary" />
-                      </motion.div>
-                    </div>
-                  </button>
-
-                  {/* Dropdown list */}
-                  <AnimatePresence>
-                    {gradeDropdownOpen && (
-                      <motion.div
-                        initial={{ opacity: 0, y: -8, height: 0 }}
-                        animate={{ opacity: 1, y: 0, height: 'auto' }}
-                        exit={{ opacity: 0, y: -8, height: 0 }}
-                        transition={{ duration: 0.2 }}
-                        className="overflow-hidden"
-                      >
-                        <div className="mt-2 bg-white rounded-2xl border border-gray-100 shadow-lg shadow-black/8 max-h-[280px] overflow-y-auto hide-scrollbar">
-                          {grades.map((g, i) => {
-                            const isSelected = grade === g.label;
-                            return (
-                              <button
-                                key={g.label}
-                                onClick={() => {
-                                  setGrade(g.label);
-                                  setGradeDropdownOpen(false);
-                                }}
-                                className={`w-full flex items-center justify-between px-5 py-3.5 transition-colors border-b border-gray-50 last:border-b-0 ${
-                                  isSelected
-                                    ? 'bg-maroon/5'
-                                    : 'hover:bg-bg-secondary active:bg-gray-100'
-                                }`}
-                              >
-                                <div className="flex items-center gap-3">
-                                  <motion.div
-                                    initial={{ opacity: 0, scale: 0.8 }}
-                                    animate={{ opacity: 1, scale: 1 }}
-                                    transition={{ delay: i * 0.02 }}
-                                    className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-body font-bold ${
-                                      isSelected
-                                        ? 'bg-maroon text-white'
-                                        : 'bg-bg-secondary text-text-secondary'
-                                    }`}
-                                  >
-                                    {g.label.startsWith('College') || g.label.startsWith('Graduate')
-                                      ? g.label.charAt(0)
-                                      : g.label.match(/\d+/)?.[0] || 'G'}
-                                  </motion.div>
-                                  <div className="text-left">
-                                    <span className={`font-body text-sm ${isSelected ? 'font-semibold text-maroon' : 'text-text-primary'}`}>
-                                      {g.label}
-                                    </span>
-                                    {g.short && (
-                                      <span className="font-body text-xs text-text-tertiary ml-2">
-                                        ({g.short})
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                                {isSelected && (
-                                  <motion.div
-                                    initial={{ scale: 0 }}
-                                    animate={{ scale: 1 }}
-                                  >
-                                    <Check className="w-4 h-4 text-maroon" />
-                                  </motion.div>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-
-                  {/* Selected grade card */}
-                  <AnimatePresence>
-                    {grade && !gradeDropdownOpen && (
-                      <motion.div
-                        initial={{ opacity: 0, y: 8 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -5 }}
-                        className="mt-5 bg-maroon/5 rounded-2xl p-4 flex items-center gap-3"
-                      >
-                        <div className="w-10 h-10 rounded-xl bg-maroon flex items-center justify-center text-white font-display font-bold text-lg">
-                          {grade.startsWith('College') || grade.startsWith('Graduate')
-                            ? grade.charAt(0)
-                            : grade.match(/\d+/)?.[0] || 'G'}
-                        </div>
-                        <div>
-                          <p className="font-body text-sm font-semibold text-text-primary">
-                            {grade}
-                          </p>
-                          <p className="font-body text-xs text-text-secondary mt-0.5">
-                            Content tailored for your level
-                          </p>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              </div>
-            )}
-
-            {/* ==================== Step 3: School ==================== */}
-            {step === 3 && (
-              <div className="px-7 pb-8 flex flex-col">
-                <div className="mt-6">
-                  <motion.div
-                    initial={{ scale: 0, rotate: -20 }}
-                    animate={{ scale: 1, rotate: 0 }}
-                    transition={{ type: 'spring', stiffness: 200, damping: 12 }}
-                    className="w-16 h-16 rounded-2xl bg-maroon/10 flex items-center justify-center mb-5"
-                  >
-                    <School className="w-8 h-8 text-maroon" strokeWidth={1.5} />
-                  </motion.div>
-
-                  <h1 className="font-display text-[2.2rem] leading-tight font-bold text-text-primary">
-                    Where do you go to school?
-                  </h1>
-                  <p className="font-body text-text-secondary text-[15px] mt-3 leading-relaxed">
-                    Find classmates and build your study crew.
-                  </p>
-                </div>
-
-                <div className="mt-8">
-                  <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2.5 block flex items-center gap-1.5">
-                    <School className="w-3 h-3 text-maroon" />
-                    School Name
-                  </label>
-                  <div className="relative">
-                    <input
-                      ref={schoolInputRef}
-                      type="text"
-                      placeholder="e.g. Academies of Loudoun"
-                      value={school}
-                      onChange={(e) => setSchool(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && canProceed() && goNext()}
-                      className="w-full h-[60px] px-6 bg-input-bg rounded-2xl font-body text-[17px] text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20 transition-all"
-                    />
-                    {school.trim().length > 0 && (
-                      <motion.div
-                        initial={{ scale: 0 }}
-                        animate={{ scale: 1 }}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-green-100 flex items-center justify-center"
-                      >
-                        <Check className="w-3.5 h-3.5 text-green-600" />
-                      </motion.div>
-                    )}
-                  </div>
-
-                  {/* Smart suggestions */}
-                  <AnimatePresence>
-                    {getSchoolSuggestions().length > 0 && (
-                      <motion.div
-                        initial={{ opacity: 0, y: 5, height: 0 }}
-                        animate={{ opacity: 1, y: 0, height: 'auto' }}
-                        exit={{ opacity: 0, y: -5, height: 0 }}
-                        className="mt-3 bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm"
-                      >
-                        {getSchoolSuggestions().map((suggestion, i) => (
-                          <motion.button
-                            key={i}
-                            initial={{ x: -10, opacity: 0 }}
-                            animate={{ x: 0, opacity: 1 }}
-                            transition={{ delay: i * 0.05 }}
-                            onClick={() => setSchool(suggestion)}
-                            className="w-full flex items-center gap-3 px-4 py-3.5 hover:bg-bg-secondary transition-colors border-b border-gray-50 last:border-b-0 active:bg-gray-100"
-                          >
-                            <div className="w-8 h-8 rounded-lg bg-bg-secondary flex items-center justify-center shrink-0">
-                              <School className="w-4 h-4 text-text-tertiary" />
-                            </div>
-                            <span className="font-body text-sm text-text-primary text-left flex-1">
-                              {suggestion}
-                            </span>
-                            <ArrowRight className="w-3.5 h-3.5 text-text-tertiary" />
-                          </motion.button>
-                        ))}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-
-                  {/* Summary card */}
-                  <AnimatePresence>
-                    {school.trim().length > 0 && (
-                      <motion.div
-                        initial={{ opacity: 0, y: 8 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0 }}
-                        transition={{ delay: 0.1 }}
-                        className="mt-4 bg-gradient-to-r from-maroon/5 to-maroon/10 rounded-2xl p-4"
-                      >
-                        <p className="font-body text-xs text-text-secondary mb-3 flex items-center gap-1.5">
-                          <Star className="w-3 h-3 text-maroon" />
-                          Your Student Profile
-                        </p>
-                        <div className="flex items-center gap-3">
-                          <div className="w-11 h-11 rounded-xl bg-maroon flex items-center justify-center text-white font-display font-bold text-lg">
-                            {(name.trim() || 'M').charAt(0).toUpperCase()}
-                          </div>
-                          <div className="flex-1">
-                            <p className="font-body text-sm font-semibold text-text-primary">
-                              {name.trim() || 'Student'}
-                            </p>
-                            <p className="font-body text-xs text-text-secondary mt-0.5">
-                              {grade} · {school.trim()}
-                            </p>
-                          </div>
-                          <motion.div
-                            animate={{ scale: [1, 1.1, 1] }}
-                            transition={{ duration: 1.5, repeat: Infinity }}
-                          >
-                            <Heart className="w-4 h-4 text-maroon" />
-                          </motion.div>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              </div>
-            )}
-          </motion.div>
-        </AnimatePresence>
-      </div>
-
-      {/* Bottom action area */}
-      <div className="px-7 pb-10 pt-3 z-10 shrink-0">
-        <motion.div
-          initial={{ y: 30, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.4 }}
-          className="flex flex-col gap-3"
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <Animated.View
+          style={[
+            styles.stepContent,
+            {
+              opacity: contentOpacity,
+              transform: [{ translateY: contentTranslate }],
+            },
+          ]}
         >
-          <motion.button
-            onClick={goNext}
-            disabled={!canProceed()}
-            whileTap={{ scale: 0.97 }}
-            className={`w-full h-14 font-body font-semibold text-base rounded-full flex items-center justify-center gap-2.5 transition-all duration-300 ${
-              canProceed()
-                ? 'bg-maroon text-white shadow-lg shadow-maroon/25'
-                : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-            }`}
-          >
-            <span>{getStepTitle()}</span>
-            {step === 3 ? (
-              <Shield className="w-4.5 h-4.5" strokeWidth={1.5} />
-            ) : (
-              <ArrowRight className="w-4.5 h-4.5" />
-            )}
-          </motion.button>
-
           {step === 0 && (
-            <motion.p
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 1 }}
-              className="text-center text-text-tertiary text-xs font-body"
-            >
-              Already have an account?{' '}
-              <button
-                onClick={() =>
-                  onGetStarted({
-                    name: '',
-                    grade: '',
-                    school: '',
-                  })
-                }
-                className="text-maroon font-semibold underline"
-              >
-                Sign In
-              </button>
-            </motion.p>
+            <View>
+              <View style={styles.heroCard}>
+                <Animated.View
+                  style={[
+                    styles.heroGlow,
+                    {
+                      transform: [{ scale: heroPulseScale }],
+                      opacity: heroPulseOpacity,
+                    },
+                  ]}
+                />
+
+                <View style={styles.heroBadge}>
+                  <Ionicons name="sparkles" size={14} color={colors.maroon} />
+                  <Text style={styles.heroBadgeText}>Demo Notice</Text>
+                </View>
+
+                <Text style={styles.heroNoticeTitle}>Thank you for trying out this demo app!</Text>
+                <Text style={styles.heroNoticeBody}>
+                  Notice: The app is not done by any means. None of the AI features are integrated yet, and all
+                  classes/notes/units are just examples. Try it out and let us know what you think!
+                </Text>
+                <Text style={styles.heroNoticeBody}>
+                  Throughout the next couple of months we will be improving this app and making it functional and
+                  useful to students! We'd appreciate any ideas, comments or concerns you have - just let us know!
+                </Text>
+              </View>
+
+              {[
+                {
+                  icon: 'scan',
+                  title: 'Smart Capture',
+                  text: 'Scan notes, whiteboards, and worksheets with one tap.',
+                  color: '#2563eb',
+                },
+                {
+                  icon: 'people',
+                  title: 'Study Crew',
+                  text: 'Share class materials and build sessions with friends.',
+                  color: '#059669',
+                },
+                {
+                  icon: 'trophy',
+                  title: 'Exam Momentum',
+                  text: 'Track progress and stay focused on what matters next.',
+                  color: '#b45309',
+                },
+              ].map((feature, index) => (
+                <Animated.View
+                  key={feature.title}
+                  style={[
+                    styles.featureCard,
+                    {
+                      opacity: featureAnims[index],
+                      transform: [
+                        {
+                          translateY: featureAnims[index].interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [14, 0],
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                >
+                  <View style={[styles.featureIcon, { backgroundColor: `${feature.color}20` }]}>
+                    <Ionicons name={feature.icon as keyof typeof Ionicons.glyphMap} size={18} color={feature.color} />
+                  </View>
+                  <View style={styles.featureTextWrap}>
+                    <Text style={styles.featureTitle}>{feature.title}</Text>
+                    <Text style={styles.featureText}>{feature.text}</Text>
+                  </View>
+                </Animated.View>
+              ))}
+            </View>
           )}
 
           {step === 1 && (
-            <button
-              onClick={() => {
-                setName('');
-                goNext();
-              }}
-              className="text-center text-text-tertiary text-xs font-body py-1 hover:text-text-secondary transition-colors"
-            >
-              Skip for now
-            </button>
+            <View style={styles.card}>
+              <View style={styles.iconBox}>
+                <Ionicons name="person-circle" size={34} color={colors.maroon} />
+              </View>
+              <Text style={styles.h2}>What should we call you?</Text>
+              <Text style={styles.p}>Your workspace gets personalized from the start.</Text>
+              <Text style={styles.label}>Display Name</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Type your name"
+                placeholderTextColor={colors.textTertiary}
+                value={name}
+                onChangeText={setName}
+                autoCapitalize="words"
+              />
+              {name.trim().length > 0 && (
+                <View style={styles.checkWrap}>
+                  <Ionicons name="checkmark-circle" size={26} color="#059669" />
+                </View>
+              )}
+            </View>
           )}
-        </motion.div>
-      </div>
-    </div>
+
+          {step === 2 && (
+            <View style={styles.card}>
+              <View style={styles.iconBox}>
+                <Ionicons name="ribbon" size={30} color={colors.maroon} />
+              </View>
+              <Text style={styles.h2}>What level are you in{name.trim() ? `, ${name.trim()}` : ''}?</Text>
+              <Text style={styles.p}>This helps us tailor your classes and recommendations.</Text>
+              <Text style={styles.label}>Grade or Year</Text>
+
+              <TouchableOpacity style={styles.input} onPress={() => setShowGradePicker(!showGradePicker)}>
+                <Text style={[styles.inputText, !grade && styles.inputPlaceholder]}>{grade || 'Select your level'}</Text>
+                <Ionicons name={showGradePicker ? 'chevron-up' : 'chevron-down'} size={20} color={colors.textTertiary} />
+              </TouchableOpacity>
+
+              {showGradePicker && (
+                <ScrollView style={styles.picker} nestedScrollEnabled>
+                  {grades.map((g) => (
+                    <TouchableOpacity
+                      key={g}
+                      style={styles.pickerItem}
+                      onPress={() => {
+                        setGrade(g);
+                        setShowGradePicker(false);
+                      }}
+                    >
+                      <Text style={[styles.pickerText, grade === g && styles.pickerTextActive]}>{g}</Text>
+                      {grade === g && <Ionicons name="checkmark" size={18} color={colors.maroon} />}
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
+            </View>
+          )}
+
+          {step === 3 && (
+            <View style={styles.card}>
+              <View style={styles.iconBox}>
+                <Ionicons name="school" size={30} color={colors.maroon} />
+              </View>
+              <Text style={styles.h2}>Where do you study?</Text>
+              <Text style={styles.p}>Search your high school or college. If it is missing, add it instantly.</Text>
+
+              <View style={styles.schoolTagRow}>
+                <View style={styles.schoolTag}><Text style={styles.schoolTagText}>High School</Text></View>
+                <View style={styles.schoolTag}><Text style={styles.schoolTagText}>College</Text></View>
+                <View style={styles.schoolTag}><Text style={styles.schoolTagText}>University</Text></View>
+              </View>
+
+              <Text style={styles.label}>School Name</Text>
+              <View style={styles.searchInputWrap}>
+                <Ionicons name="search" size={18} color={colors.textTertiary} />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Search school name"
+                  placeholderTextColor={colors.textTertiary}
+                  value={school}
+                  onChangeText={(text) => {
+                    setSchool(text);
+                    setHasTypedSchool(true);
+                  }}
+                />
+                {school.length > 0 && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      setSchool('');
+                      setHasTypedSchool(false);
+                    }}
+                  >
+                    <Ionicons name="close-circle" size={18} color={colors.textTertiary} />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {(hasTypedSchool || school.trim().length > 0) && (filteredSchools.length > 0 || canAddNewSchool) && (
+                <View style={styles.suggestionsWrap}>
+                  {filteredSchools.map((item) => (
+                    <TouchableOpacity
+                      key={item}
+                      style={styles.suggestionItem}
+                      onPress={() => {
+                        setSchool(item);
+                        setHasTypedSchool(true);
+                      }}
+                    >
+                      <Ionicons name="school-outline" size={16} color={colors.textSecondary} />
+                      <Text style={styles.suggestionText}>{item}</Text>
+                    </TouchableOpacity>
+                  ))}
+
+                  {canAddNewSchool && (
+                    <TouchableOpacity style={styles.addSchoolItem} onPress={addCustomSchool}>
+                      <Ionicons name="add-circle" size={18} color={colors.maroon} />
+                      <Text style={styles.addSchoolText}>Add a new school: "{school.trim()}"</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
+
+              {school.trim().length > 0 && (
+                <View style={styles.checkWrapSchool}>
+                  <Ionicons name="checkmark-circle" size={22} color="#059669" />
+                  <Text style={styles.checkSchoolText}>School saved</Text>
+                </View>
+              )}
+            </View>
+          )}
+        </Animated.View>
+      </ScrollView>
+
+      <View style={styles.footer}>
+        <Animated.View style={{ transform: [{ scale: canProceed() ? ctaScale : 1 }] }}>
+          <TouchableOpacity
+            style={[styles.btn, canProceed() ? styles.btnPrimary : styles.btnDisabled]}
+            onPress={goNext}
+            disabled={!canProceed()}
+          >
+            <Text style={[styles.btnText, canProceed() ? styles.btnTextWhite : styles.btnTextDisabled]}>
+              {step === 3 ? 'Join Citadel' : step === 0 ? 'Begin Setup' : 'Continue'}
+            </Text>
+            <Ionicons
+              name={step === 3 ? 'shield-checkmark' : 'arrow-forward'}
+              size={20}
+              color={canProceed() ? 'white' : colors.textTertiary}
+            />
+          </TouchableOpacity>
+        </Animated.View>
+      </View>
+    </KeyboardAvoidingView>
   );
 }
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#f9f8f7' },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.xl,
+    paddingTop: 56,
+    paddingBottom: spacing.md,
+  },
+  backBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'white',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+  backBtnPlaceholder: { width: 38, height: 38 },
+  logoRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  logoText: { fontSize: 19, fontWeight: '700', color: colors.maroon },
+  progressWrap: { width: 86, alignItems: 'flex-end' },
+  progressText: { fontSize: 11, fontWeight: '600', color: colors.textSecondary, marginBottom: 5 },
+  progressTrack: {
+    width: '100%',
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: '#e8e7e7',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: colors.maroon,
+  },
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: spacing.xl, paddingBottom: spacing.xxl },
+  stepContent: { marginTop: spacing.md },
+  heroCard: {
+    borderRadius: 28,
+    padding: 24,
+    backgroundColor: colors.maroon,
+    marginBottom: 18,
+    overflow: 'hidden',
+  },
+  heroGlow: {
+    position: 'absolute',
+    width: 220,
+    height: 220,
+    borderRadius: 120,
+    right: -40,
+    top: -80,
+    backgroundColor: 'white',
+  },
+  heroBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderRadius: 99,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    marginBottom: 18,
+  },
+  heroBadgeText: { fontSize: 11, color: colors.maroon, fontWeight: '700' },
+  heroNoticeTitle: { fontSize: 28, lineHeight: 34, fontWeight: '800', color: 'white', marginBottom: 10 },
+  heroNoticeBody: { fontSize: 14, lineHeight: 21, color: 'rgba(255,255,255,0.9)', marginBottom: 8 },
+  heroTitle: { fontSize: 34, lineHeight: 38, fontWeight: '800', color: 'white', marginBottom: 10 },
+  heroTitleAccent: { color: '#facc15' },
+  heroSubtitle: { fontSize: 15, lineHeight: 23, color: 'rgba(255,255,255,0.84)' },
+  featureCard: {
+    backgroundColor: 'white',
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: 1,
+    borderColor: '#efeded',
+  },
+  featureIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  featureTextWrap: { flex: 1 },
+  featureTitle: { fontSize: 14, fontWeight: '700', color: colors.textPrimary, marginBottom: 2 },
+  featureText: { fontSize: 13, lineHeight: 18, color: colors.textSecondary },
+  card: {
+    backgroundColor: 'white',
+    borderRadius: 24,
+    padding: 22,
+    borderWidth: 1,
+    borderColor: '#efeded',
+  },
+  iconBox: {
+    width: 58,
+    height: 58,
+    borderRadius: 14,
+    backgroundColor: `${colors.maroon}14`,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  h2: { fontSize: 25, lineHeight: 30, fontWeight: '800', color: colors.textPrimary, marginBottom: 8 },
+  p: { fontSize: 14, lineHeight: 21, color: colors.textSecondary, marginBottom: 20 },
+  label: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, marginBottom: 8, letterSpacing: 0.3 },
+  input: {
+    height: 54,
+    paddingHorizontal: 18,
+    backgroundColor: '#f6f4f4',
+    borderRadius: 15,
+    fontSize: 16,
+    color: colors.textPrimary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  inputText: { color: colors.textPrimary },
+  inputPlaceholder: { color: colors.textTertiary },
+  checkWrap: { position: 'absolute', right: 20, bottom: 22 },
+  picker: {
+    maxHeight: 235,
+    backgroundColor: 'white',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#ece8e8',
+    marginTop: 8,
+  },
+  pickerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingVertical: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f5f3f3',
+  },
+  pickerText: { fontSize: 14, color: colors.textPrimary },
+  pickerTextActive: { fontWeight: '700', color: colors.maroon },
+  schoolTagRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
+  schoolTag: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#f4f1f1',
+    borderWidth: 1,
+    borderColor: '#ece8e8',
+  },
+  schoolTagText: { fontSize: 11, color: colors.textSecondary, fontWeight: '600' },
+  searchInputWrap: {
+    height: 54,
+    borderRadius: 15,
+    backgroundColor: '#f6f4f4',
+    borderWidth: 1,
+    borderColor: '#ece8e8',
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: colors.textPrimary,
+  },
+  suggestionsWrap: {
+    marginTop: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#ece8e8',
+    overflow: 'hidden',
+    backgroundColor: 'white',
+  },
+  suggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f2f2',
+  },
+  suggestionText: { fontSize: 14, color: colors.textPrimary, flex: 1 },
+  addSchoolItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: '#fdf7f7',
+  },
+  addSchoolText: { fontSize: 13, color: colors.maroon, fontWeight: '700' },
+  checkWrapSchool: { marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  checkSchoolText: { fontSize: 13, color: '#047857', fontWeight: '600' },
+  footer: { paddingHorizontal: spacing.xl, paddingVertical: spacing.lg, paddingBottom: 40 },
+  btn: {
+    height: 56,
+    borderRadius: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  btnPrimary: {
+    backgroundColor: colors.maroon,
+    shadowColor: colors.maroon,
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
+  },
+  btnDisabled: { backgroundColor: '#E5E5E5' },
+  btnText: { fontSize: 16, fontWeight: '700' },
+  btnTextWhite: { color: 'white' },
+  btnTextDisabled: { color: colors.textTertiary },
+});

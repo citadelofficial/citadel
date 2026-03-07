@@ -1,12 +1,23 @@
-import { useState, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  ArrowLeft, Heart, Users, FileText, ArrowRight, Clock, X, Copy, Check, Share2, Mail,
-  Edit3, ImagePlus, ChevronDown, Plus, Upload, Sparkles, BookOpen, ChevronRight,
-  Layers, FolderOpen, FileUp, PenLine, Trash2,
-} from 'lucide-react';
+  View,
+  Text,
+  TouchableOpacity,
+  ScrollView,
+  Image,
+  StyleSheet,
+  Modal,
+  TextInput,
+  Alert,
+  Share,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import { BottomNav } from '../components/BottomNav';
-import type { ClassData, UnitData, SubUnit, SubUnitNote } from '../App';
+import { colors } from '../theme';
+import type { ClassData, SubUnitNote, UnitData } from '../types';
 
 interface Props {
   classData: ClassData;
@@ -17,1261 +28,1348 @@ interface Props {
   onUpdateClass: (updatedClass: ClassData) => void;
 }
 
-type ViewMode = 'main' | 'unit-detail' | 'edit';
+function makeCustomCode(title: string) {
+  const prefix =
+    title
+      .replace(/[^A-Za-z0-9 ]/g, '')
+      .split(' ')
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() || '')
+      .join('') || 'CL';
+  const suffix = Math.random().toString(36).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(2, 6);
+  return `${prefix}-${suffix}`;
+}
+
+function formatToday() {
+  const now = new Date();
+  return `${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}/${now.getFullYear()}`;
+}
 
 export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onFriends, onUpdateClass }: Props) {
-  const [showInviteModal, setShowInviteModal] = useState(false);
-  const [codeCopied, setCodeCopied] = useState(false);
-  const [linkCopied, setLinkCopied] = useState(false);
-  const [isCourseLiked, setIsCourseLiked] = useState(false);
-  const [likedUnits, setLikedUnits] = useState<Set<number>>(new Set());
-
-  // View mode
-  const [viewMode, setViewMode] = useState<ViewMode>('main');
-
-  // Unit detail view
   const [selectedUnit, setSelectedUnit] = useState<UnitData | null>(null);
-  const [expandedSubUnit, setExpandedSubUnit] = useState<string | null>(null);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [copyStatus, setCopyStatus] = useState('');
 
-  // Smart Merge
-  const [showSmartMerge, setShowSmartMerge] = useState(false);
-  const [mergeTargetSubUnit, setMergeTargetSubUnit] = useState<string | null>(null);
-  const [mergeSelectedNotes, setMergeSelectedNotes] = useState<Set<number>>(new Set());
-  const [merging, setMerging] = useState(false);
-  const [mergeComplete, setMergeComplete] = useState(false);
-  const [mergeExtraContent, setMergeExtraContent] = useState('');
+  const [draftTitle, setDraftTitle] = useState(classData.title);
+  const [draftBlock, setDraftBlock] = useState(classData.block);
+  const [draftDescription, setDraftDescription] = useState(classData.description);
+  const [draftCode, setDraftCode] = useState(classData.classCode);
+  const [draftImage, setDraftImage] = useState(classData.image);
 
-  // Add Notes
-  const [showAddNotes, setShowAddNotes] = useState(false);
-  const [addNotesTargetSubUnit, setAddNotesTargetSubUnit] = useState<string | null>(null);
-  const [addNotesTab, setAddNotesTab] = useState<'write' | 'upload' | 'import'>('write');
-  const [addNoteTitle, setAddNoteTitle] = useState('');
-  const [addNoteContent, setAddNoteContent] = useState('');
-  const [addNoteUploaded, setAddNoteUploaded] = useState(false);
-  const [addNoteImportedFile, setAddNoteImportedFile] = useState<number | null>(null);
-  const [addingNote, setAddingNote] = useState(false);
-  const [addNoteComplete, setAddNoteComplete] = useState(false);
+  const [showUnitEditModal, setShowUnitEditModal] = useState(false);
+  const [editingUnitId, setEditingUnitId] = useState<number | null>(null);
+  const [unitDraftTitle, setUnitDraftTitle] = useState('');
+  const [unitDraftExamDate, setUnitDraftExamDate] = useState('');
+  const [unitDraftDaysLeft, setUnitDraftDaysLeft] = useState('');
 
-  // Edit mode
-  const [editTitle, setEditTitle] = useState(classData.title);
-  const [editBlock, setEditBlock] = useState(classData.block);
-  const [editDescription, setEditDescription] = useState(classData.description);
-  const [editImage, setEditImage] = useState<string | null>(null);
-  const [showBlockDropdown, setShowBlockDropdown] = useState(false);
+  const [showAddNoteModal, setShowAddNoteModal] = useState(false);
+  const [showMergeModal, setShowMergeModal] = useState(false);
+  const [activeSubUnitId, setActiveSubUnitId] = useState<string | null>(null);
+  const [noteSource, setNoteSource] = useState<'filesTab' | 'phone'>('filesTab');
+  const [selectedClassFileId, setSelectedClassFileId] = useState<number | null>(classData.files[0]?.id || null);
+  const [localUpload, setLocalUpload] = useState<{ name: string; content: string; pages: number } | null>(null);
+  const [newNoteAuthor, setNewNoteAuthor] = useState('You');
+  const [newNoteTitle, setNewNoteTitle] = useState('');
+  const [newNoteContent, setNewNoteContent] = useState('');
+  const [selectedMergeNoteIds, setSelectedMergeNoteIds] = useState<number[]>([]);
+  const [activeNote, setActiveNote] = useState<{ note: SubUnitNote; sectionTitle: string } | null>(null);
+  const [noteActionStatus, setNoteActionStatus] = useState('');
 
-  // Create unit
-  const [showCreateUnit, setShowCreateUnit] = useState(false);
-  const [newUnitTitle, setNewUnitTitle] = useState('');
-  const [newUnitExamDate, setNewUnitExamDate] = useState('');
-
-  // Stable class code
-  const classCode = useMemo(() => {
-    const prefix = classData.title.replace(/\s+/g, '').substring(0, 4).toUpperCase();
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let suffix = '';
-    let seed = 0;
-    for (let i = 0; i < classData.id.length; i++) seed += classData.id.charCodeAt(i);
-    for (let i = 0; i < 4; i++) {
-      suffix += chars.charAt((seed * (i + 7) + i * 13) % chars.length);
-    }
-    return `CTD-${prefix}-${suffix}`;
-  }, [classData.id, classData.title]);
-
-  const inviteLink = `citadel.app/join/${classCode.toLowerCase().replace(/\s+/g, '')}`;
-
-  const copyCode = () => {
-    navigator.clipboard?.writeText(classCode).catch(() => {});
-    setCodeCopied(true);
-    setTimeout(() => setCodeCopied(false), 2000);
-  };
-
-  const copyLink = () => {
-    navigator.clipboard?.writeText(inviteLink).catch(() => {});
-    setLinkCopied(true);
-    setTimeout(() => setLinkCopied(false), 2000);
-  };
-
-  const toggleUnitLike = (unitId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setLikedUnits((prev) => {
-      const next = new Set(prev);
-      if (next.has(unitId)) next.delete(unitId);
-      else next.add(unitId);
-      return next;
-    });
-  };
+  const [unitProgress, setUnitProgress] = useState<Record<string, boolean>>({});
 
   const isNewClass = classData.classmates === 0 && classData.documents === 0;
-  const blockOptions = ['Block 1', 'Block 2', 'Block 3', 'Block 4', 'Block 5', 'Block 6', 'Block 7', 'Block 8'];
 
-  // === EDIT HANDLERS ===
-  const openEdit = () => {
-    setEditTitle(classData.title);
-    setEditBlock(classData.block);
-    setEditDescription(classData.description);
-    setEditImage(null);
-    setViewMode('edit');
+  const selectedUnitTotalSections = selectedUnit?.subUnits.length || 0;
+  const selectedUnitCompletedSections = useMemo(() => {
+    if (!selectedUnit) return 0;
+    return selectedUnit.subUnits.filter((sub) => unitProgress[`${selectedUnit.id}-${sub.id}`]).length;
+  }, [selectedUnit, unitProgress]);
+
+  const selectedUnitProgress =
+    selectedUnitTotalSections > 0 ? selectedUnitCompletedSections / selectedUnitTotalSections : 0;
+
+  const canSaveAddedNote = useMemo(() => {
+    if (!activeSubUnitId) return false;
+    const hasTypedText = newNoteContent.trim().length > 0;
+    if (noteSource === 'filesTab') {
+      return hasTypedText || classData.files.some((file) => file.id === selectedClassFileId) || classData.files.length > 0;
+    }
+    return hasTypedText || !!localUpload;
+  }, [activeSubUnitId, classData.files, localUpload, newNoteContent, noteSource, selectedClassFileId]);
+
+  useEffect(() => {
+    if (!selectedUnit) return;
+    const refreshed = classData.units.find((unit) => unit.id === selectedUnit.id);
+    if (refreshed) setSelectedUnit(refreshed);
+  }, [classData, selectedUnit]);
+
+  const updateClassUnits = (updater: (units: UnitData[]) => UnitData[]) => {
+    onUpdateClass({ ...classData, units: updater(classData.units) });
   };
 
-  const saveEdit = () => {
+  const openEditModal = () => {
+    setDraftTitle(classData.title);
+    setDraftBlock(classData.block);
+    setDraftDescription(classData.description);
+    setDraftCode(classData.classCode);
+    setDraftImage(classData.image);
+    setShowEditModal(true);
+  };
+
+  const saveClassEdits = () => {
     onUpdateClass({
       ...classData,
-      title: editTitle.trim() || classData.title,
-      block: editBlock,
-      description: editDescription.trim() || classData.description,
-      image: editImage || classData.image,
+      title: draftTitle.trim() || classData.title,
+      block: draftBlock.trim() || classData.block,
+      description: draftDescription.trim() || classData.description,
+      classCode: draftCode.trim().toUpperCase() || classData.classCode,
+      image: draftImage || classData.image,
     });
-    setViewMode('main');
+    setShowEditModal(false);
   };
 
-  const handleEditImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => setEditImage(reader.result as string);
-      reader.readAsDataURL(file);
-    }
+  const copyClassCode = async () => {
+    await Clipboard.setStringAsync(classData.classCode);
+    setCopyStatus('Class code copied!');
+    setTimeout(() => setCopyStatus(''), 1500);
   };
 
-  // === UNIT HANDLERS ===
-  const openUnit = (unit: UnitData) => {
-    setSelectedUnit(unit);
-    setExpandedSubUnit(unit.subUnits.length > 0 ? unit.subUnits[0].id : null);
-    setViewMode('unit-detail');
+  const regenerateCode = () => {
+    const newCode = makeCustomCode(classData.title);
+    onUpdateClass({ ...classData, classCode: newCode });
+    setCopyStatus('New class code generated.');
+    setTimeout(() => setCopyStatus(''), 1500);
   };
 
-  const createUnit = () => {
-    if (!newUnitTitle.trim()) return;
+  const addUnit = () => {
+    const nextId = classData.units.length > 0 ? Math.max(...classData.units.map((unit) => unit.id)) + 1 : 1;
     const newUnit: UnitData = {
-      id: Date.now(),
-      title: newUnitTitle.trim(),
+      id: nextId,
+      title: `Unit ${nextId}`,
       pages: 0,
       collaborators: 0,
-      examDate: newUnitExamDate || 'TBD',
-      daysLeft: newUnitExamDate ? Math.max(0, Math.floor((new Date(newUnitExamDate).getTime() - Date.now()) / 86400000)) : 0,
+      examDate: 'TBD',
+      daysLeft: 0,
       subUnits: [
-        { id: `${Date.now()}.1`, title: `${newUnitTitle.trim()} - Section 1`, notes: [] },
+        { id: `${nextId}.1`, title: 'Core Concepts', notes: [] },
+        { id: `${nextId}.2`, title: 'Review Questions', notes: [] },
       ],
     };
-    onUpdateClass({ ...classData, units: [...classData.units, newUnit] });
-    setShowCreateUnit(false);
-    setNewUnitTitle('');
-    setNewUnitExamDate('');
+
+    updateClassUnits((units) => [...units, newUnit]);
   };
 
-  // === SMART MERGE ===
-  const startSmartMerge = (subUnitId: string) => {
-    setMergeTargetSubUnit(subUnitId);
-    setMergeSelectedNotes(new Set());
-    setMergeExtraContent('');
-    setMerging(false);
-    setMergeComplete(false);
-    setShowSmartMerge(true);
+  const openUnitEditor = (unit: UnitData) => {
+    setEditingUnitId(unit.id);
+    setUnitDraftTitle(unit.title);
+    setUnitDraftExamDate(unit.examDate);
+    setUnitDraftDaysLeft(unit.daysLeft > 0 ? String(unit.daysLeft) : '');
+    setShowUnitEditModal(true);
   };
 
-  const toggleMergeNote = (noteId: number) => {
-    setMergeSelectedNotes(prev => {
-      const next = new Set(prev);
-      if (next.has(noteId)) next.delete(noteId);
-      else next.add(noteId);
-      return next;
-    });
-  };
+  const saveUnitEdits = () => {
+    if (!editingUnitId) return;
+    const parsedDays = Number.parseInt(unitDraftDaysLeft, 10);
 
-  const getTargetSubUnitNotes = (): SubUnitNote[] => {
-    if (!selectedUnit || !mergeTargetSubUnit) return [];
-    const su = selectedUnit.subUnits.find(s => s.id === mergeTargetSubUnit);
-    return su?.notes || [];
-  };
+    updateClassUnits((units) =>
+      units.map((unit) =>
+        unit.id === editingUnitId
+          ? {
+              ...unit,
+              title: unitDraftTitle.trim() || unit.title,
+              examDate: unitDraftExamDate.trim() || unit.examDate,
+              daysLeft: Number.isFinite(parsedDays) && parsedDays > 0 ? parsedDays : 0,
+            }
+          : unit
+      )
+    );
 
-  const executeSmartMerge = () => {
-    if (!selectedUnit || !mergeTargetSubUnit || mergeSelectedNotes.size < 2) return;
-    setMerging(true);
-
-    setTimeout(() => {
-      const targetSu = selectedUnit.subUnits.find(s => s.id === mergeTargetSubUnit);
-      if (!targetSu) return;
-
-      const notesToMerge = targetSu.notes.filter(n => mergeSelectedNotes.has(n.id));
-      const remainingNotes = targetSu.notes.filter(n => !mergeSelectedNotes.has(n.id));
-
-      // Create merged note
-      const mergedTitle = `Merged: ${notesToMerge.map(n => n.title).join(' + ')}`;
-      const mergedContent = notesToMerge.map(n => `[${n.title} by ${n.author}]\n${n.content}`).join('\n\n---\n\n') + (mergeExtraContent ? `\n\n---\n\n[Your additions]\n${mergeExtraContent}` : '');
-      const mergedPages = notesToMerge.reduce((a, n) => a + n.pages, 0);
-
-      const mergedNote: SubUnitNote = {
-        id: Date.now(),
-        title: mergedTitle,
-        author: 'Smart Merge',
-        date: new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }),
-        pages: mergedPages,
-        content: mergedContent,
-      };
-
-      const updatedUnits = classData.units.map(u => {
-        if (u.id !== selectedUnit.id) return u;
-        return {
-          ...u,
-          subUnits: u.subUnits.map(su => {
-            if (su.id !== mergeTargetSubUnit) return su;
-            return { ...su, notes: [...remainingNotes, mergedNote] };
-          }),
-        };
-      });
-
-      onUpdateClass({ ...classData, units: updatedUnits });
-      const updatedUnit = updatedUnits.find(u => u.id === selectedUnit.id);
-      if (updatedUnit) setSelectedUnit(updatedUnit);
-
-      setMerging(false);
-      setMergeComplete(true);
-      setTimeout(() => {
-        setShowSmartMerge(false);
-        setMergeComplete(false);
-      }, 1200);
-    }, 2200);
-  };
-
-  // === ADD NOTES ===
-  const startAddNotes = (subUnitId: string) => {
-    setAddNotesTargetSubUnit(subUnitId);
-    setAddNotesTab('write');
-    setAddNoteTitle('');
-    setAddNoteContent('');
-    setAddNoteUploaded(false);
-    setAddNoteImportedFile(null);
-    setAddingNote(false);
-    setAddNoteComplete(false);
-    setShowAddNotes(true);
-  };
-
-  const executeAddNote = () => {
-    if (!selectedUnit || !addNotesTargetSubUnit) return;
-
-    let title = addNoteTitle.trim();
-    let content = addNoteContent.trim();
-    let pages = 1;
-
-    if (addNotesTab === 'upload') {
-      title = title || 'Uploaded Notes';
-      content = content || 'Content from uploaded file.';
-      pages = 2;
-    } else if (addNotesTab === 'import' && addNoteImportedFile !== null) {
-      const importedFile = classData.files.find(f => f.id === addNoteImportedFile);
-      if (importedFile) {
-        title = title || importedFile.previewTitle;
-        content = content || importedFile.previewText;
-        pages = importedFile.pages;
-      }
+    if (selectedUnit?.id === editingUnitId) {
+      setSelectedUnit((prev) =>
+        prev
+          ? {
+              ...prev,
+              title: unitDraftTitle.trim() || prev.title,
+              examDate: unitDraftExamDate.trim() || prev.examDate,
+              daysLeft: Number.isFinite(parsedDays) && parsedDays > 0 ? parsedDays : 0,
+            }
+          : prev
+      );
     }
 
-    if (!title) return;
-
-    setAddingNote(true);
-
-    setTimeout(() => {
-      const newNote: SubUnitNote = {
-        id: Date.now(),
-        title,
-        author: 'You',
-        date: new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }),
-        pages,
-        content: content || 'Added notes.',
-      };
-
-      const updatedUnits = classData.units.map(u => {
-        if (u.id !== selectedUnit.id) return u;
-        return {
-          ...u,
-          pages: u.pages + newNote.pages,
-          subUnits: u.subUnits.map(su => {
-            if (su.id !== addNotesTargetSubUnit) return su;
-            return { ...su, notes: [...su.notes, newNote] };
-          }),
-        };
-      });
-
-      onUpdateClass({ ...classData, units: updatedUnits, documents: classData.documents + 1 });
-      const updatedUnit = updatedUnits.find(u => u.id === selectedUnit.id);
-      if (updatedUnit) setSelectedUnit(updatedUnit);
-
-      setAddingNote(false);
-      setAddNoteComplete(true);
-      setTimeout(() => {
-        setShowAddNotes(false);
-        setAddNoteComplete(false);
-      }, 1200);
-    }, 1000);
+    setShowUnitEditModal(false);
+    setEditingUnitId(null);
   };
 
-  // Add sub-unit to selected unit
-  const addSubUnit = () => {
-    if (!selectedUnit) return;
-    const existingCount = selectedUnit.subUnits.length;
-    const baseNum = selectedUnit.title.replace(/[^0-9]/g, '') || String(selectedUnit.id);
-    const newSubUnit: SubUnit = {
-      id: `${baseNum}.${existingCount + 1}-${Date.now()}`,
-      title: `${baseNum}.${existingCount + 1} New Section`,
-      notes: [],
-    };
-    const updatedUnit = { ...selectedUnit, subUnits: [...selectedUnit.subUnits, newSubUnit] };
-    setSelectedUnit(updatedUnit);
-    const updatedUnits = classData.units.map((u) => u.id === selectedUnit.id ? updatedUnit : u);
-    onUpdateClass({ ...classData, units: updatedUnits });
+  const deleteUnit = (unitId: number) => {
+    Alert.alert('Delete Unit', 'This will remove the unit and all notes inside it. Continue?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          updateClassUnits((units) => units.filter((unit) => unit.id !== unitId));
+          if (selectedUnit?.id === unitId) {
+            setSelectedUnit(null);
+          }
+        },
+      },
+    ]);
   };
 
-  // Delete note
-  const deleteNote = (subUnitId: string, noteId: number) => {
-    if (!selectedUnit) return;
-    const updatedUnits = classData.units.map(u => {
-      if (u.id !== selectedUnit.id) return u;
-      return {
-        ...u,
-        subUnits: u.subUnits.map(su => {
-          if (su.id !== subUnitId) return su;
-          return { ...su, notes: su.notes.filter(n => n.id !== noteId) };
-        }),
-      };
+  const pickClassBackground = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      quality: 0.9,
+      aspect: [3, 2],
     });
-    onUpdateClass({ ...classData, units: updatedUnits });
-    const updatedUnit = updatedUnits.find(u => u.id === selectedUnit.id);
-    if (updatedUnit) setSelectedUnit(updatedUnit);
+
+    if (!result.canceled && result.assets[0]) {
+      setDraftImage(result.assets[0].uri);
+    }
   };
 
-  // ================ RENDER ================
+  const updateSelectedUnit = (updater: (unit: UnitData) => UnitData) => {
+    if (!selectedUnit) return;
+    const updatedUnits = classData.units.map((unit) => (unit.id === selectedUnit.id ? updater(unit) : unit));
+    const refreshed = updatedUnits.find((unit) => unit.id === selectedUnit.id) || selectedUnit;
+    onUpdateClass({ ...classData, units: updatedUnits });
+    setSelectedUnit(refreshed);
+  };
 
-  // === EDIT VIEW ===
-  if (viewMode === 'edit') {
+  const openAddNoteModal = (subUnitId: string) => {
+    setActiveSubUnitId(subUnitId);
+    setNoteSource('filesTab');
+    setSelectedClassFileId(classData.files[0]?.id || null);
+    setLocalUpload(null);
+    setNewNoteAuthor('You');
+    setNewNoteTitle('');
+    setNewNoteContent('');
+    setShowAddNoteModal(true);
+  };
+
+  const openScanTabFromAddNote = () => {
+    setShowAddNoteModal(false);
+    onScan?.();
+  };
+
+  const pickNoteFromPhone = async () => {
+    const result = await DocumentPicker.getDocumentAsync({
+      copyToCacheDirectory: true,
+      multiple: false,
+      type: ['application/pdf', 'image/*', 'text/plain'],
+    });
+
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      const pages = asset.mimeType === 'application/pdf' ? 3 : 1;
+      const trimmedName = asset.name.replace(/\.[^/.]+$/, '');
+
+      setLocalUpload({
+        name: asset.name,
+        pages,
+        content: `${trimmedName} was uploaded from phone storage. Key points are ready to annotate and merge with class notes.`,
+      });
+    }
+  };
+
+  const saveSectionNote = () => {
+    if (!selectedUnit || !activeSubUnitId) return;
+
+    const selectedFile = classData.files.find((file) => file.id === selectedClassFileId) || classData.files[0] || null;
+    const sourceTitle =
+      noteSource === 'filesTab'
+        ? selectedFile
+          ? `From File: ${selectedFile.name}`
+          : 'Imported File Note'
+        : localUpload
+          ? `From Phone: ${localUpload.name}`
+          : 'Uploaded Note';
+
+    const sourceContent = noteSource === 'filesTab' ? selectedFile?.previewText : localUpload?.content;
+    const sourcePages =
+      noteSource === 'filesTab' ? Math.max(1, selectedFile?.pages || 1) : Math.max(1, localUpload?.pages || 1);
+
+    const title = newNoteTitle.trim() || sourceTitle;
+    const content = newNoteContent.trim() || sourceContent || 'New class note added.';
+
+    updateSelectedUnit((unit) => ({
+      ...unit,
+      subUnits: unit.subUnits.map((sub) =>
+        sub.id === activeSubUnitId
+          ? {
+              ...sub,
+              notes: [
+                ...sub.notes,
+                {
+                  id: Date.now(),
+                  title,
+                  author: newNoteAuthor.trim() || 'You',
+                  date: formatToday(),
+                  pages: sourcePages,
+                  content,
+                },
+              ],
+            }
+          : sub
+      ),
+    }));
+
+    setShowAddNoteModal(false);
+  };
+
+  const openMergeNotesModal = (subUnitId: string) => {
+    setActiveSubUnitId(subUnitId);
+    setSelectedMergeNoteIds([]);
+    setShowMergeModal(true);
+  };
+
+  const toggleMergeNote = (id: number) => {
+    setSelectedMergeNoteIds((prev) => (prev.includes(id) ? prev.filter((noteId) => noteId !== id) : [...prev, id]));
+  };
+
+  const mergeSelectedNotes = () => {
+    if (!selectedUnit || !activeSubUnitId || selectedMergeNoteIds.length < 2) return;
+
+    updateSelectedUnit((unit) => ({
+      ...unit,
+      subUnits: unit.subUnits.map((sub) => {
+        if (sub.id !== activeSubUnitId) return sub;
+        const chosen = sub.notes.filter((note) => selectedMergeNoteIds.includes(note.id));
+        const mergedBody = chosen.map((note) => `- ${note.title}: ${note.content}`).join(' ');
+
+        return {
+          ...sub,
+          notes: [
+            ...sub.notes,
+            {
+              id: Date.now(),
+              title: `Merged (${chosen.length} Notes)`,
+              author: 'Citadel Merge',
+              date: formatToday(),
+              pages: 1,
+              content: `Merged summary: ${mergedBody}`.slice(0, 600),
+            },
+          ],
+        };
+      }),
+    }));
+
+    setShowMergeModal(false);
+  };
+
+  const openNoteModal = (note: SubUnitNote, sectionTitle: string) => {
+    setActiveNote({ note, sectionTitle });
+    setNoteActionStatus('');
+  };
+
+  const shareActiveNote = async () => {
+    if (!activeNote) return;
+    await Share.share({
+      title: activeNote.note.title,
+      message: `${activeNote.note.title}\n${activeNote.note.author} • ${activeNote.note.date}\n\n${activeNote.note.content}`,
+    });
+  };
+
+  const downloadActiveNote = () => {
+    if (!activeNote) return;
+    const wordCount = activeNote.note.content.trim().split(/\s+/).filter(Boolean).length;
+    const sizeMb = Math.max(0.1, Number((activeNote.note.content.length / 1800).toFixed(1)));
+    const readTime = Math.max(1, Math.ceil(wordCount / 180));
+
+    const file = {
+      id: Date.now(),
+      name: `${activeNote.note.title}.txt`,
+      date: formatToday(),
+      thumbnail: classData.image,
+      pages: Math.max(1, activeNote.note.pages),
+      size: `${sizeMb}MB`,
+      readTime: `${readTime} Min Read`,
+      previewTitle: activeNote.note.title,
+      previewText: activeNote.note.content,
+      source: 'document' as const,
+    };
+
+    onUpdateClass({
+      ...classData,
+      files: [file, ...classData.files],
+      documents: classData.documents + 1,
+    });
+
+    setNoteActionStatus('Saved to Files tab.');
+    setTimeout(() => setNoteActionStatus(''), 1400);
+  };
+
+  if (selectedUnit) {
+    const mergeCandidates = selectedUnit.subUnits.find((sub) => sub.id === activeSubUnitId)?.notes || [];
+
     return (
-      <div className="h-full w-full bg-white relative flex flex-col overflow-hidden">
-        <div className="flex-1 overflow-y-auto hide-scrollbar pb-10">
-          {/* Header */}
-          <div className="px-6 pt-14 pb-4 flex items-center justify-between">
-            <button onClick={() => setViewMode('main')} className="w-10 h-10 rounded-full bg-bg-secondary flex items-center justify-center">
-              <ArrowLeft className="w-5 h-5 text-text-primary" />
-            </button>
-            <h1 className="font-display text-lg font-bold text-text-primary">Edit Class</h1>
-            <button onClick={saveEdit} className="px-4 py-2 rounded-full bg-maroon text-white font-body text-sm font-semibold">
-              Save
-            </button>
-          </div>
+      <View style={styles.container}>
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+          <View style={styles.unitHeader}>
+            <TouchableOpacity onPress={() => setSelectedUnit(null)} style={styles.backBtn}>
+              <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
+            </TouchableOpacity>
+            <View style={styles.unitHeaderText}>
+              <Text style={styles.unitTitle}>{selectedUnit.title}</Text>
+              <Text style={styles.unitMeta}>{classData.title}</Text>
+            </View>
+          </View>
 
-          <div className="px-6">
-            {/* Image */}
-            <div className="rounded-2xl overflow-hidden relative mb-6" style={{ height: '160px' }}>
-              <img src={editImage || classData.image} alt="" className="absolute inset-0 w-full h-full object-cover" />
-              <div className="absolute inset-0 bg-black/30" />
-              <label className="absolute inset-0 flex flex-col items-center justify-center cursor-pointer gap-2">
-                <div className="w-12 h-12 rounded-full bg-white/90 backdrop-blur-sm flex items-center justify-center">
-                  <ImagePlus className="w-5 h-5 text-text-primary" />
-                </div>
-                <span className="font-body text-xs text-white font-medium">Change Photo</span>
-                <input type="file" accept="image/*" onChange={handleEditImageUpload} className="hidden" />
-              </label>
-              {editImage && (
-                <button onClick={() => setEditImage(null)} className="absolute top-3 right-3 w-8 h-8 rounded-full bg-red-500 flex items-center justify-center">
-                  <X className="w-4 h-4 text-white" />
-                </button>
-              )}
-            </div>
+          <View style={styles.unitOverviewCard}>
+            <Text style={styles.unitOverviewTitle}>Unit Progress</Text>
+            <View style={styles.progressRow}>
+              <Text style={styles.progressValue}>{Math.round(selectedUnitProgress * 100)}%</Text>
+              <Text style={styles.progressSub}>
+                {selectedUnitCompletedSections}/{selectedUnitTotalSections} sections complete
+              </Text>
+            </View>
+            <View style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${Math.round(selectedUnitProgress * 100)}%` }]} />
+            </View>
 
-            {/* Class Name */}
-            <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">Class Name</label>
-            <input
-              type="text"
-              value={editTitle}
-              onChange={(e) => setEditTitle(e.target.value)}
-              className="w-full h-[52px] px-5 bg-input-bg rounded-2xl font-body text-sm text-text-primary outline-none focus:ring-2 focus:ring-maroon/20 transition-all mb-5"
-            />
+            <View style={styles.unitStatsRow}>
+              <View style={styles.unitStatCard}>
+                <Ionicons name="document-text" size={16} color={colors.maroon} />
+                <Text style={styles.unitStatValue}>{selectedUnit.subUnits.reduce((a, s) => a + s.notes.length, 0)}</Text>
+                <Text style={styles.unitStatLabel}>Notes</Text>
+              </View>
+              <View style={styles.unitStatCard}>
+                <Ionicons name="people" size={16} color={colors.maroon} />
+                <Text style={styles.unitStatValue}>{selectedUnit.collaborators}</Text>
+                <Text style={styles.unitStatLabel}>Collaborators</Text>
+              </View>
+              <View style={styles.unitStatCard}>
+                <Ionicons name="calendar" size={16} color={colors.maroon} />
+                <Text style={styles.unitStatValue}>{selectedUnit.daysLeft}</Text>
+                <Text style={styles.unitStatLabel}>Days Left</Text>
+              </View>
+            </View>
+          </View>
 
-            {/* Block */}
-            <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">Block / Period</label>
-            <div className="relative mb-5">
-              <button onClick={() => setShowBlockDropdown(!showBlockDropdown)} className="w-full h-[52px] px-5 bg-input-bg rounded-2xl font-body text-sm text-left flex items-center justify-between">
-                <span className="text-text-primary">{editBlock}</span>
-                <motion.div animate={{ rotate: showBlockDropdown ? 180 : 0 }}><ChevronDown className="w-4 h-4 text-text-tertiary" /></motion.div>
-              </button>
-              <AnimatePresence>
-                {showBlockDropdown && (
-                  <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden z-30">
-                    <div className="max-h-[200px] overflow-y-auto hide-scrollbar py-1">
-                      {blockOptions.map((block) => (
-                        <button key={block} onClick={() => { setEditBlock(block); setShowBlockDropdown(false); }} className={`w-full text-left px-5 py-3 font-body text-sm flex items-center justify-between ${editBlock === block ? 'bg-maroon/5 text-maroon font-medium' : 'text-text-primary'}`}>
-                          {block}
-                          {editBlock === block && <Check className="w-4 h-4 text-maroon" />}
-                        </button>
-                      ))}
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
+          <View style={styles.sectionHeaderStack}>
+            <Text style={styles.sectionTitle}>Sections</Text>
+            <Text style={styles.sectionSub}>Track completion and upload notes from files or scans.</Text>
+          </View>
 
-            {/* Description */}
-            <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">Description</label>
-            <textarea
-              value={editDescription}
-              onChange={(e) => setEditDescription(e.target.value)}
-              rows={4}
-              className="w-full px-5 py-4 bg-input-bg rounded-2xl font-body text-sm text-text-primary outline-none focus:ring-2 focus:ring-maroon/20 transition-all resize-none mb-5"
-              placeholder="What are you currently studying?"
-            />
-
-            {/* Danger Zone */}
-            <div className="bg-red-50 rounded-2xl p-5 mt-4">
-              <p className="font-body text-xs font-semibold text-red-600 uppercase tracking-wider mb-2">Danger Zone</p>
-              <p className="font-body text-xs text-red-500 mb-3">Leaving this class will remove all your progress.</p>
-              <button className="h-10 px-5 rounded-full bg-red-100 text-red-600 font-body text-sm font-semibold active:scale-95 transition-transform">
-                Leave Class
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // === UNIT DETAIL VIEW ===
-  if (viewMode === 'unit-detail' && selectedUnit) {
-    const totalNotes = selectedUnit.subUnits.reduce((a, su) => a + su.notes.length, 0);
-
-    return (
-      <div className="h-full w-full bg-bg-secondary relative flex flex-col overflow-hidden">
-        <div className="flex-1 overflow-y-auto hide-scrollbar pb-28">
-          {/* Header */}
-          <div className="bg-white px-6 pt-14 pb-5 rounded-b-[28px] shadow-sm">
-            <div className="flex items-center justify-between mb-4">
-              <button onClick={() => setViewMode('main')} className="w-10 h-10 rounded-full bg-bg-secondary flex items-center justify-center">
-                <ArrowLeft className="w-5 h-5 text-text-primary" />
-              </button>
-              <div className="flex items-center gap-2">
-                <button onClick={() => startAddNotes(selectedUnit.subUnits[0]?.id || '')} className="h-9 px-4 rounded-full bg-maroon/10 flex items-center gap-2 active:scale-95 transition-transform">
-                  <Plus className="w-3.5 h-3.5 text-maroon" />
-                  <span className="font-body text-xs font-semibold text-maroon">Add</span>
-                </button>
-                <button onClick={() => startSmartMerge(selectedUnit.subUnits[0]?.id || '')} className="h-9 px-4 rounded-full bg-maroon flex items-center gap-2 active:scale-95 transition-transform shadow-md shadow-maroon/20">
-                  <Sparkles className="w-3.5 h-3.5 text-white" />
-                  <span className="font-body text-xs font-semibold text-white">Merge</span>
-                </button>
-              </div>
-            </div>
-            <h1 className="font-display text-2xl font-bold text-text-primary">{selectedUnit.title}</h1>
-            <p className="font-body text-sm text-text-secondary mt-1">{classData.title}</p>
-            <div className="flex items-center gap-4 mt-3">
-              <div className="flex items-center gap-1.5">
-                <FileText className="w-3.5 h-3.5 text-maroon" />
-                <span className="font-body text-xs text-text-secondary">{totalNotes} Notes</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <Users className="w-3.5 h-3.5 text-maroon" />
-                <span className="font-body text-xs text-text-secondary">{selectedUnit.collaborators} Collaborators</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 text-maroon" />
-                <span className="font-body text-xs text-text-secondary">Exam {selectedUnit.examDate}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Sub-units */}
-          <div className="px-6 mt-5">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-display text-base font-bold text-text-primary">Sections</h2>
-              <button onClick={addSubUnit} className="flex items-center gap-1.5 text-maroon font-body text-xs font-semibold active:opacity-60">
-                <Plus className="w-3.5 h-3.5" /> Add Section
-              </button>
-            </div>
-
-            <div className="flex flex-col gap-3">
-              {selectedUnit.subUnits.map((subUnit) => {
-                const isExpanded = expandedSubUnit === subUnit.id;
-                return (
-                  <motion.div
-                    key={subUnit.id}
-                    layout
-                    className="bg-white rounded-3xl shadow-sm shadow-black/5 overflow-hidden"
+          {selectedUnit.subUnits.map((subUnit) => {
+            const key = `${selectedUnit.id}-${subUnit.id}`;
+            const done = !!unitProgress[key];
+            return (
+              <View key={subUnit.id} style={styles.subUnitCard}>
+                <View style={styles.subUnitHeader}>
+                  <TouchableOpacity
+                    style={[styles.checkbox, done && styles.checkboxDone]}
+                    onPress={() => setUnitProgress((prev) => ({ ...prev, [key]: !done }))}
                   >
-                    {/* Sub-unit header */}
-                    <button
-                      onClick={() => setExpandedSubUnit(isExpanded ? null : subUnit.id)}
-                      className="w-full flex items-center gap-3 p-4"
-                    >
-                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-colors ${isExpanded ? 'bg-maroon' : 'bg-maroon/10'}`}>
-                        <BookOpen className={`w-4 h-4 ${isExpanded ? 'text-white' : 'text-maroon'}`} />
-                      </div>
-                      <div className="flex-1 text-left min-w-0">
-                        <p className="font-body text-sm font-semibold text-text-primary truncate">{subUnit.title}</p>
-                        <p className="font-body text-[11px] text-text-tertiary mt-0.5">
-                          {subUnit.notes.length} note{subUnit.notes.length !== 1 ? 's' : ''}
-                        </p>
-                      </div>
-                      <motion.div animate={{ rotate: isExpanded ? 90 : 0 }} transition={{ duration: 0.2 }}>
-                        <ChevronRight className="w-4 h-4 text-text-tertiary" />
-                      </motion.div>
-                    </button>
+                    {done && <Ionicons name="checkmark" size={14} color="white" />}
+                  </TouchableOpacity>
+                  <View style={styles.subUnitInfo}>
+                    <Text style={styles.subUnitTitle}>{subUnit.title}</Text>
+                    <Text style={styles.subUnitCount}>
+                      {subUnit.notes.length} note{subUnit.notes.length !== 1 ? 's' : ''}
+                    </Text>
+                  </View>
+                </View>
 
-                    {/* Expanded notes */}
-                    <AnimatePresence>
-                      {isExpanded && (
-                        <motion.div
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: 'auto', opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          transition={{ duration: 0.3, ease: 'easeInOut' }}
-                          className="overflow-hidden"
-                        >
-                          <div className="px-4 pb-4">
-                            {subUnit.notes.length > 0 ? (
-                              <div className="flex flex-col gap-2">
-                                {subUnit.notes.map((note) => (
-                                  <div key={note.id} className="bg-bg-secondary rounded-2xl p-4">
-                                    <div className="flex items-start justify-between mb-2">
-                                      <div className="flex-1 min-w-0">
-                                        <p className="font-body text-sm font-semibold text-text-primary truncate">{note.title}</p>
-                                        <p className="font-body text-[11px] text-text-tertiary mt-0.5">
-                                          By {note.author} • {note.date} • {note.pages} pg
-                                        </p>
-                                      </div>
-                                      <button
-                                        onClick={() => deleteNote(subUnit.id, note.id)}
-                                        className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-red-50 transition-colors shrink-0 ml-2"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5 text-text-tertiary hover:text-red-500" />
-                                      </button>
-                                    </div>
-                                    <p className="font-body text-xs text-text-secondary leading-relaxed line-clamp-3">{note.content}</p>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="bg-bg-secondary rounded-2xl p-5 text-center">
-                                <FileText className="w-6 h-6 text-text-tertiary/40 mx-auto mb-2" />
-                                <p className="font-body text-xs text-text-tertiary">No notes yet for this section</p>
-                              </div>
-                            )}
+                <View style={styles.subUnitActionsRow}>
+                  <TouchableOpacity style={styles.subUnitAction} onPress={() => openAddNoteModal(subUnit.id)}>
+                    <Ionicons name="add" size={14} color={colors.maroon} />
+                    <Text style={styles.subUnitActionText}>Add Note</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.subUnitAction, subUnit.notes.length < 2 && styles.subUnitActionDisabled]}
+                    onPress={() => openMergeNotesModal(subUnit.id)}
+                    disabled={subUnit.notes.length < 2}
+                  >
+                    <Ionicons
+                      name="git-merge"
+                      size={14}
+                      color={subUnit.notes.length < 2 ? colors.textTertiary : colors.maroon}
+                    />
+                    <Text style={[styles.subUnitActionText, subUnit.notes.length < 2 && styles.subUnitActionTextDisabled]}>
+                      Merge
+                    </Text>
+                  </TouchableOpacity>
+                </View>
 
-                            {/* Action buttons row */}
-                            <div className="flex gap-2 mt-3">
-                              {/* Add Notes button */}
-                              <button
-                                onClick={() => startAddNotes(subUnit.id)}
-                                className="flex-1 h-10 rounded-2xl border-2 border-dashed border-blue-200 flex items-center justify-center gap-2 hover:border-blue-400 active:bg-blue-50 transition-all"
-                              >
-                                <Plus className="w-3.5 h-3.5 text-blue-600" />
-                                <span className="font-body text-xs font-semibold text-blue-600">Add Notes</span>
-                              </button>
-
-                              {/* Smart Merge button - only if 2+ notes */}
-                              {subUnit.notes.length >= 2 && (
-                                <button
-                                  onClick={() => startSmartMerge(subUnit.id)}
-                                  className="flex-1 h-10 rounded-2xl border-2 border-dashed border-maroon/20 flex items-center justify-center gap-2 hover:border-maroon/40 active:bg-maroon/5 transition-all"
-                                >
-                                  <Sparkles className="w-3.5 h-3.5 text-maroon" />
-                                  <span className="font-body text-xs font-semibold text-maroon">Smart Merge</span>
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </motion.div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+                {subUnit.notes.length > 0 ? (
+                  <View style={styles.notesList}>
+                    {subUnit.notes.map((note) => (
+                      <TouchableOpacity key={note.id} style={styles.noteCard} onPress={() => openNoteModal(note, subUnit.title)}>
+                        <View style={styles.noteTopRow}>
+                          <Text style={styles.noteTitle}>{note.title}</Text>
+                          <Text style={styles.noteAuthorPill}>{note.author}</Text>
+                        </View>
+                        <Text style={styles.noteMeta}>{note.date}</Text>
+                        <Text style={styles.noteContent} numberOfLines={3}>
+                          {note.content}
+                        </Text>
+                        <Text style={styles.noteTapHint}>Tap to view actions</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : (
+                  <View style={styles.emptySectionHint}>
+                    <Ionicons name="sparkles" size={14} color={colors.textTertiary} />
+                    <Text style={styles.emptySectionText}>No notes yet. Add your first upload for this section.</Text>
+                  </View>
+                )}
+              </View>
+            );
+          })}
+        </ScrollView>
 
         <BottomNav active="home" onHome={onBack} onScan={onScan} onFriends={onFriends} onFiles={onFilesOpen} />
 
-        {/* ===== SMART MERGE MODAL ===== */}
-        <AnimatePresence>
-          {showSmartMerge && (
-            <>
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowSmartMerge(false)} className="absolute inset-0 bg-black/40 z-40 backdrop-blur-sm" />
-              <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 300 }} className="absolute bottom-0 left-0 right-0 z-50 bg-white rounded-t-[28px] shadow-2xl flex flex-col" style={{ maxHeight: '85%' }}>
-                <div className="flex justify-center pt-3 pb-1 shrink-0"><div className="w-10 h-1 rounded-full bg-gray-300" /></div>
-                <div className="flex items-center justify-between px-6 pt-2 pb-4 shrink-0">
-                  <div>
-                    <h2 className="font-display text-xl font-bold text-text-primary flex items-center gap-2">
-                      <Sparkles className="w-5 h-5 text-maroon" /> Smart Merge
-                    </h2>
-                    <p className="font-body text-xs text-text-secondary mt-0.5">Combine existing notes into one unified document</p>
-                  </div>
-                  <button onClick={() => setShowSmartMerge(false)} className="w-9 h-9 rounded-full bg-bg-secondary flex items-center justify-center">
-                    <X className="w-4 h-4 text-text-secondary" />
-                  </button>
-                </div>
+        <Modal visible={showAddNoteModal} transparent animationType="fade" onRequestClose={() => setShowAddNoteModal(false)}>
+          <View style={styles.modalBackdropCentered}>
+            <View style={styles.noteModalCard}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Add Note</Text>
+                <TouchableOpacity onPress={() => setShowAddNoteModal(false)}>
+                  <Ionicons name="close" size={22} color={colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
 
-                <div className="flex-1 min-h-0 overflow-y-auto hide-scrollbar px-6 pb-10">
-                  {mergeComplete ? (
-                    <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center justify-center py-8">
-                      <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 15 }} className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mb-4">
-                        <Check className="w-8 h-8 text-green-600" />
-                      </motion.div>
-                      <p className="font-body text-base font-semibold text-text-primary">Notes merged successfully</p>
-                      <p className="font-body text-sm text-text-secondary mt-1">Your notes have been combined into one</p>
-                    </motion.div>
-                  ) : merging ? (
-                    <div className="flex flex-col items-center justify-center py-12">
-                      <div className="relative w-20 h-20 mb-5">
-                        <motion.div animate={{ rotate: 360 }} transition={{ duration: 2, repeat: Infinity, ease: 'linear' }} className="absolute inset-0 rounded-full border-4 border-bg-secondary border-t-maroon" />
-                        <div className="absolute inset-0 flex items-center justify-center">
-                          <Layers className="w-7 h-7 text-maroon" />
-                        </div>
-                      </div>
-                      <p className="font-body text-sm font-semibold text-text-primary">Merging {mergeSelectedNotes.size} notes...</p>
-                      <p className="font-body text-xs text-text-secondary mt-1">Analyzing content and combining key points</p>
-                      <div className="flex gap-1 mt-4">
-                        {[0,1,2].map(i => (
-                          <motion.div key={i} animate={{ opacity: [0.3, 1, 0.3] }} transition={{ duration: 1.2, repeat: Infinity, delay: i * 0.3 }} className="w-2 h-2 rounded-full bg-maroon" />
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      {/* Target section */}
-                      {mergeTargetSubUnit && (
-                        <div className="bg-maroon/5 rounded-2xl p-4 mb-5 flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-xl bg-maroon/10 flex items-center justify-center shrink-0">
-                            <Layers className="w-4 h-4 text-maroon" />
-                          </div>
-                          <div>
-                            <p className="font-body text-[11px] font-semibold text-maroon uppercase tracking-wider">Merging in</p>
-                            <p className="font-body text-sm font-medium text-text-primary">
-                              {selectedUnit?.subUnits.find((su) => su.id === mergeTargetSubUnit)?.title || 'Selected section'}
-                            </p>
-                          </div>
-                        </div>
-                      )}
+              <View style={styles.noteMethodRow}>
+                <TouchableOpacity style={[styles.noteMethodBtn, styles.noteMethodBtnActive]}>
+                  <Text style={[styles.noteMethodText, styles.noteMethodTextActive]}>Upload from Files</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.noteMethodBtn} onPress={openScanTabFromAddNote}>
+                  <Text style={styles.noteMethodText}>Scan Now</Text>
+                </TouchableOpacity>
+              </View>
 
-                      {/* Select notes to merge */}
-                      <p className="font-body text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">Select notes to merge (minimum 2)</p>
+              <Text style={styles.modalLabel}>Source</Text>
+              <View style={styles.sourceRow}>
+                <TouchableOpacity
+                  style={[styles.sourceChip, noteSource === 'filesTab' && styles.sourceChipActive]}
+                  onPress={() => setNoteSource('filesTab')}
+                >
+                  <Text style={[styles.sourceChipText, noteSource === 'filesTab' && styles.sourceChipTextActive]}>
+                    Files Tab
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.sourceChip, noteSource === 'phone' && styles.sourceChipActive]}
+                  onPress={() => setNoteSource('phone')}
+                >
+                  <Text style={[styles.sourceChipText, noteSource === 'phone' && styles.sourceChipTextActive]}>
+                    Phone Storage
+                  </Text>
+                </TouchableOpacity>
+              </View>
 
-                      {getTargetSubUnitNotes().length >= 2 ? (
-                        <div className="flex flex-col gap-2 mb-5">
-                          {getTargetSubUnitNotes().map(note => {
-                            const isSelected = mergeSelectedNotes.has(note.id);
-                            return (
-                              <button
-                                key={note.id}
-                                onClick={() => toggleMergeNote(note.id)}
-                                className={`w-full text-left rounded-2xl p-4 border-2 transition-all ${isSelected ? 'border-maroon bg-maroon/5' : 'border-gray-100 bg-white'}`}
-                              >
-                                <div className="flex items-start gap-3">
-                                  <div className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 mt-0.5 transition-colors ${isSelected ? 'bg-maroon' : 'bg-gray-100'}`}>
-                                    {isSelected && <Check className="w-3.5 h-3.5 text-white" />}
-                                  </div>
-                                  <div className="flex-1 min-w-0">
-                                    <p className="font-body text-sm font-semibold text-text-primary truncate">{note.title}</p>
-                                    <p className="font-body text-[11px] text-text-tertiary mt-0.5">By {note.author} • {note.pages} pg</p>
-                                    <p className="font-body text-xs text-text-secondary mt-1.5 line-clamp-2 leading-relaxed">{note.content}</p>
-                                  </div>
-                                </div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <div className="bg-bg-secondary rounded-2xl p-6 text-center mb-5">
-                          <Layers className="w-8 h-8 text-text-tertiary/40 mx-auto mb-2" />
-                          <p className="font-body text-sm font-medium text-text-primary">Not enough notes to merge</p>
-                          <p className="font-body text-xs text-text-secondary mt-1">Add at least 2 notes to this section first, then merge them here.</p>
-                        </div>
-                      )}
-
-                      {/* Additional content */}
-                      {getTargetSubUnitNotes().length >= 2 && (
-                        <>
-                          <div className="relative mb-4">
-                            <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-px bg-gray-200" />
-                            <p className="font-body text-xs text-text-tertiary bg-white px-3 mx-auto w-fit relative">add your own notes to the merge (optional)</p>
-                          </div>
-
-                          <textarea
-                            value={mergeExtraContent}
-                            onChange={(e) => setMergeExtraContent(e.target.value)}
-                            rows={3}
-                            placeholder="Add any additional notes you want included in the merge..."
-                            className="w-full px-5 py-4 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20 transition-all resize-none mb-5"
-                          />
-
-                          {/* Merge preview */}
-                          {mergeSelectedNotes.size >= 2 && (
-                            <div className="bg-bg-secondary rounded-2xl p-4 mb-5">
-                              <p className="font-body text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">Merge Preview</p>
-                              <div className="flex items-center gap-2 flex-wrap">
-                                {getTargetSubUnitNotes().filter(n => mergeSelectedNotes.has(n.id)).map((note, i, arr) => (
-                                  <div key={note.id} className="flex items-center gap-2">
-                                    <span className="font-body text-xs font-medium text-maroon bg-maroon/10 px-2.5 py-1 rounded-full truncate max-w-[120px]">{note.title}</span>
-                                    {i < arr.length - 1 && <Plus className="w-3 h-3 text-text-tertiary shrink-0" />}
-                                  </div>
-                                ))}
-                                {mergeExtraContent.trim() && (
-                                  <>
-                                    <Plus className="w-3 h-3 text-text-tertiary shrink-0" />
-                                    <span className="font-body text-xs font-medium text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full">Your additions</span>
-                                  </>
-                                )}
-                              </div>
-                              <div className="flex items-center gap-1.5 mt-3">
-                                <ArrowRight className="w-3 h-3 text-text-tertiary" />
-                                <span className="font-body text-xs text-text-secondary">Will create 1 merged note and remove originals</span>
-                              </div>
-                            </div>
-                          )}
-
-                          <button
-                            onClick={executeSmartMerge}
-                            disabled={mergeSelectedNotes.size < 2}
-                            className={`w-full h-[52px] rounded-full font-body font-semibold text-sm flex items-center justify-center gap-2 transition-all ${mergeSelectedNotes.size >= 2 ? 'bg-maroon text-white shadow-lg shadow-maroon/20 active:scale-[0.97]' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
-                          >
-                            <Sparkles className="w-4 h-4" /> Merge {mergeSelectedNotes.size} Notes into One
-                          </button>
-                        </>
-                      )}
-                    </>
-                  )}
-                </div>
-              </motion.div>
-            </>
-          )}
-        </AnimatePresence>
-
-        {/* ===== ADD NOTES MODAL ===== */}
-        <AnimatePresence>
-          {showAddNotes && (
-            <>
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowAddNotes(false)} className="absolute inset-0 bg-black/40 z-40 backdrop-blur-sm" />
-              <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 300 }} className="absolute bottom-0 left-0 right-0 z-50 bg-white rounded-t-[28px] shadow-2xl flex flex-col" style={{ maxHeight: '85%' }}>
-                <div className="flex justify-center pt-3 pb-1 shrink-0"><div className="w-10 h-1 rounded-full bg-gray-300" /></div>
-                <div className="flex items-center justify-between px-6 pt-2 pb-4 shrink-0">
-                  <div>
-                    <h2 className="font-display text-xl font-bold text-text-primary flex items-center gap-2">
-                      <Plus className="w-5 h-5 text-blue-600" /> Add Notes
-                    </h2>
-                    <p className="font-body text-xs text-text-secondary mt-0.5">
-                      Add to: {selectedUnit?.subUnits.find(su => su.id === addNotesTargetSubUnit)?.title || 'section'}
-                    </p>
-                  </div>
-                  <button onClick={() => setShowAddNotes(false)} className="w-9 h-9 rounded-full bg-bg-secondary flex items-center justify-center">
-                    <X className="w-4 h-4 text-text-secondary" />
-                  </button>
-                </div>
-
-                <div className="flex-1 min-h-0 overflow-y-auto hide-scrollbar px-6 pb-10">
-                  {addNoteComplete ? (
-                    <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center justify-center py-8">
-                      <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 15 }} className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mb-4">
-                        <Check className="w-8 h-8 text-green-600" />
-                      </motion.div>
-                      <p className="font-body text-base font-semibold text-text-primary">Notes added successfully</p>
-                      <p className="font-body text-sm text-text-secondary mt-1">Your notes are now in this section</p>
-                    </motion.div>
-                  ) : addingNote ? (
-                    <div className="flex flex-col items-center justify-center py-12">
-                      <motion.div animate={{ rotate: 360 }} transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }} className="w-14 h-14 rounded-full border-4 border-bg-secondary border-t-blue-600 mb-4" />
-                      <p className="font-body text-sm font-semibold text-text-primary">Adding your notes...</p>
-                    </div>
-                  ) : (
-                    <>
-                      {/* Tab switcher */}
-                      <div className="flex gap-2 mb-5 bg-bg-secondary rounded-2xl p-1">
-                        {[
-                          { key: 'write' as const, label: 'Write', icon: PenLine },
-                          { key: 'upload' as const, label: 'Upload', icon: FileUp },
-                          { key: 'import' as const, label: 'From Files', icon: FolderOpen },
-                        ].map(tab => (
-                          <button
-                            key={tab.key}
-                            onClick={() => { setAddNotesTab(tab.key); setAddNoteImportedFile(null); setAddNoteUploaded(false); }}
-                            className={`flex-1 h-10 rounded-xl flex items-center justify-center gap-1.5 font-body text-xs font-semibold transition-all ${addNotesTab === tab.key ? 'bg-white text-text-primary shadow-sm' : 'text-text-tertiary'}`}
-                          >
-                            <tab.icon className="w-3.5 h-3.5" />
-                            {tab.label}
-                          </button>
-                        ))}
-                      </div>
-
-                      {/* Write tab */}
-                      {addNotesTab === 'write' && (
-                        <>
-                          <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">Note Title</label>
-                          <input
-                            type="text"
-                            value={addNoteTitle}
-                            onChange={(e) => setAddNoteTitle(e.target.value)}
-                            placeholder="e.g. Chapter 5 Key Terms"
-                            className="w-full h-[48px] px-5 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-blue-100 transition-all mb-4"
-                          />
-
-                          <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">Notes Content</label>
-                          <textarea
-                            value={addNoteContent}
-                            onChange={(e) => setAddNoteContent(e.target.value)}
-                            rows={6}
-                            placeholder="Type or paste your notes here..."
-                            className="w-full px-5 py-4 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-blue-100 transition-all resize-none mb-5"
-                          />
-                        </>
-                      )}
-
-                      {/* Upload tab */}
-                      {addNotesTab === 'upload' && (
-                        <>
-                          <label className={`block w-full border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-colors mb-5 ${addNoteUploaded ? 'border-green-300 bg-green-50' : 'border-gray-200 hover:border-blue-300'}`}>
-                            {addNoteUploaded ? (
-                              <div>
-                                <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-3">
-                                  <Check className="w-6 h-6 text-green-600" />
-                                </div>
-                                <p className="font-body text-sm font-semibold text-green-700">File uploaded</p>
-                                <p className="font-body text-xs text-green-600 mt-1">Ready to add to this section</p>
-                              </div>
-                            ) : (
-                              <div>
-                                <Upload className="w-10 h-10 text-text-tertiary/40 mx-auto mb-3" />
-                                <p className="font-body text-sm font-semibold text-text-primary">Tap to upload a file</p>
-                                <p className="font-body text-[11px] text-text-tertiary mt-1">PDF, DOCX, images, or text files</p>
-                              </div>
-                            )}
-                            <input type="file" className="hidden" onChange={() => { setAddNoteUploaded(true); if (!addNoteTitle) setAddNoteTitle('Uploaded Notes'); }} />
-                          </label>
-
-                          {addNoteUploaded && (
-                            <>
-                              <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">Note Title</label>
-                              <input
-                                type="text"
-                                value={addNoteTitle}
-                                onChange={(e) => setAddNoteTitle(e.target.value)}
-                                placeholder="Name your notes"
-                                className="w-full h-[48px] px-5 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-blue-100 transition-all mb-4"
-                              />
-                            </>
-                          )}
-                        </>
-                      )}
-
-                      {/* Import from Files tab */}
-                      {addNotesTab === 'import' && (
-                        <>
-                          <div className="bg-blue-50 rounded-2xl p-4 mb-4 flex items-start gap-3">
-                            <FolderOpen className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
-                            <div>
-                              <p className="font-body text-sm font-medium text-blue-800">Import from your files</p>
-                              <p className="font-body text-xs text-blue-600 mt-0.5">Select a file from {classData.title} to add as notes</p>
-                            </div>
-                          </div>
-
-                          {classData.files.length > 0 ? (
-                            <div className="flex flex-col gap-2 mb-5">
-                              {classData.files.map(file => {
-                                const isSelected = addNoteImportedFile === file.id;
-                                return (
-                                  <button
-                                    key={file.id}
-                                    onClick={() => {
-                                      setAddNoteImportedFile(isSelected ? null : file.id);
-                                      if (!isSelected) {
-                                        setAddNoteTitle(file.previewTitle);
-                                        setAddNoteContent(file.previewText);
-                                      } else {
-                                        setAddNoteTitle('');
-                                        setAddNoteContent('');
-                                      }
-                                    }}
-                                    className={`w-full text-left rounded-2xl p-4 border-2 transition-all ${isSelected ? 'border-blue-500 bg-blue-50' : 'border-gray-100 bg-white'}`}
-                                  >
-                                    <div className="flex items-center gap-3">
-                                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${isSelected ? 'bg-blue-500' : 'bg-bg-secondary'}`}>
-                                        <FileText className={`w-4 h-4 ${isSelected ? 'text-white' : 'text-text-tertiary'}`} />
-                                      </div>
-                                      <div className="flex-1 min-w-0">
-                                        <p className="font-body text-sm font-semibold text-text-primary truncate">{file.name}</p>
-                                        <p className="font-body text-[11px] text-text-tertiary mt-0.5">{file.pages} pages • {file.size} • {file.date}</p>
-                                      </div>
-                                      {isSelected && (
-                                        <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center shrink-0">
-                                          <Check className="w-3.5 h-3.5 text-white" />
-                                        </div>
-                                      )}
-                                    </div>
-                                    {isSelected && (
-                                      <div className="mt-3 pt-3 border-t border-blue-100">
-                                        <p className="font-body text-xs text-blue-700 font-medium">{file.previewTitle}</p>
-                                        <p className="font-body text-[11px] text-blue-600 mt-1 line-clamp-2 leading-relaxed">{file.previewText}</p>
-                                      </div>
-                                    )}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <div className="bg-bg-secondary rounded-2xl p-6 text-center mb-5">
-                              <FolderOpen className="w-8 h-8 text-text-tertiary/40 mx-auto mb-2" />
-                              <p className="font-body text-sm font-medium text-text-primary">No files in this class</p>
-                              <p className="font-body text-xs text-text-secondary mt-1">Upload files to your class first, then import them here.</p>
-                            </div>
-                          )}
-
-                          {addNoteImportedFile && (
-                            <>
-                              <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">Note Title (editable)</label>
-                              <input
-                                type="text"
-                                value={addNoteTitle}
-                                onChange={(e) => setAddNoteTitle(e.target.value)}
-                                className="w-full h-[48px] px-5 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-blue-100 transition-all mb-4"
-                              />
-                            </>
-                          )}
-                        </>
-                      )}
-
-                      {/* Add button */}
-                      <button
-                        onClick={executeAddNote}
-                        disabled={!addNoteTitle.trim() && !addNoteUploaded && addNoteImportedFile === null}
-                        className={`w-full h-[52px] rounded-full font-body font-semibold text-sm flex items-center justify-center gap-2 transition-all ${(addNoteTitle.trim() || addNoteUploaded || addNoteImportedFile !== null) ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20 active:scale-[0.97]' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
+              {noteSource === 'filesTab' ? (
+                classData.files.length > 0 ? (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filePickRow}>
+                    {classData.files.map((file) => (
+                      <TouchableOpacity
+                        key={file.id}
+                        style={[styles.filePickChip, selectedClassFileId === file.id && styles.filePickChipActive]}
+                        onPress={() => setSelectedClassFileId(file.id)}
                       >
-                        <Plus className="w-4 h-4" /> Add Notes
-                      </button>
-                    </>
+                        <Text
+                          style={[styles.filePickChipText, selectedClassFileId === file.id && styles.filePickChipTextActive]}
+                          numberOfLines={1}
+                        >
+                          {file.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                ) : (
+                  <Text style={styles.sourceHint}>No files in this class yet. Add content manually or scan first.</Text>
+                )
+              ) : (
+                <View>
+                  <TouchableOpacity style={styles.phonePickBtn} onPress={pickNoteFromPhone}>
+                    <Ionicons name="folder-open" size={14} color={colors.maroon} />
+                    <Text style={styles.phonePickBtnText}>Choose File from Phone</Text>
+                  </TouchableOpacity>
+                  {localUpload && (
+                    <Text style={styles.sourceHint}>
+                      Selected: {localUpload.name} ({localUpload.pages} page{localUpload.pages > 1 ? 's' : ''})
+                    </Text>
                   )}
-                </div>
-              </motion.div>
-            </>
-          )}
-        </AnimatePresence>
-      </div>
+                </View>
+              )}
+
+              <Text style={styles.modalLabel}>Contributor Name</Text>
+              <TextInput style={styles.modalInput} value={newNoteAuthor} onChangeText={setNewNoteAuthor} placeholder="Name" />
+              <Text style={styles.modalLabel}>Note Title</Text>
+              <TextInput
+                style={styles.modalInput}
+                value={newNoteTitle}
+                onChangeText={setNewNoteTitle}
+                placeholder="Optional custom title"
+              />
+              <Text style={styles.modalLabel}>Add Extra Context (Optional)</Text>
+              <TextInput
+                style={styles.modalInputMultiline}
+                value={newNoteContent}
+                onChangeText={setNewNoteContent}
+                placeholder="Add highlights or context for this section"
+                multiline
+              />
+
+              <TouchableOpacity
+                style={[styles.modalSaveBtn, !canSaveAddedNote && styles.modalSaveBtnDisabled]}
+                onPress={saveSectionNote}
+                disabled={!canSaveAddedNote}
+              >
+                <Text style={styles.modalSaveBtnText}>Add to Section</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal visible={showMergeModal} transparent animationType="fade" onRequestClose={() => setShowMergeModal(false)}>
+          <View style={styles.modalBackdropCentered}>
+            <View style={styles.noteModalCard}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Merge Notes</Text>
+                <TouchableOpacity onPress={() => setShowMergeModal(false)}>
+                  <Ionicons name="close" size={22} color={colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.mergeHint}>Select 2 or more notes to combine into one merged summary.</Text>
+
+              <ScrollView style={styles.mergeList}>
+                {mergeCandidates.map((note) => {
+                  const selected = selectedMergeNoteIds.includes(note.id);
+                  return (
+                    <TouchableOpacity key={note.id} style={styles.mergeItem} onPress={() => toggleMergeNote(note.id)}>
+                      <View style={[styles.mergeCheckbox, selected && styles.mergeCheckboxActive]}>
+                        {selected && <Ionicons name="checkmark" size={14} color="white" />}
+                      </View>
+                      <View style={styles.mergeItemInfo}>
+                        <Text style={styles.mergeItemTitle}>{note.title}</Text>
+                        <Text style={styles.mergeItemMeta}>
+                          {note.author} • {note.date}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+
+              <TouchableOpacity
+                style={[styles.modalSaveBtn, selectedMergeNoteIds.length < 2 && styles.modalSaveBtnDisabled]}
+                onPress={mergeSelectedNotes}
+                disabled={selectedMergeNoteIds.length < 2}
+              >
+                <Text style={styles.modalSaveBtnText}>Merge Selected</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal visible={!!activeNote} transparent animationType="fade" onRequestClose={() => setActiveNote(null)}>
+          <View style={styles.modalBackdropCentered}>
+            <View style={styles.noteModalCard}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Note Details</Text>
+                <TouchableOpacity onPress={() => setActiveNote(null)}>
+                  <Ionicons name="close" size={22} color={colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
+
+              {activeNote && (
+                <>
+                  <Text style={styles.detailNoteTitle}>{activeNote.note.title}</Text>
+                  <Text style={styles.detailNoteMeta}>
+                    {activeNote.sectionTitle} • {activeNote.note.author} • {activeNote.note.date}
+                  </Text>
+                  <ScrollView style={styles.detailNoteScroll}>
+                    <Text style={styles.detailNoteBody}>{activeNote.note.content}</Text>
+                  </ScrollView>
+
+                  {noteActionStatus.length > 0 && <Text style={styles.noteActionStatus}>{noteActionStatus}</Text>}
+
+                  <View style={styles.noteActionsRow}>
+                    <TouchableOpacity style={styles.noteActionBtn} onPress={downloadActiveNote}>
+                      <Ionicons name="download-outline" size={14} color={colors.maroon} />
+                      <Text style={styles.noteActionText}>Download</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.noteActionBtn} onPress={shareActiveNote}>
+                      <Ionicons name="share-social-outline" size={14} color={colors.maroon} />
+                      <Text style={styles.noteActionText}>Share</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.noteActionBtn}
+                      onPress={() => {
+                        setActiveNote(null);
+                        onFilesOpen();
+                      }}
+                    >
+                      <Ionicons name="folder-open-outline" size={14} color={colors.maroon} />
+                      <Text style={styles.noteActionText}>Files</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+            </View>
+          </View>
+        </Modal>
+      </View>
     );
   }
 
-  // === MAIN VIEW ===
   return (
-    <div className="h-full w-full bg-white relative flex flex-col overflow-hidden">
-      <div className="flex-1 overflow-y-auto hide-scrollbar pb-28">
-        {/* Header Image */}
-        <div className="relative h-[260px] w-full shrink-0">
-          <img src={classData.image} alt={classData.title} className="w-full h-full object-cover" />
-          <div className="absolute inset-0 bg-gradient-to-b from-black/30 to-transparent" />
-          <div className="absolute top-12 left-5 right-5 flex items-center justify-between">
-            <button onClick={onBack} className="w-10 h-10 rounded-full bg-white/90 backdrop-blur-sm flex items-center justify-center shadow-lg">
-              <ArrowLeft className="w-5 h-5 text-text-primary" />
-            </button>
-            <div className="flex items-center gap-2">
-              <motion.button
-                whileTap={{ scale: 0.85 }}
-                onClick={openEdit}
-                className="w-10 h-10 rounded-full bg-white/90 backdrop-blur-sm flex items-center justify-center shadow-lg"
-              >
-                <Edit3 className="w-4 h-4 text-text-primary" />
-              </motion.button>
-              <motion.button
-                whileTap={{ scale: 0.85 }}
-                onClick={() => setIsCourseLiked(!isCourseLiked)}
-                className={`w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-colors ${isCourseLiked ? 'bg-red-500' : 'bg-white/90 backdrop-blur-sm'}`}
-              >
-                <Heart className={`w-5 h-5 ${isCourseLiked ? 'text-white' : 'text-text-primary'}`} fill={isCourseLiked ? 'white' : 'none'} />
-              </motion.button>
-            </div>
-          </div>
-        </div>
+    <View style={styles.container}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.hero}>
+          <Image source={{ uri: classData.image }} style={styles.heroImage} />
+          <View style={styles.heroOverlay} />
+          <View style={styles.heroBar}>
+            <TouchableOpacity onPress={onBack} style={styles.heroBtn}>
+              <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
+            </TouchableOpacity>
+            <View style={styles.heroBtns}>
+              <TouchableOpacity style={styles.heroBtn} onPress={openEditModal}>
+                <Ionicons name="pencil" size={18} color={colors.textPrimary} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.heroBtn} onPress={() => setShowInviteModal(true)}>
+                <Ionicons name="people" size={18} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
 
-        {/* Content Sheet */}
-        <motion.div
-          initial={{ y: 50 }}
-          animate={{ y: 0 }}
-          transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-          className="relative -mt-8 bg-white rounded-t-[32px]"
-        >
-          <div className="px-6 pt-8">
-            {/* Course Header */}
-            <div className="flex items-start justify-between">
-              <div>
-                <h1 className="font-display text-2xl font-bold text-text-primary">{classData.title}</h1>
-                <div className="mt-2">
-                  <span className="font-body text-xs font-medium text-text-secondary bg-bg-secondary px-3 py-1.5 rounded-full">{classData.block}</span>
-                </div>
-              </div>
-            </div>
+        <View style={styles.sheet}>
+          <Text style={styles.courseTitle}>{classData.title}</Text>
+          <View style={styles.badgeRow}>
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{classData.block}</Text>
+            </View>
+            <View style={styles.codePill}>
+              <Ionicons name="key" size={13} color={colors.maroon} />
+              <Text style={styles.codeText}>{classData.classCode}</Text>
+            </View>
+          </View>
 
-            {/* Stats */}
-            {!isNewClass && (
-              <div className="flex items-center gap-5 mt-5">
-                <div className="flex items-center gap-2">
-                  <Users className="w-4 h-4 text-maroon" />
-                  <span className="font-body text-xs text-text-secondary">{classData.classmates} Classmates Joined</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <FileText className="w-4 h-4 text-maroon" />
-                  <span className="font-body text-xs text-text-secondary">{classData.documents} Documents Uploaded</span>
-                </div>
-              </div>
-            )}
+          {!isNewClass && (
+            <View style={styles.stats}>
+              <View style={styles.stat}>
+                <Ionicons name="people" size={16} color={colors.maroon} />
+                <Text style={styles.statText}>{classData.classmates} Classmates</Text>
+              </View>
+              <View style={styles.stat}>
+                <Ionicons name="document-text" size={16} color={colors.maroon} />
+                <Text style={styles.statText}>{classData.documents} Documents</Text>
+              </View>
+            </View>
+          )}
 
-            {/* Description or Empty State */}
-            <div className="mt-6">
-              {isNewClass ? (
-                <div className="bg-bg-secondary rounded-3xl p-6 text-center">
-                  <div className="w-14 h-14 rounded-full bg-maroon/10 flex items-center justify-center mx-auto mb-3">
-                    <FileText className="w-6 h-6 text-maroon" />
-                  </div>
-                  <h3 className="font-display text-base font-bold text-text-primary">Fresh Start</h3>
-                  <p className="font-body text-sm text-text-secondary mt-1 leading-relaxed">
-                    This class is brand new. Start by inviting classmates and uploading your first notes.
-                  </p>
-                  <button onClick={() => setShowInviteModal(true)} className="mt-4 h-11 px-6 bg-maroon text-white font-body font-semibold text-sm rounded-full inline-flex items-center gap-2 active:scale-[0.97] transition-transform shadow-md shadow-maroon/20">
-                    <Users className="w-4 h-4" /> Invite Classmates
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <p className="font-body text-sm text-text-secondary leading-relaxed">
-                    Currently studying:{' '}
-                    <span className="text-text-primary font-medium">{classData.description}</span>
-                    . The next exam is coming up soon. Keep reviewing your notes and collaborating with classmates.
-                  </p>
-                  <button onClick={() => setShowInviteModal(true)} className="font-body text-sm font-bold text-maroon mt-3 underline underline-offset-2">
-                    Invite Classmates +
-                  </button>
-                </>
-              )}
-            </div>
+          {isNewClass ? (
+            <View style={styles.emptyBox}>
+              <Ionicons name="document-text" size={24} color={colors.maroon} />
+              <Text style={styles.emptyTitle}>Fresh Start</Text>
+              <Text style={styles.emptyText}>
+                This class is brand new. Invite classmates with your class code and upload your first materials.
+              </Text>
+              <TouchableOpacity style={styles.inviteBtn} onPress={() => setShowInviteModal(true)}>
+                <Ionicons name="people" size={16} color="white" />
+                <Text style={styles.inviteBtnText}>Invite Classmates</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <Text style={styles.desc}>
+              Currently studying: <Text style={styles.descBold}>{classData.description}</Text>. Keep your unit pages updated and
+              collaborate with classmates.
+            </Text>
+          )}
 
-            {/* Units Section */}
-            <div className="mt-8">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="font-display text-lg font-bold text-text-primary">Units</h2>
-                <div className="flex items-center gap-3">
-                  <button onClick={() => setShowCreateUnit(true)} className="flex items-center gap-1 text-maroon font-body text-xs font-semibold active:opacity-60">
-                    <Plus className="w-3.5 h-3.5" /> New Unit
-                  </button>
-                  {classData.units.length > 0 && (
-                    <button onClick={onFilesOpen} className="font-body text-xs text-text-tertiary">See all files</button>
-                  )}
-                </div>
-              </div>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Units</Text>
+            <TouchableOpacity style={styles.addUnitBtn} onPress={addUnit}>
+              <Ionicons name="add" size={16} color="white" />
+              <Text style={styles.addUnitBtnText}>New Unit</Text>
+            </TouchableOpacity>
+          </View>
 
-              {classData.units.length > 0 ? (
-                <div className="flex gap-4 overflow-x-auto hide-scrollbar -mx-6 px-6 pb-4">
-                  {classData.units.map((unit, i) => {
-                    const totalNotes = unit.subUnits.reduce((a, su) => a + su.notes.length, 0);
-                    return (
-                      <motion.div
-                        key={unit.id}
-                        initial={{ x: 30, opacity: 0 }}
-                        animate={{ x: 0, opacity: 1 }}
-                        transition={{ delay: 0.1 + i * 0.1 }}
-                        onClick={() => openUnit(unit)}
-                        className="w-52 shrink-0 bg-white rounded-3xl shadow-md shadow-black/8 overflow-hidden border border-gray-100 cursor-pointer active:scale-[0.97] transition-transform"
-                      >
-                        <div className="relative h-32 bg-bg-secondary p-4">
-                          <div className="w-full h-full bg-white rounded-xl p-3 shadow-sm overflow-hidden">
-                            <div className="space-y-1.5">
-                              <div className="h-1.5 bg-gray-200 rounded-full w-3/4" />
-                              <div className="h-1.5 bg-gray-100 rounded-full w-full" />
-                              <div className="h-1.5 bg-gray-100 rounded-full w-5/6" />
-                              <div className="h-1.5 bg-gray-200 rounded-full w-2/3" />
-                              <div className="h-1.5 bg-gray-100 rounded-full w-full" />
-                              <div className="h-1.5 bg-gray-100 rounded-full w-4/5" />
-                            </div>
-                          </div>
-                          <motion.button
-                            whileTap={{ scale: 0.8 }}
-                            onClick={(e) => toggleUnitLike(unit.id, e)}
-                            className={`absolute top-3 right-3 w-7 h-7 rounded-full flex items-center justify-center transition-colors ${likedUnits.has(unit.id) ? 'bg-red-500' : 'bg-white/80'}`}
-                          >
-                            <Heart className={`w-3.5 h-3.5 ${likedUnits.has(unit.id) ? 'text-white' : 'text-text-secondary'}`} fill={likedUnits.has(unit.id) ? 'white' : 'none'} />
-                          </motion.button>
-                        </div>
-                        <div className="p-4">
-                          <h3 className="font-body text-sm font-bold text-text-primary">{unit.title}</h3>
-                          <p className="font-body text-[11px] text-text-tertiary mt-1">
-                            {unit.subUnits.length} Sections • {totalNotes} Notes
-                          </p>
-                          <div className="flex items-center gap-1.5 mt-1.5">
-                            <Clock className="w-3 h-3 text-text-tertiary" />
-                            <p className="font-body text-[11px] text-text-tertiary">Exam {unit.examDate}</p>
-                          </div>
-                          <div className="flex items-center justify-between mt-3">
-                            <span className="font-body text-[11px] font-medium text-text-secondary bg-bg-secondary px-2.5 py-1 rounded-full">{unit.daysLeft} Days</span>
-                            <div className="w-8 h-8 rounded-full bg-maroon flex items-center justify-center shadow-md shadow-maroon/20">
-                              <ArrowRight className="w-3.5 h-3.5 text-white" />
-                            </div>
-                          </div>
-                        </div>
-                      </motion.div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="bg-bg-secondary rounded-3xl p-6 text-center">
-                  <BookOpen className="w-8 h-8 text-text-tertiary/40 mx-auto mb-2" />
-                  <p className="font-body text-sm text-text-secondary">No units yet.</p>
-                  <button onClick={() => setShowCreateUnit(true)} className="mt-3 h-10 px-5 bg-maroon text-white font-body text-sm font-semibold rounded-full active:scale-95 transition-transform shadow-md shadow-maroon/20 inline-flex items-center gap-2">
-                    <Plus className="w-4 h-4" /> Create First Unit
-                  </button>
-                </div>
-              )}
-            </div>
+          {classData.units.length > 0 ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.unitsRow}>
+              {classData.units.map((unit) => {
+                const totalNotes = unit.subUnits.reduce((a, s) => a + s.notes.length, 0);
+                const sectionCount = unit.subUnits.length;
+                return (
+                  <View key={unit.id} style={styles.unitCard}>
+                    <View style={styles.unitCardTop}>
+                      <Text style={styles.unitCardTitle}>{unit.title}</Text>
+                      <View style={styles.unitCardActions}>
+                        <TouchableOpacity style={styles.unitCardActionBtn} onPress={() => openUnitEditor(unit)}>
+                          <Ionicons name="pencil" size={14} color={colors.maroon} />
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.unitCardActionBtn} onPress={() => deleteUnit(unit.id)}>
+                          <Ionicons name="trash" size={14} color="#b91c1c" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
 
-            {/* Study Progress */}
-            {!isNewClass && (
-              <div className="mt-6 pb-6">
-                <h2 className="font-display text-lg font-bold text-text-primary mb-4">Study Progress</h2>
-                <div className="bg-bg-secondary rounded-3xl p-5">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="font-body text-sm font-medium text-text-primary">Overall Completion</span>
-                    <span className="font-body text-sm font-bold text-maroon">
-                      {classData.title === 'AP Human Geography' ? '67%' : classData.title === 'AP Biology' ? '45%' : '58%'}
-                    </span>
-                  </div>
-                  <div className="h-2 bg-white rounded-full overflow-hidden">
-                    <div className="h-full bg-maroon rounded-full" style={{ width: classData.title === 'AP Human Geography' ? '67%' : classData.title === 'AP Biology' ? '45%' : '58%' }} />
-                  </div>
-                  <div className="flex items-center justify-between mt-4 gap-3">
-                    {[
-                      { label: 'Notes', value: classData.title === 'AP Human Geography' ? '24' : classData.title === 'AP Biology' ? '18' : '12' },
-                      { label: 'Quizzes', value: classData.title === 'AP Human Geography' ? '8' : classData.title === 'AP Biology' ? '5' : '3' },
-                      { label: 'Hours', value: classData.title === 'AP Human Geography' ? '32' : classData.title === 'AP Biology' ? '22' : '15' },
-                    ].map((stat) => (
-                      <div key={stat.label} className="flex-1 bg-white rounded-2xl p-3 text-center">
-                        <p className="font-display text-lg font-bold text-maroon">{stat.value}</p>
-                        <p className="font-body text-[11px] text-text-tertiary mt-0.5">{stat.label}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </motion.div>
-      </div>
+                    <TouchableOpacity style={styles.unitCardBody} onPress={() => setSelectedUnit(unit)}>
+                      <View style={styles.unitCardDaysPill}>
+                        <Text style={styles.unitCardDaysText}>{unit.daysLeft > 0 ? `${unit.daysLeft}d left` : 'TBD'}</Text>
+                      </View>
+                      <Text style={styles.unitCardMeta}>
+                        {sectionCount} sections • {totalNotes} notes
+                      </Text>
+                      <View style={styles.unitCardFooter}>
+                        <Text style={styles.unitCardExam}>Exam: {unit.examDate}</Text>
+                        <Ionicons name="arrow-forward-circle" size={22} color={colors.maroon} />
+                      </View>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          ) : (
+            <View style={styles.emptyUnits}>
+              <Ionicons name="book" size={32} color={colors.textTertiary} />
+              <Text style={styles.emptyUnitsText}>No units yet.</Text>
+              <TouchableOpacity style={styles.addUnitInlineBtn} onPress={addUnit}>
+                <Ionicons name="add" size={16} color="white" />
+                <Text style={styles.addUnitBtnText}>Create First Unit</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </ScrollView>
 
       <BottomNav active="home" onHome={onBack} onScan={onScan} onFriends={onFriends} onFiles={onFilesOpen} />
 
-      {/* ===== Create Unit Modal ===== */}
-      <AnimatePresence>
-        {showCreateUnit && (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowCreateUnit(false)} className="absolute inset-0 bg-black/40 z-40 backdrop-blur-sm" />
-            <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 300 }} className="absolute bottom-0 left-0 right-0 z-50 bg-white rounded-t-[28px] shadow-2xl" style={{ maxHeight: '70%' }}>
-              <div className="flex justify-center pt-3 pb-1"><div className="w-10 h-1 rounded-full bg-gray-300" /></div>
-              <div className="flex items-center justify-between px-6 pt-2 pb-4">
-                <div>
-                  <h2 className="font-display text-xl font-bold text-text-primary">New Unit</h2>
-                  <p className="font-body text-xs text-text-secondary mt-0.5">Add a new unit to {classData.title}</p>
-                </div>
-                <button onClick={() => setShowCreateUnit(false)} className="w-9 h-9 rounded-full bg-bg-secondary flex items-center justify-center">
-                  <X className="w-4 h-4 text-text-secondary" />
-                </button>
-              </div>
-              <div className="px-6 pb-10">
-                <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">Unit Title</label>
-                <input
-                  type="text"
-                  value={newUnitTitle}
-                  onChange={(e) => setNewUnitTitle(e.target.value)}
-                  placeholder="e.g. Unit 5"
-                  autoFocus
-                  className="w-full h-[52px] px-5 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20 transition-all mb-4"
-                />
+      <Modal visible={showEditModal} transparent animationType="slide" onRequestClose={() => setShowEditModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Edit Class</Text>
+              <TouchableOpacity onPress={() => setShowEditModal(false)}>
+                <Ionicons name="close" size={22} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
 
-                <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">Exam Date (optional)</label>
-                <input
-                  type="date"
-                  value={newUnitExamDate}
-                  onChange={(e) => setNewUnitExamDate(e.target.value)}
-                  className="w-full h-[52px] px-5 bg-input-bg rounded-2xl font-body text-sm text-text-primary outline-none focus:ring-2 focus:ring-maroon/20 transition-all mb-5"
-                />
+            <Text style={styles.modalLabel}>Class Name</Text>
+            <TextInput style={styles.modalInput} value={draftTitle} onChangeText={setDraftTitle} />
+            <Text style={styles.modalLabel}>Block</Text>
+            <TextInput style={styles.modalInput} value={draftBlock} onChangeText={setDraftBlock} />
+            <Text style={styles.modalLabel}>Description</Text>
+            <TextInput style={styles.modalInput} value={draftDescription} onChangeText={setDraftDescription} />
+            <Text style={styles.modalLabel}>Class Code</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={draftCode}
+              onChangeText={(text) => setDraftCode(text.toUpperCase())}
+              autoCapitalize="characters"
+            />
+            <Text style={styles.modalLabel}>Background Image</Text>
+            <TouchableOpacity style={styles.imagePickerBtn} onPress={pickClassBackground}>
+              <Ionicons name="image" size={16} color={colors.maroon} />
+              <Text style={styles.imagePickerBtnText}>Upload / Change Background</Text>
+            </TouchableOpacity>
+            <Image source={{ uri: draftImage }} style={styles.editImagePreview} />
 
-                <button
-                  onClick={createUnit}
-                  disabled={!newUnitTitle.trim()}
-                  className={`w-full h-[52px] rounded-full font-body font-semibold text-sm flex items-center justify-center gap-2 transition-all ${newUnitTitle.trim() ? 'bg-maroon text-white shadow-lg shadow-maroon/20 active:scale-[0.97]' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}
-                >
-                  <Plus className="w-4 h-4" /> Create Unit
-                </button>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+            <TouchableOpacity style={styles.modalSaveBtn} onPress={saveClassEdits}>
+              <Text style={styles.modalSaveBtnText}>Save Changes</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
-      {/* ===== Invite Classmates Modal ===== */}
-      <AnimatePresence>
-        {showInviteModal && (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowInviteModal(false)} className="absolute inset-0 bg-black/40 z-40 backdrop-blur-sm" />
-            <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 300 }} className="absolute bottom-0 left-0 right-0 z-50 bg-white rounded-t-[28px] shadow-2xl flex flex-col" style={{ maxHeight: '80%' }}>
-              <div className="flex justify-center pt-3 pb-1 shrink-0"><div className="w-10 h-1 rounded-full bg-gray-300" /></div>
-              <div className="flex items-center justify-between px-6 pt-2 pb-4 shrink-0">
-                <div>
-                  <h2 className="font-display text-xl font-bold text-text-primary">Invite Classmates</h2>
-                  <p className="font-body text-xs text-text-secondary mt-0.5">Share this code so others can join</p>
-                </div>
-                <button onClick={() => setShowInviteModal(false)} className="w-9 h-9 rounded-full bg-bg-secondary flex items-center justify-center active:scale-95 transition-transform">
-                  <X className="w-4 h-4 text-text-secondary" />
-                </button>
-              </div>
+      <Modal visible={showUnitEditModal} transparent animationType="fade" onRequestClose={() => setShowUnitEditModal(false)}>
+        <View style={styles.modalBackdropCentered}>
+          <View style={styles.noteModalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Edit Unit</Text>
+              <TouchableOpacity onPress={() => setShowUnitEditModal(false)}>
+                <Ionicons name="close" size={22} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
 
-              <div className="flex-1 min-h-0 overflow-y-auto hide-scrollbar px-6 pb-10">
-                {/* Class Code */}
-                <div className="bg-bg-secondary rounded-3xl p-6 text-center mb-5">
-                  <p className="font-body text-xs font-semibold text-text-secondary uppercase tracking-wider mb-4">Class Code</p>
-                  <div className="bg-white rounded-2xl px-6 py-4 shadow-sm mx-auto inline-block">
-                    <p className="font-mono text-2xl font-bold text-maroon tracking-[0.25em] select-all">{classCode}</p>
-                  </div>
-                  <motion.button onClick={copyCode} whileTap={{ scale: 0.95 }} className={`mt-5 h-10 px-5 rounded-full font-body text-sm font-semibold inline-flex items-center gap-2 transition-all ${codeCopied ? 'bg-green-100 text-green-700' : 'bg-maroon text-white shadow-md shadow-maroon/20'}`}>
-                    {codeCopied ? <><Check className="w-4 h-4" /> Copied!</> : <><Copy className="w-4 h-4" /> Copy Code</>}
-                  </motion.button>
-                </div>
+            <Text style={styles.modalLabel}>Unit Title</Text>
+            <TextInput style={styles.modalInput} value={unitDraftTitle} onChangeText={setUnitDraftTitle} />
+            <Text style={styles.modalLabel}>Exam Date</Text>
+            <TextInput style={styles.modalInput} value={unitDraftExamDate} onChangeText={setUnitDraftExamDate} placeholder="Ex: 05/10/2026" />
+            <Text style={styles.modalLabel}>Days Left</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={unitDraftDaysLeft}
+              onChangeText={setUnitDraftDaysLeft}
+              placeholder="Ex: 28"
+              keyboardType="number-pad"
+            />
 
-                {/* Invite Link */}
-                <div className="bg-white border border-gray-100 rounded-2xl p-4 mb-5">
-                  <p className="font-body text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">Invite Link</p>
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 h-11 px-4 bg-bg-secondary rounded-xl flex items-center overflow-hidden">
-                      <p className="font-body text-sm text-text-primary truncate">{inviteLink}</p>
-                    </div>
-                    <button onClick={copyLink} className={`h-11 w-11 rounded-xl flex items-center justify-center shrink-0 transition-all ${linkCopied ? 'bg-green-100' : 'bg-maroon shadow-md shadow-maroon/20'}`}>
-                      {linkCopied ? <Check className="w-4 h-4 text-green-700" /> : <Copy className="w-4 h-4 text-white" />}
-                    </button>
-                  </div>
-                </div>
+            <TouchableOpacity style={styles.modalSaveBtn} onPress={saveUnitEdits}>
+              <Text style={styles.modalSaveBtnText}>Save Unit</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
-                {/* Share Options */}
-                <p className="font-body text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">Share Via</p>
-                <div className="grid grid-cols-3 gap-3 mb-5">
-                  <button className="flex flex-col items-center gap-2 p-4 bg-bg-secondary rounded-2xl active:scale-95 transition-transform">
-                    <div className="w-11 h-11 rounded-full bg-blue-100 flex items-center justify-center"><Share2 className="w-5 h-5 text-blue-600" /></div>
-                    <span className="font-body text-xs font-medium text-text-primary">Share</span>
-                  </button>
-                  <button className="flex flex-col items-center gap-2 p-4 bg-bg-secondary rounded-2xl active:scale-95 transition-transform">
-                    <div className="w-11 h-11 rounded-full bg-green-100 flex items-center justify-center"><Mail className="w-5 h-5 text-green-600" /></div>
-                    <span className="font-body text-xs font-medium text-text-primary">Email</span>
-                  </button>
-                  <button className="flex flex-col items-center gap-2 p-4 bg-bg-secondary rounded-2xl active:scale-95 transition-transform">
-                    <div className="w-11 h-11 rounded-full bg-purple-100 flex items-center justify-center"><Copy className="w-5 h-5 text-purple-600" /></div>
-                    <span className="font-body text-xs font-medium text-text-primary">Copy</span>
-                  </button>
-                </div>
+      <Modal visible={showInviteModal} transparent animationType="fade" onRequestClose={() => setShowInviteModal(false)}>
+        <View style={styles.modalBackdropCentered}>
+          <View style={styles.inviteCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Invite Classmates</Text>
+              <TouchableOpacity onPress={() => setShowInviteModal(false)}>
+                <Ionicons name="close" size={22} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
 
-                {/* Info */}
-                <div className="bg-maroon/5 rounded-2xl p-4">
-                  <p className="font-body text-xs text-text-secondary leading-relaxed">
-                    Anyone with this code can join <span className="font-semibold text-text-primary">{classData.title}</span>. The code expires in 7 days. You can generate a new one anytime.
-                  </p>
-                </div>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-    </div>
+            <Text style={styles.inviteLabel}>Share this custom class code:</Text>
+            <View style={styles.codeCard}>
+              <Ionicons name="key" size={18} color={colors.maroon} />
+              <Text style={styles.codeCardText}>{classData.classCode}</Text>
+            </View>
+
+            {copyStatus.length > 0 && <Text style={styles.copyStatus}>{copyStatus}</Text>}
+
+            <View style={styles.inviteActions}>
+              <TouchableOpacity style={styles.inviteActionBtn} onPress={copyClassCode}>
+                <Ionicons name="copy-outline" size={16} color={colors.maroon} />
+                <Text style={styles.inviteActionText}>Copy Code</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.inviteActionBtn} onPress={regenerateCode}>
+                <Ionicons name="refresh" size={16} color={colors.maroon} />
+                <Text style={styles.inviteActionText}>Regenerate</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.bgPrimary },
+  scroll: { flex: 1 },
+  scrollContent: { paddingBottom: 120 },
+
+  hero: { height: 260, width: '100%' },
+  heroImage: { ...StyleSheet.absoluteFillObject },
+  heroOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.28)' },
+  heroBar: {
+    position: 'absolute',
+    top: 48,
+    left: 20,
+    right: 20,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  heroBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroBtns: { flexDirection: 'row', gap: 8 },
+
+  sheet: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    marginTop: -32,
+    paddingHorizontal: 24,
+    paddingTop: 32,
+    paddingBottom: 24,
+  },
+  courseTitle: { fontSize: 24, fontWeight: '700', color: colors.textPrimary },
+  badgeRow: { flexDirection: 'row', gap: 10, marginTop: 10, flexWrap: 'wrap' },
+  badge: { backgroundColor: colors.bgSecondary, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7 },
+  badgeText: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
+  codePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: `${colors.maroon}10`,
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  codeText: { fontSize: 12, fontWeight: '700', color: colors.maroon },
+  stats: { flexDirection: 'row', gap: 20, marginTop: 20 },
+  stat: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  statText: { fontSize: 12, color: colors.textSecondary },
+  desc: { fontSize: 14, color: colors.textSecondary, marginTop: 24, lineHeight: 22 },
+  descBold: { fontWeight: '600', color: colors.textPrimary },
+
+  emptyBox: { backgroundColor: colors.bgSecondary, borderRadius: 24, padding: 24, alignItems: 'center', marginTop: 24 },
+  emptyTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary, marginTop: 12 },
+  emptyText: { fontSize: 14, color: colors.textSecondary, textAlign: 'center', marginTop: 8, lineHeight: 20 },
+  inviteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 16,
+    height: 44,
+    paddingHorizontal: 24,
+    backgroundColor: colors.maroon,
+    borderRadius: 22,
+  },
+  inviteBtnText: { fontSize: 14, fontWeight: '600', color: 'white' },
+
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 28,
+    marginBottom: 14,
+  },
+  sectionHeaderStack: { marginHorizontal: 24, marginTop: 18, marginBottom: 10 },
+  sectionTitle: { fontSize: 18, fontWeight: '700', color: colors.textPrimary },
+  sectionSub: { marginTop: 4, fontSize: 12, color: colors.textSecondary },
+  addUnitBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.maroon,
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    height: 36,
+  },
+  addUnitBtnText: { fontSize: 12, fontWeight: '700', color: 'white' },
+
+  unitsRow: { gap: 12, paddingRight: 24 },
+  unitCard: {
+    width: 226,
+    backgroundColor: 'white',
+    borderRadius: 20,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#efeaea',
+  },
+  unitCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  unitCardTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary, flex: 1, marginRight: 8 },
+  unitCardActions: { flexDirection: 'row', gap: 6 },
+  unitCardActionBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#f6f3f3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unitCardBody: { marginTop: 10 },
+  unitCardDaysPill: {
+    alignSelf: 'flex-start',
+    backgroundColor: `${colors.maroon}12`,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  unitCardDaysText: { fontSize: 11, color: colors.maroon, fontWeight: '700' },
+  unitCardMeta: { fontSize: 12, color: colors.textSecondary, marginTop: 8 },
+  unitCardFooter: { marginTop: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  unitCardExam: { fontSize: 11, color: colors.textTertiary },
+
+  emptyUnits: { alignItems: 'center', paddingVertical: 32, backgroundColor: colors.bgSecondary, borderRadius: 24 },
+  emptyUnitsText: { fontSize: 14, color: colors.textSecondary, marginTop: 8 },
+  addUnitInlineBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 16,
+    height: 40,
+    paddingHorizontal: 20,
+    backgroundColor: colors.maroon,
+    borderRadius: 20,
+  },
+
+  unitHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingTop: 56,
+    paddingBottom: 16,
+  },
+  backBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.bgSecondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  unitHeaderText: { flex: 1 },
+  unitTitle: { fontSize: 24, fontWeight: '700', color: colors.textPrimary },
+  unitMeta: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },
+  unitOverviewCard: {
+    marginHorizontal: 24,
+    backgroundColor: 'white',
+    borderRadius: 22,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#f1ecec',
+  },
+  unitOverviewTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary },
+  progressRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 10 },
+  progressValue: { fontSize: 26, fontWeight: '800', color: colors.maroon },
+  progressSub: { fontSize: 12, color: colors.textSecondary },
+  progressTrack: { height: 8, backgroundColor: '#ede9e9', borderRadius: 999, marginTop: 10, overflow: 'hidden' },
+  progressFill: { height: '100%', backgroundColor: colors.maroon, borderRadius: 999 },
+  unitStatsRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  unitStatCard: { flex: 1, backgroundColor: '#faf8f8', borderRadius: 14, padding: 10, alignItems: 'center' },
+  unitStatValue: { fontSize: 16, fontWeight: '800', color: colors.textPrimary, marginTop: 4 },
+  unitStatLabel: { fontSize: 10, color: colors.textSecondary },
+
+  subUnitCard: {
+    backgroundColor: 'white',
+    borderRadius: 20,
+    padding: 14,
+    marginBottom: 12,
+    marginHorizontal: 24,
+    borderWidth: 1,
+    borderColor: '#f1ecec',
+  },
+  subUnitHeader: { flexDirection: 'row', alignItems: 'center' },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#d1caca',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxDone: { backgroundColor: colors.maroon, borderColor: colors.maroon },
+  subUnitInfo: { flex: 1, marginLeft: 10 },
+  subUnitTitle: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
+  subUnitCount: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
+  subUnitActionsRow: { marginTop: 10, flexDirection: 'row', gap: 8 },
+  subUnitAction: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: `${colors.maroon}12`,
+    paddingHorizontal: 10,
+  },
+  subUnitActionDisabled: { backgroundColor: '#efeded' },
+  subUnitActionText: { fontSize: 12, color: colors.maroon, fontWeight: '700' },
+  subUnitActionTextDisabled: { color: colors.textTertiary },
+
+  notesList: { marginTop: 12, gap: 8 },
+  noteCard: { backgroundColor: colors.bgSecondary, borderRadius: 14, padding: 12 },
+  noteTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  noteTitle: { fontSize: 14, fontWeight: '600', color: colors.textPrimary, flex: 1, marginRight: 8 },
+  noteAuthorPill: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.maroon,
+    backgroundColor: `${colors.maroon}12`,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  noteMeta: { fontSize: 11, color: colors.textTertiary, marginTop: 4 },
+  noteContent: { fontSize: 12, color: colors.textSecondary, marginTop: 8, lineHeight: 18 },
+  noteTapHint: { marginTop: 8, fontSize: 10, color: colors.maroon, fontWeight: '700' },
+  emptySectionHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+    backgroundColor: '#faf8f8',
+    borderRadius: 12,
+    padding: 10,
+  },
+  emptySectionText: { fontSize: 12, color: colors.textSecondary, flex: 1 },
+
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  modalBackdropCentered: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  modalCard: { backgroundColor: 'white', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 28 },
+  inviteCard: { width: '100%', backgroundColor: 'white', borderRadius: 24, padding: 20 },
+  noteModalCard: { width: '100%', backgroundColor: 'white', borderRadius: 24, padding: 20, maxHeight: '88%' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: colors.textPrimary },
+  modalLabel: { fontSize: 12, color: colors.textSecondary, fontWeight: '700', marginTop: 8, marginBottom: 6 },
+  modalInput: {
+    height: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ece8e8',
+    backgroundColor: '#faf8f8',
+    paddingHorizontal: 12,
+    fontSize: 14,
+    color: colors.textPrimary,
+  },
+  modalInputMultiline: {
+    minHeight: 92,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ece8e8',
+    backgroundColor: '#faf8f8',
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    fontSize: 14,
+    color: colors.textPrimary,
+    textAlignVertical: 'top',
+  },
+  modalSaveBtn: {
+    marginTop: 16,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: colors.maroon,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalSaveBtnDisabled: { backgroundColor: '#c4b3b4' },
+  modalSaveBtnText: { color: 'white', fontSize: 15, fontWeight: '700' },
+
+  noteMethodRow: { flexDirection: 'row', gap: 8, marginTop: 6, marginBottom: 8 },
+  noteMethodBtn: {
+    flex: 1,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#f3f1f1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  noteMethodBtnActive: { backgroundColor: colors.maroon },
+  noteMethodText: { fontSize: 12, color: colors.textSecondary, fontWeight: '700' },
+  noteMethodTextActive: { color: 'white' },
+
+  sourceRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  sourceChip: {
+    flex: 1,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#f3f1f1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sourceChipActive: { backgroundColor: `${colors.maroon}15`, borderWidth: 1, borderColor: `${colors.maroon}40` },
+  sourceChipText: { fontSize: 12, color: colors.textSecondary, fontWeight: '700' },
+  sourceChipTextActive: { color: colors.maroon },
+  filePickRow: { flexDirection: 'row', gap: 8, marginBottom: 4 },
+  filePickChip: {
+    maxWidth: 180,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e5e1e1',
+    backgroundColor: 'white',
+  },
+  filePickChipActive: { borderColor: colors.maroon, backgroundColor: `${colors.maroon}12` },
+  filePickChipText: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
+  filePickChipTextActive: { color: colors.maroon },
+  phonePickBtn: {
+    height: 38,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: `${colors.maroon}40`,
+    backgroundColor: `${colors.maroon}10`,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  phonePickBtnText: { color: colors.maroon, fontSize: 12, fontWeight: '700' },
+  sourceHint: { fontSize: 12, color: colors.textSecondary, marginTop: 8, lineHeight: 18 },
+
+  mergeHint: { fontSize: 12, color: colors.textSecondary, lineHeight: 18, marginBottom: 10 },
+  mergeList: { maxHeight: 220 },
+  mergeItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1eded',
+  },
+  mergeCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: '#d1caca',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mergeCheckboxActive: { borderColor: colors.maroon, backgroundColor: colors.maroon },
+  mergeItemInfo: { flex: 1 },
+  mergeItemTitle: { fontSize: 13, color: colors.textPrimary, fontWeight: '700' },
+  mergeItemMeta: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
+  detailNoteTitle: { fontSize: 16, fontWeight: '800', color: colors.textPrimary, marginTop: 4 },
+  detailNoteMeta: { fontSize: 12, color: colors.textSecondary, marginTop: 4 },
+  detailNoteScroll: { marginTop: 10, maxHeight: 180, borderRadius: 12, backgroundColor: '#f8f6f6', padding: 12 },
+  detailNoteBody: { fontSize: 13, color: colors.textPrimary, lineHeight: 20 },
+  noteActionStatus: { marginTop: 10, fontSize: 12, color: '#047857', fontWeight: '700' },
+  noteActionsRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  noteActionBtn: {
+    flex: 1,
+    height: 38,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: `${colors.maroon}35`,
+    backgroundColor: `${colors.maroon}10`,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    flexDirection: 'row',
+  },
+  noteActionText: { fontSize: 12, fontWeight: '700', color: colors.maroon },
+
+  imagePickerBtn: {
+    marginTop: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    height: 42,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: `${colors.maroon}40`,
+    backgroundColor: `${colors.maroon}10`,
+  },
+  imagePickerBtnText: { color: colors.maroon, fontSize: 13, fontWeight: '700' },
+  editImagePreview: { marginTop: 8, width: '100%', height: 100, borderRadius: 12, backgroundColor: '#f0ecec' },
+
+  inviteLabel: { fontSize: 13, color: colors.textSecondary, marginTop: 4 },
+  codeCard: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#f8f4f4',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  codeCardText: { fontSize: 20, letterSpacing: 1, fontWeight: '800', color: colors.maroon },
+  copyStatus: { marginTop: 10, fontSize: 12, color: '#047857', fontWeight: '600' },
+  inviteActions: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  inviteActionBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#ece8e8',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+  },
+  inviteActionText: { fontSize: 13, color: colors.maroon, fontWeight: '700' },
+});

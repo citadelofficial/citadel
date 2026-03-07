@@ -1,0 +1,60 @@
+import type { FriendData } from '../types';
+
+export const friendsDirectory: FriendData[] = [
+  {
+    id: 'laasya',
+    name: 'Laasya Potuluri',
+    color: '#FDE68A',
+    status: 'online',
+    course: 'AP Human Geo',
+    lastMessage: 'I can share my Unit 6 review sheet.',
+  },
+  {
+    id: 'anya',
+    name: 'Anya Vulupala',
+    color: '#DBEAFE',
+    status: 'online',
+    course: 'AP Human Geo',
+    lastMessage: 'Want to review urban models tonight?',
+  },
+  {
+    id: 'andrew',
+    name: 'Andrew Boldea',
+    color: '#E0E7FF',
+    status: 'online',
+    course: 'AP Biology',
+    lastMessage: 'I just uploaded my chapter summary.',
+  },
+  {
+    id: 'annika',
+    name: 'Annika Shah',
+    color: '#FCE7F3',
+    status: 'studying',
+    course: 'AP Biology',
+    lastMessage: 'Uploading my cell signaling notes.',
+  },
+  {
+    id: 'jack',
+    name: 'Jack Swartz',
+    color: '#D1FAE5',
+    status: 'online',
+    course: 'DE English',
+    lastMessage: 'Can we workshop the essay thesis?',
+  },
+  {
+    id: 'will',
+    name: 'Will Caling',
+    color: '#FEF3C7',
+    status: 'studying',
+    course: 'AP Calculus',
+    lastMessage: 'I found a better derivative shortcut.',
+  },
+  {
+    id: 'nick',
+    name: 'Nick Burrus',
+    color: '#EDE9FE',
+    status: 'offline',
+    course: 'AP Biology',
+    lastMessage: 'Ping me when you start the practice quiz.',
+  },
+];

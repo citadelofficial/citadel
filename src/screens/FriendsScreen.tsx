@@ -1,10 +1,23 @@
-import { useState, useRef, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Search, Phone, Video, MessageCircle, UserPlus, Check, X,
-  Wifi, User, Send, ArrowLeft, Calendar, Clock, Users, Plus, Mic,
-} from 'lucide-react';
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  ScrollView,
+  Image,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  Alert,
+  Animated,
+  LayoutAnimation,
+  UIManager,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { BottomNav } from '../components/BottomNav';
+import { colors } from '../theme';
+import { friendsDirectory } from '../data/friends';
 
 interface Props {
   onHome: () => void;
@@ -14,733 +27,1246 @@ interface Props {
   userName: string;
 }
 
-type Tab = 'friends' | 'requests' | 'discover' | 'sessions';
+type Tab = 'friends' | 'requests' | 'sessions' | 'discover';
+type CallMode = 'voice' | 'video' | 'group';
 
-interface Friend {
+interface Message {
   id: number;
-  name: string;
-  color: string;
-  iconColor: string;
-  status: 'online' | 'studying' | 'offline';
-  course?: string;
-  school: string;
-  mutualFriends?: number;
-}
-
-interface ChatMessage {
-  id: number;
+  from: 'me' | 'them';
   text: string;
-  fromMe: boolean;
   time: string;
 }
 
 interface StudySession {
-  id: number;
+  id: string;
   title: string;
   course: string;
-  hostId: number;
-  date: string;
   time: string;
-  participantIds: number[];
-  maxParticipants: number;
-  isLive: boolean;
+  participants: string[];
+  rsvped: boolean;
+  createdByMe: boolean;
 }
 
-// Avatar component — colored person icon outline
-function Avatar({ color, iconColor, size = 48, className = '' }: { color: string; iconColor: string; size?: number; className?: string }) {
-  return (
-    <div
-      className={`rounded-full flex items-center justify-center shrink-0 ${className}`}
-      style={{ width: size, height: size, backgroundColor: color }}
-    >
-      <User className={iconColor} style={{ width: size * 0.5, height: size * 0.5 }} strokeWidth={1.5} />
-    </div>
-  );
+interface ActiveCall {
+  mode: CallMode;
+  title: string;
+  participants: string[];
+  startedAt: number;
 }
 
-// === Friend Data ===
-const friends: Friend[] = [
-  {
-    id: 1, name: 'Zara Ramadan',
-    color: '#DBEAFE', iconColor: 'text-blue-500',
-    status: 'online', course: 'AP Human Geo', school: 'Westlake High',
-  },
-  {
-    id: 2, name: 'Annika Shah',
-    color: '#FCE7F3', iconColor: 'text-pink-500',
-    status: 'studying', course: 'AP Biology', school: 'Westlake High',
-  },
-  {
-    id: 3, name: 'Jack Swartz',
-    color: '#D1FAE5', iconColor: 'text-emerald-500',
-    status: 'online', course: 'DE English', school: 'Westlake High',
-  },
-  {
-    id: 4, name: 'Will Caling',
-    color: '#FEF3C7', iconColor: 'text-amber-500',
-    status: 'studying', course: 'AP Calculus', school: 'Westlake High',
-  },
-  {
-    id: 5, name: 'Nick Burrus',
-    color: '#EDE9FE', iconColor: 'text-violet-500',
-    status: 'offline', school: 'Lightridge High School',
-  },
-  {
-    id: 6, name: 'Paul Van Haver',
-    color: '#CCFBF1', iconColor: 'text-teal-500',
-    status: 'offline', school: 'Loudoun Valley High School',
-  },
-];
+function currentTimeLabel() {
+  const now = new Date();
+  return `${now.getHours() % 12 || 12}:${String(now.getMinutes()).padStart(2, '0')} ${now.getHours() >= 12 ? 'PM' : 'AM'}`;
+}
 
-const getFriendById = (id: number) => friends.find((f) => f.id === id);
-
-// === Request Data ===
-const incomingRequests = [
-  {
-    id: 101, name: 'James Faust',
-    color: '#ECFCCB', iconColor: 'text-lime-600',
-    school: 'Riverside High School', mutualFriends: 4,
-  },
-  {
-    id: 102, name: 'Saraa Rana',
-    color: '#FAE8FF', iconColor: 'text-fuchsia-500',
-    school: 'Independence High School', mutualFriends: 7,
-  },
-];
-
-// === Discover Data ===
-const discoverPeople: Friend[] = [
-  {
-    id: 201, name: 'Rick Reaves',
-    color: '#E0E7FF', iconColor: 'text-indigo-500',
-    status: 'online', school: 'Loudoun County High School', mutualFriends: 3,
-  },
-  {
-    id: 202, name: 'Roshan Shah',
-    color: '#CFFAFE', iconColor: 'text-cyan-500',
-    status: 'offline', school: 'Dominion High School', mutualFriends: 5,
-  },
-  {
-    id: 203, name: 'Grayson Bishop',
-    color: '#FFEDD5', iconColor: 'text-orange-500',
-    status: 'studying', school: 'Rock Ridge High School', mutualFriends: 2,
-  },
-];
-
-// === Sessions (hosted by friends) ===
-const defaultSessions: StudySession[] = [
-  {
-    id: 1, title: 'AP HUG Unit 6 Review', course: 'AP Human Geography',
-    hostId: 1, // Zara
-    date: 'Today', time: '7:00 PM', maxParticipants: 8, isLive: true,
-    participantIds: [2, 3, 4], // Annika, Jack, Will
-  },
-  {
-    id: 2, title: 'Bio Exam Prep', course: 'AP Biology',
-    hostId: 2, // Annika
-    date: 'Tomorrow', time: '4:30 PM', maxParticipants: 6, isLive: false,
-    participantIds: [1], // Zara
-  },
-  {
-    id: 3, title: 'English Essay Workshop', course: 'DE English',
-    hostId: 3, // Jack
-    date: 'Fri, Mar 14', time: '6:00 PM', maxParticipants: 10, isLive: false,
-    participantIds: [4, 1], // Will, Zara
-  },
-];
-
-// === Default Chats ===
-const defaultChats: Record<number, ChatMessage[]> = {
-  1: [
-    { id: 1, text: 'Hey, did you finish the Unit 6 notes?', fromMe: false, time: '3:42 PM' },
-    { id: 2, text: 'Almost done! Just the urban models section left', fromMe: true, time: '3:44 PM' },
-    { id: 3, text: 'Nice, want to study together later?', fromMe: false, time: '3:45 PM' },
-  ],
-  2: [
-    { id: 1, text: 'The bio lab report is due Friday right?', fromMe: true, time: '1:20 PM' },
-    { id: 2, text: 'Yes! Do you have the data from experiment 3?', fromMe: false, time: '1:25 PM' },
-  ],
-  3: [
-    { id: 1, text: 'Can you share the English essay rubric?', fromMe: true, time: '11:00 AM' },
-  ],
-};
+function formatDuration(seconds: number) {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
 
 export function FriendsScreen({ onHome, onScan, onFiles, profilePicture, userName }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>('friends');
   const [searchQuery, setSearchQuery] = useState('');
-  const [callingFriend, setCallingFriend] = useState<Friend | null>(null);
-  const [callType, setCallType] = useState<'audio' | 'video'>('audio');
-  const [sentRequests, setSentRequests] = useState<number[]>([]);
-  const [dismissedRequests, setDismissedRequests] = useState<number[]>([]);
-  const [acceptedRequests, setAcceptedRequests] = useState<number[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [draftMessage, setDraftMessage] = useState('');
 
-  // Chat state
-  const [chattingWith, setChattingWith] = useState<Friend | null>(null);
-  const [chatMessages, setChatMessages] = useState<Record<number, ChatMessage[]>>(defaultChats);
-  const [newMessage, setNewMessage] = useState('');
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
+  const [callSeconds, setCallSeconds] = useState(0);
+  const [micMuted, setMicMuted] = useState(false);
+  const [speakerOn, setSpeakerOn] = useState(true);
+  const [cameraOn, setCameraOn] = useState(true);
+  const [focusedParticipant, setFocusedParticipant] = useState<string | null>(null);
 
-  // Study session state
-  const [sessions, setSessions] = useState<StudySession[]>(defaultSessions);
-  const [joinedSessions, setJoinedSessions] = useState<Set<number>>(new Set());
-  const [showCreateSession, setShowCreateSession] = useState(false);
-  const [newSessionTitle, setNewSessionTitle] = useState('');
-  const [newSessionCourse, setNewSessionCourse] = useState('');
-  const [newSessionDate, setNewSessionDate] = useState('');
-  const [newSessionTime, setNewSessionTime] = useState('');
-  const [inGroupCall, setInGroupCall] = useState<StudySession | null>(null);
+  const [requests, setRequests] = useState([
+    { id: 'saraa', name: 'Saraa Rana', school: 'Loudoun Valley High School' },
+    { id: 'risha', name: 'Risha Guru', school: 'Rock Ridge High School' },
+  ]);
+  const [sentDiscoverInvites, setSentDiscoverInvites] = useState<Set<string>>(new Set());
+  const [requestFeedback, setRequestFeedback] = useState<{ text: string; color: string } | null>(null);
+  const requestFeedbackOpacity = useState(new Animated.Value(0))[0];
+  const requestFeedbackTranslate = useState(new Animated.Value(-8))[0];
+  const requestReveal = useState(new Animated.Value(0))[0];
+
+  const [upcomingSessions, setUpcomingSessions] = useState<StudySession[]>([
+    {
+      id: 'session-1',
+      title: 'AP Bio Cell Signaling Review',
+      course: 'AP Biology',
+      time: 'Tomorrow • 6:30 PM',
+      participants: ['Laasya Potuluri', 'Anya Vulupala', 'Andrew Boldea'],
+      rsvped: false,
+      createdByMe: false,
+    },
+    {
+      id: 'session-2',
+      title: 'DE English Essay Workshop',
+      course: 'DE English',
+      time: 'Friday • 5:00 PM',
+      participants: ['Annika Shah', 'Jack Swartz'],
+      rsvped: false,
+      createdByMe: false,
+    },
+  ]);
+
+  const [sessionEditor, setSessionEditor] = useState<{ mode: 'create' | 'edit'; id?: string } | null>(null);
+  const [sessionDraftTitle, setSessionDraftTitle] = useState('');
+  const [sessionDraftCourse, setSessionDraftCourse] = useState('');
+  const [sessionDraftTime, setSessionDraftTime] = useState('');
+
+  const [messagesByFriend, setMessagesByFriend] = useState<Record<string, Message[]>>(() =>
+    friendsDirectory.reduce<Record<string, Message[]>>((acc, friend) => {
+      acc[friend.id] = [
+        {
+          id: 1,
+          from: 'them',
+          text: friend.lastMessage || `Hey ${userName || 'there'}, ready to study?`,
+          time: '4:12 PM',
+        },
+      ];
+      return acc;
+    }, {})
+  );
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages, chattingWith]);
+    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+      UIManager.setLayoutAnimationEnabledExperimental(true);
+    }
+  }, []);
 
-  const tabs: { id: Tab; label: string; count?: number }[] = [
-    { id: 'friends', label: 'Friends', count: friends.length },
-    { id: 'requests', label: 'Requests', count: incomingRequests.length - dismissedRequests.length - acceptedRequests.length },
-    { id: 'sessions', label: 'Sessions', count: sessions.filter((s) => s.isLive).length },
-    { id: 'discover', label: 'Discover' },
+  useEffect(() => {
+    if (!activeCall) {
+      setCallSeconds(0);
+      setMicMuted(false);
+      setSpeakerOn(true);
+      setCameraOn(true);
+      setFocusedParticipant(null);
+      return;
+    }
+
+    setFocusedParticipant(activeCall.participants[0] || null);
+
+    const timer = setInterval(() => {
+      setCallSeconds(Math.floor((Date.now() - activeCall.startedAt) / 1000));
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [activeCall]);
+
+  useEffect(() => {
+    if (activeTab !== 'requests') return;
+    requestReveal.setValue(0);
+    Animated.timing(requestReveal, {
+      toValue: 1,
+      duration: 320,
+      useNativeDriver: true,
+    }).start();
+  }, [activeTab, requestReveal, requests.length]);
+
+  const filteredFriends = useMemo(
+    () => friendsDirectory.filter((f) => f.name.toLowerCase().includes(searchQuery.toLowerCase())),
+    [searchQuery]
+  );
+
+  const activeChatFriend = friendsDirectory.find((f) => f.id === activeChatId) || null;
+
+  const discoverPeople = [
+    { id: 'zayyan', name: 'Zayyan Masud', school: 'Loudoun Valley High School' },
+    { id: 'roshan', name: 'Roshan Shah', school: 'Dominion High School' },
+    { id: 'catalina', name: 'Catalina Nemes', school: 'Loudoun Valley High School' },
   ];
 
-  const statusColor = (status: string) => {
-    switch (status) { case 'online': return 'bg-green-400'; case 'studying': return 'bg-amber-400'; default: return 'bg-gray-300'; }
-  };
+  const showRequestFeedback = (text: string, color: string) => {
+    setRequestFeedback({ text, color });
+    requestFeedbackOpacity.setValue(0);
+    requestFeedbackTranslate.setValue(-8);
 
-  const statusLabel = (status: string) => {
-    switch (status) { case 'online': return 'Online'; case 'studying': return 'Studying'; default: return 'Offline'; }
-  };
-
-  const startCall = (friend: Friend, type: 'audio' | 'video') => {
-    setCallType(type);
-    setCallingFriend(friend);
-  };
-
-  const endCall = () => { setCallingFriend(null); };
-
-  const openChat = (friend: Friend) => {
-    setChattingWith(friend);
-    if (!chatMessages[friend.id]) {
-      setChatMessages((prev) => ({ ...prev, [friend.id]: [] }));
-    }
+    Animated.sequence([
+      Animated.parallel([
+        Animated.timing(requestFeedbackOpacity, {
+          toValue: 1,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+        Animated.timing(requestFeedbackTranslate, {
+          toValue: 0,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+      ]),
+      Animated.delay(1100),
+      Animated.parallel([
+        Animated.timing(requestFeedbackOpacity, {
+          toValue: 0,
+          duration: 220,
+          useNativeDriver: true,
+        }),
+        Animated.timing(requestFeedbackTranslate, {
+          toValue: -8,
+          duration: 220,
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start(() => setRequestFeedback(null));
   };
 
   const sendMessage = () => {
-    if (!newMessage.trim() || !chattingWith) return;
-    const msg: ChatMessage = {
-      id: Date.now(),
-      text: newMessage.trim(),
-      fromMe: true,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
-    setChatMessages((prev) => ({
+    const text = draftMessage.trim();
+    if (!text || !activeChatId) return;
+
+    setMessagesByFriend((prev) => ({
       ...prev,
-      [chattingWith.id]: [...(prev[chattingWith.id] || []), msg],
+      [activeChatId]: [...(prev[activeChatId] || []), { id: Date.now(), from: 'me', text, time: currentTimeLabel() }],
     }));
-    setNewMessage('');
+    setDraftMessage('');
+
+    setTimeout(() => {
+      setMessagesByFriend((prev) => ({
+        ...prev,
+        [activeChatId]: [
+          ...(prev[activeChatId] || []),
+          {
+            id: Date.now() + 1,
+            from: 'them',
+            text: 'Nice, I can add this into a merged review version too.',
+            time: currentTimeLabel(),
+          },
+        ],
+      }));
+    }, 700);
   };
 
-  const joinSession = (sessionId: number) => {
-    setJoinedSessions((prev) => new Set(prev).add(sessionId));
+  const startFriendCall = (friendName: string, mode: CallMode) => {
+    setActiveCall({
+      mode,
+      title: mode === 'voice' ? `Voice with ${friendName}` : `Video with ${friendName}`,
+      participants: [friendName, userName || 'You'],
+      startedAt: Date.now(),
+    });
   };
 
-  const createSession = () => {
-    if (!newSessionTitle.trim() || !newSessionCourse.trim()) return;
-    const session: StudySession = {
-      id: Date.now(), title: newSessionTitle, course: newSessionCourse,
-      hostId: 0, // user-created
-      date: newSessionDate || 'Today', time: newSessionTime || '5:00 PM',
-      participantIds: [], maxParticipants: 8, isLive: false,
-    };
-    setSessions((prev) => [session, ...prev]);
-    setShowCreateSession(false);
-    setNewSessionTitle('');
-    setNewSessionCourse('');
-    setNewSessionDate('');
-    setNewSessionTime('');
+  const openLiveSession = () => {
+    const participants = ['Laasya Potuluri', 'Anya Vulupala', 'Andrew Boldea', userName || 'You'];
+    setActiveCall({
+      mode: 'group',
+      title: 'AP Human Geography Live Session',
+      participants,
+      startedAt: Date.now(),
+    });
   };
 
-  const filteredFriends = friends.filter((f) => f.name.toLowerCase().includes(searchQuery.toLowerCase()));
-  const onlineFriends = filteredFriends.filter((f) => f.status !== 'offline');
-  const offlineFriends = filteredFriends.filter((f) => f.status === 'offline');
+  const openSession = (session: StudySession) => {
+    const participants = [...session.participants];
+    if (!participants.includes(userName || 'You')) participants.push(userName || 'You');
 
-  // ===== Chat View =====
-  if (chattingWith) {
-    const messages = chatMessages[chattingWith.id] || [];
+    setActiveCall({
+      mode: 'group',
+      title: session.title,
+      participants,
+      startedAt: Date.now(),
+    });
+  };
+
+  const toggleRequest = (id: string, accepted: boolean) => {
+    const selected = requests.find((request) => request.id === id);
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setRequests((prev) => prev.filter((request) => request.id !== id));
+    if (accepted) {
+      showRequestFeedback(`Accepted ${selected?.name || 'request'}.`, '#166534');
+      setActiveTab('friends');
+    } else {
+      showRequestFeedback(`Declined ${selected?.name || 'request'}.`, '#991b1b');
+    }
+  };
+
+  const toggleRsvp = (id: string) => {
+    setUpcomingSessions((prev) =>
+      prev.map((session) => (session.id === id ? { ...session, rsvped: !session.rsvped } : session))
+    );
+  };
+
+  const openCreateSessionEditor = () => {
+    setSessionEditor({ mode: 'create' });
+    setSessionDraftTitle('');
+    setSessionDraftCourse('Custom Session');
+    setSessionDraftTime('');
+  };
+
+  const openEditSessionEditor = (session: StudySession) => {
+    setSessionEditor({ mode: 'edit', id: session.id });
+    setSessionDraftTitle(session.title);
+    setSessionDraftCourse(session.course);
+    setSessionDraftTime(session.time);
+  };
+
+  const saveSession = () => {
+    const title = sessionDraftTitle.trim() || 'New Study Session';
+    const course = sessionDraftCourse.trim() || 'Custom Session';
+    const time = sessionDraftTime.trim() || 'TBD';
+
+    if (!sessionEditor) return;
+
+    if (sessionEditor.mode === 'create') {
+      setUpcomingSessions((prev) => [
+        {
+          id: `session-${Date.now()}`,
+          title,
+          course,
+          time,
+          participants: [userName || 'You'],
+          rsvped: true,
+          createdByMe: true,
+        },
+        ...prev,
+      ]);
+    } else {
+      setUpcomingSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionEditor.id
+            ? {
+                ...session,
+                title,
+                course,
+                time,
+              }
+            : session
+        )
+      );
+    }
+
+    setSessionEditor(null);
+  };
+
+  const deleteSession = (id: string) => {
+    Alert.alert('Delete Session', 'Delete this session from your schedule?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => setUpcomingSessions((prev) => prev.filter((session) => session.id !== id)),
+      },
+    ]);
+  };
+
+  const sendDiscoverInvite = (person: { id: string; name: string }) => {
+    if (sentDiscoverInvites.has(person.id)) return;
+    setSentDiscoverInvites((prev) => new Set(prev).add(person.id));
+    showRequestFeedback(`Friend request sent to ${person.name}.`, '#166534');
+  };
+
+  if (activeCall) {
+    const isVideo = activeCall.mode !== 'voice';
+    const participants = activeCall.participants;
+    const focusName = focusedParticipant || participants[0] || 'Session';
+    const otherParticipants = participants.filter((name) => name !== focusName);
+
     return (
-      <div className="h-full w-full bg-white relative flex flex-col">
-        {/* Chat Header */}
-        <div className="px-4 pt-14 pb-3 flex items-center gap-3 border-b border-gray-100">
-          <button onClick={() => setChattingWith(null)} className="w-9 h-9 rounded-full bg-bg-secondary flex items-center justify-center">
-            <ArrowLeft className="w-4.5 h-4.5 text-text-primary" />
-          </button>
-          <div className="relative">
-            <Avatar color={chattingWith.color} iconColor={chattingWith.iconColor} size={40} />
-            <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white ${statusColor(chattingWith.status)}`} />
-          </div>
-          <div className="flex-1">
-            <p className="font-body text-sm font-semibold text-text-primary">{chattingWith.name}</p>
-            <p className="font-body text-[11px] text-text-tertiary">{statusLabel(chattingWith.status)}{chattingWith.course ? ` • ${chattingWith.course}` : ''}</p>
-          </div>
-          <button onClick={() => startCall(chattingWith, 'audio')} className="w-9 h-9 rounded-full bg-maroon/5 flex items-center justify-center">
-            <Phone className="w-4 h-4 text-maroon" />
-          </button>
-          <button onClick={() => startCall(chattingWith, 'video')} className="w-9 h-9 rounded-full bg-maroon/5 flex items-center justify-center">
-            <Video className="w-4 h-4 text-maroon" />
-          </button>
-        </div>
+      <View style={styles.callScreen}>
+        <View style={styles.callGlowOne} />
+        <View style={styles.callGlowTwo} />
 
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto hide-scrollbar px-4 py-4">
-          {messages.length === 0 && (
-            <div className="text-center py-12">
-              <div className="w-14 h-14 rounded-full bg-bg-secondary flex items-center justify-center mx-auto mb-3">
-                <MessageCircle className="w-6 h-6 text-text-tertiary" />
-              </div>
-              <p className="font-body text-sm text-text-secondary">No messages yet</p>
-              <p className="font-body text-xs text-text-tertiary mt-1">Say hi to {chattingWith.name.split(' ')[0]}!</p>
-            </div>
+        <View style={styles.callTopRow}>
+          <TouchableOpacity style={styles.callTopBtn} onPress={() => setActiveCall(null)}>
+            <Ionicons name="chevron-down" size={22} color="white" />
+          </TouchableOpacity>
+          <View style={styles.callTitleWrap}>
+            <Text style={styles.callTypeLabel}>{activeCall.mode === 'voice' ? 'VOICE CALL' : 'LIVE SESSION'}</Text>
+            <Text style={styles.callTitleText} numberOfLines={1}>
+              {activeCall.title}
+            </Text>
+            <Text style={styles.callClock}>{formatDuration(callSeconds)}</Text>
+          </View>
+          <View style={styles.callTopBtnPlaceholder} />
+        </View>
+
+        <View style={styles.callStatusRow}>
+          <View style={[styles.callStatusPill, micMuted && styles.callStatusPillMuted]}>
+            <Ionicons name={micMuted ? 'mic-off' : 'mic'} size={12} color={micMuted ? '#fecaca' : '#bbf7d0'} />
+            <Text style={styles.callStatusText}>{micMuted ? 'Muted' : 'Mic On'}</Text>
+          </View>
+          <View style={[styles.callStatusPill, !speakerOn && styles.callStatusPillMuted]}>
+            <Ionicons name={speakerOn ? 'volume-high' : 'volume-mute'} size={12} color={speakerOn ? '#bbf7d0' : '#fecaca'} />
+            <Text style={styles.callStatusText}>{speakerOn ? 'Speaker On' : 'Speaker Off'}</Text>
+          </View>
+          {isVideo && (
+            <View style={[styles.callStatusPill, !cameraOn && styles.callStatusPillMuted]}>
+              <Ionicons name={cameraOn ? 'videocam' : 'videocam-off'} size={12} color={cameraOn ? '#bbf7d0' : '#fecaca'} />
+              <Text style={styles.callStatusText}>{cameraOn ? 'Camera On' : 'Camera Off'}</Text>
+            </View>
           )}
-          {messages.map((msg) => (
-            <div key={msg.id} className={`flex mb-3 ${msg.fromMe ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[75%] px-4 py-2.5 rounded-2xl ${msg.fromMe ? 'bg-maroon text-white rounded-br-md' : 'bg-bg-secondary text-text-primary rounded-bl-md'}`}>
-                <p className="font-body text-sm">{msg.text}</p>
-                <p className={`font-body text-[10px] mt-1 ${msg.fromMe ? 'text-white/60' : 'text-text-tertiary'}`}>{msg.time}</p>
-              </div>
-            </div>
-          ))}
-          <div ref={chatEndRef} />
-        </div>
+        </View>
 
-        {/* Input */}
-        <div className="px-4 pb-6 pt-2 border-t border-gray-100 bg-white">
-          <div className="flex items-center gap-2">
-            <button className="w-10 h-10 rounded-full bg-bg-secondary flex items-center justify-center shrink-0">
-              <Plus className="w-4.5 h-4.5 text-text-tertiary" />
-            </button>
-            <div className="flex-1 flex items-center bg-bg-secondary rounded-full px-4 h-11">
-              <input
-                type="text" placeholder="Message..." value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
-                className="flex-1 font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none bg-transparent"
+        {isVideo ? (
+          <View style={styles.videoStage}>
+            <View style={styles.videoFocusTile}>
+              <Text style={styles.videoFocusName}>{focusName}</Text>
+              <Text style={styles.videoFocusHint}>{focusName === (userName || 'You') && !cameraOn ? 'Camera is off' : 'Live video'}</Text>
+              <Ionicons
+                name={focusName === (userName || 'You') && !cameraOn ? 'videocam-off' : 'videocam'}
+                size={22}
+                color="rgba(255,255,255,0.9)"
               />
-              <button className="ml-2"><Mic className="w-4 h-4 text-text-tertiary" /></button>
-            </div>
-            <button onClick={sendMessage} disabled={!newMessage.trim()} className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-colors ${newMessage.trim() ? 'bg-maroon' : 'bg-gray-200'}`}>
-              <Send className={`w-4 h-4 ${newMessage.trim() ? 'text-white' : 'text-gray-400'}`} />
-            </button>
-          </div>
-        </div>
+            </View>
 
-        {/* Call overlay */}
-        <AnimatePresence>
-          {callingFriend && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-[60] bg-maroon flex flex-col items-center justify-center">
-              <div className="absolute inset-0 opacity-5"><div className="absolute inset-0" style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)', backgroundSize: '30px 30px' }} /></div>
-              <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ delay: 0.2 }} className="relative z-10 flex flex-col items-center">
-                <div className="relative">
-                  <motion.div className="absolute inset-0 rounded-full border-2 border-white/20" animate={{ scale: [1, 1.6, 1.6], opacity: [0.4, 0, 0] }} transition={{ duration: 2, repeat: Infinity, ease: 'easeOut' }} style={{ margin: '-20px' }} />
-                  <Avatar color={callingFriend.color} iconColor={callingFriend.iconColor} size={112} className="border-[3px] border-white/30 shadow-2xl" />
-                </div>
-                <h2 className="font-display text-2xl font-bold text-white mt-8">{callingFriend.name}</h2>
-                <div className="flex items-center gap-2 mt-2"><Wifi className="w-3.5 h-3.5 text-white/50" /><p className="font-body text-sm text-white/60">{callType === 'video' ? 'Video' : 'Audio'} Calling...</p></div>
-                <motion.p animate={{ opacity: [0.3, 1, 0.3] }} transition={{ duration: 2, repeat: Infinity }} className="font-body text-xs text-white/40 mt-1">Connecting</motion.p>
-              </motion.div>
-              <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.4 }} className="absolute bottom-20 flex items-center gap-6">
-                <button className="w-14 h-14 rounded-full bg-white/10 flex items-center justify-center"><MessageCircle className="w-6 h-6 text-white" /></button>
-                <button onClick={endCall} className="w-16 h-16 rounded-full bg-red-500 flex items-center justify-center shadow-lg shadow-red-500/40"><Phone className="w-7 h-7 text-white rotate-[135deg]" /></button>
-                <button className="w-14 h-14 rounded-full bg-white/10 flex items-center justify-center"><Video className="w-6 h-6 text-white" /></button>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-    );
-  }
-
-  // ===== Group Call View =====
-  if (inGroupCall) {
-    const host = getFriendById(inGroupCall.hostId);
-    const participants = inGroupCall.participantIds.map((pid) => getFriendById(pid)).filter(Boolean) as Friend[];
-    return (
-      <div className="h-full w-full bg-[#1a1a1a] relative flex flex-col items-center justify-center">
-        <div className="absolute top-14 left-0 right-0 px-6 text-center">
-          <p className="font-body text-xs text-white/50 uppercase tracking-wider">{inGroupCall.course}</p>
-          <h2 className="font-display text-xl font-bold text-white mt-1">{inGroupCall.title}</h2>
-          <div className="flex items-center justify-center gap-1.5 mt-2">
-            <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-            <p className="font-body text-xs text-white/60">{participants.length + 2} in session</p>
-          </div>
-        </div>
-        {/* Participant grid */}
-        <div className="grid grid-cols-2 gap-4 px-8 mt-8">
-          {/* You */}
-          <div className="bg-white/10 rounded-3xl aspect-square flex flex-col items-center justify-center p-4">
-            <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-green-400 mb-2 flex items-center justify-center bg-maroon/30">
-              {profilePicture ? <img src={profilePicture} alt="You" className="w-full h-full object-cover" /> : <User className="w-8 h-8 text-white/60" />}
-            </div>
-            <p className="font-body text-sm font-medium text-white">You</p>
-            <div className="flex items-center gap-1 mt-1"><Mic className="w-3 h-3 text-green-400" /><p className="font-body text-[10px] text-white/50">Speaking</p></div>
-          </div>
-          {/* Host */}
-          {host && (
-            <div className="bg-white/10 rounded-3xl aspect-square flex flex-col items-center justify-center p-4">
-              <div className="border-2 border-amber-400 rounded-full mb-2">
-                <Avatar color={host.color} iconColor={host.iconColor} size={64} />
-              </div>
-              <p className="font-body text-sm font-medium text-white">{host.name.split(' ')[0]}</p>
-              <div className="flex items-center gap-1 mt-1"><span className="font-body text-[10px] text-amber-400">Host</span></div>
-            </div>
-          )}
-          {!host && (
-            <div className="bg-white/10 rounded-3xl aspect-square flex flex-col items-center justify-center p-4">
-              <div className="w-16 h-16 rounded-full border-2 border-amber-400 mb-2 flex items-center justify-center bg-maroon/30">
-                {profilePicture ? <img src={profilePicture} alt="You" className="w-full h-full object-cover" /> : <User className="w-8 h-8 text-white/60" />}
-              </div>
-              <p className="font-body text-sm font-medium text-white">You</p>
-              <div className="flex items-center gap-1 mt-1"><span className="font-body text-[10px] text-amber-400">Host</span></div>
-            </div>
-          )}
-          {/* Other participants */}
-          {participants.slice(0, 2).map((p) => (
-            <div key={p.id} className="bg-white/10 rounded-3xl aspect-square flex flex-col items-center justify-center p-4">
-              <div className="border-2 border-white/20 rounded-full mb-2">
-                <Avatar color={p.color} iconColor={p.iconColor} size={64} />
-              </div>
-              <p className="font-body text-sm font-medium text-white">{p.name.split(' ')[0]}</p>
-              <div className="flex items-center gap-1 mt-1"><Mic className="w-3 h-3 text-white/30" /></div>
-            </div>
-          ))}
-        </div>
-        {/* Controls */}
-        <div className="absolute bottom-16 flex items-center gap-4">
-          <button className="w-14 h-14 rounded-full bg-white/10 flex items-center justify-center"><Mic className="w-6 h-6 text-white" /></button>
-          <button className="w-14 h-14 rounded-full bg-white/10 flex items-center justify-center"><Video className="w-6 h-6 text-white" /></button>
-          <button className="w-14 h-14 rounded-full bg-white/10 flex items-center justify-center"><MessageCircle className="w-6 h-6 text-white" /></button>
-          <button onClick={() => setInGroupCall(null)} className="w-14 h-14 rounded-full bg-red-500 flex items-center justify-center shadow-lg shadow-red-500/40"><Phone className="w-6 h-6 text-white rotate-[135deg]" /></button>
-        </div>
-      </div>
-    );
-  }
-
-  // ===== Main Friends View =====
-  return (
-    <div className="h-full w-full bg-bg-secondary relative">
-      {/* Call overlay */}
-      <AnimatePresence>
-        {callingFriend && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-[60] bg-maroon flex flex-col items-center justify-center">
-            <div className="absolute inset-0 opacity-5"><div className="absolute inset-0" style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)', backgroundSize: '30px 30px' }} /></div>
-            <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ delay: 0.2 }} className="relative z-10 flex flex-col items-center">
-              <div className="relative">
-                <motion.div className="absolute inset-0 rounded-full border-2 border-white/20" animate={{ scale: [1, 1.6, 1.6], opacity: [0.4, 0, 0] }} transition={{ duration: 2, repeat: Infinity, ease: 'easeOut' }} style={{ margin: '-20px' }} />
-                <motion.div className="absolute inset-0 rounded-full border-2 border-white/15" animate={{ scale: [1, 1.8, 1.8], opacity: [0.3, 0, 0] }} transition={{ duration: 2, repeat: Infinity, ease: 'easeOut', delay: 0.5 }} style={{ margin: '-20px' }} />
-                <Avatar color={callingFriend.color} iconColor={callingFriend.iconColor} size={112} className="border-[3px] border-white/30 shadow-2xl" />
-              </div>
-              <h2 className="font-display text-2xl font-bold text-white mt-8">{callingFriend.name}</h2>
-              <div className="flex items-center gap-2 mt-2"><Wifi className="w-3.5 h-3.5 text-white/50" /><p className="font-body text-sm text-white/60">{callType === 'video' ? 'Video' : 'Audio'} Calling...</p></div>
-              <motion.p animate={{ opacity: [0.3, 1, 0.3] }} transition={{ duration: 2, repeat: Infinity }} className="font-body text-xs text-white/40 mt-1">Connecting</motion.p>
-            </motion.div>
-            <motion.div initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.4 }} className="absolute bottom-20 flex items-center gap-6">
-              <button className="w-14 h-14 rounded-full bg-white/10 flex items-center justify-center"><MessageCircle className="w-6 h-6 text-white" /></button>
-              <button onClick={endCall} className="w-16 h-16 rounded-full bg-red-500 flex items-center justify-center shadow-lg shadow-red-500/40"><Phone className="w-7 h-7 text-white rotate-[135deg]" /></button>
-              <button className="w-14 h-14 rounded-full bg-white/10 flex items-center justify-center"><Video className="w-6 h-6 text-white" /></button>
-            </motion.div>
-          </motion.div>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.videoThumbRow}>
+              {otherParticipants.map((name) => (
+                <TouchableOpacity key={name} style={styles.videoThumb} onPress={() => setFocusedParticipant(name)}>
+                  <Ionicons name="person" size={18} color="white" />
+                  <Text style={styles.videoThumbText} numberOfLines={1}>
+                    {name.split(' ')[0]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        ) : (
+          <View style={styles.voiceStage}>
+            <View style={styles.voiceAvatarOuter}>
+              <View style={styles.voiceAvatarInner}>
+                <Ionicons name="person" size={42} color="white" />
+              </View>
+            </View>
+            <Text style={styles.voiceName}>{participants[0]}</Text>
+            <Text style={styles.voiceHint}>{speakerOn ? 'Speakerphone enabled' : 'Speakerphone disabled'}</Text>
+          </View>
         )}
-      </AnimatePresence>
 
-      <div className="relative z-10 h-full overflow-y-auto hide-scrollbar pb-28">
-        {/* Header */}
-        <motion.div initial={{ y: -20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="px-6 pt-14">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="font-display text-[1.75rem] font-bold text-text-primary leading-tight">Friends</h1>
-              <p className="font-body text-sm text-text-secondary mt-0.5">Connect & study together</p>
-            </div>
-            <div className="w-11 h-11 rounded-full overflow-hidden bg-maroon/10 ring-2 ring-maroon/20">
-              {profilePicture ? <img src={profilePicture} alt={userName} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center bg-bg-secondary"><User className="w-6 h-6 text-text-tertiary/60" strokeWidth={1.3} /></div>}
-            </div>
-          </div>
-        </motion.div>
+        <View style={styles.callControlsDock}>
+          <TouchableOpacity style={[styles.callControlBtn, micMuted && styles.callControlBtnActive]} onPress={() => setMicMuted((v) => !v)}>
+            <Ionicons name={micMuted ? 'mic-off' : 'mic'} size={20} color={micMuted ? 'white' : colors.textPrimary} />
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.callControlBtn, speakerOn && styles.callControlBtnActive]} onPress={() => setSpeakerOn((v) => !v)}>
+            <Ionicons name={speakerOn ? 'volume-high' : 'volume-mute'} size={20} color={speakerOn ? 'white' : colors.textPrimary} />
+          </TouchableOpacity>
+          {isVideo && (
+            <TouchableOpacity style={[styles.callControlBtn, cameraOn && styles.callControlBtnActive]} onPress={() => setCameraOn((v) => !v)}>
+              <Ionicons name={cameraOn ? 'videocam' : 'videocam-off'} size={20} color={cameraOn ? 'white' : colors.textPrimary} />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={[styles.callControlBtn, styles.callEndBtn]} onPress={() => setActiveCall(null)}>
+            <Ionicons name="call" size={20} color="white" />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
-        {/* Search */}
-        <motion.div initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.1 }} className="px-6 mt-5">
-          <div className="flex items-center gap-3 bg-white rounded-2xl px-5 h-12 shadow-sm shadow-black/5">
-            <Search className="w-4.5 h-4.5 text-text-tertiary" />
-            <input type="text" placeholder="Search friends..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="flex-1 font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none bg-transparent" />
-          </div>
-        </motion.div>
+  if (sessionEditor) {
+    const isEditing = sessionEditor.mode === 'edit';
 
-        {/* Tabs */}
-        <motion.div initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.15 }} className="flex gap-2 px-6 mt-5 overflow-x-auto hide-scrollbar">
-          {tabs.map((tab) => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex items-center gap-1.5 px-4 py-2.5 rounded-full font-body text-sm font-medium whitespace-nowrap transition-all duration-300 ${activeTab === tab.id ? 'bg-maroon text-white shadow-md shadow-maroon/20' : 'bg-white text-text-secondary'}`}>
-              {tab.label}
-              {tab.count !== undefined && tab.count > 0 && (
-                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${activeTab === tab.id ? 'bg-white/20 text-white' : 'bg-maroon/10 text-maroon'}`}>{tab.count}</span>
-              )}
-            </button>
+    return (
+      <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <View style={styles.editorHeader}>
+          <TouchableOpacity style={styles.backBtn} onPress={() => setSessionEditor(null)}>
+            <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
+          </TouchableOpacity>
+          <View style={styles.editorTitleWrap}>
+            <Text style={styles.editorTitle}>{isEditing ? 'Edit Session' : 'Create Session'}</Text>
+            <Text style={styles.editorSubtitle}>Configure your live study room details</Text>
+          </View>
+        </View>
+
+        <ScrollView style={styles.editorScroll} contentContainerStyle={styles.editorContent} keyboardShouldPersistTaps="handled">
+          <View style={styles.editorCard}>
+            <Text style={styles.modalLabel}>Session Title</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={sessionDraftTitle}
+              onChangeText={setSessionDraftTitle}
+              placeholder="Ex: Unit 7 Blitz"
+            />
+            <Text style={styles.modalLabel}>Course</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={sessionDraftCourse}
+              onChangeText={setSessionDraftCourse}
+              placeholder="Ex: AP Biology"
+            />
+            <Text style={styles.modalLabel}>Time</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={sessionDraftTime}
+              onChangeText={setSessionDraftTime}
+              placeholder="Ex: Saturday • 7:00 PM"
+            />
+
+            <TouchableOpacity style={styles.editorSaveBtn} onPress={saveSession}>
+              <Text style={styles.editorSaveText}>{isEditing ? 'Save Changes' : 'Create Session'}</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    );
+  }
+
+  if (activeChatFriend) {
+    const messages = messagesByFriend[activeChatFriend.id] || [];
+
+    return (
+      <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <View style={styles.chatHeader}>
+          <TouchableOpacity style={styles.backBtn} onPress={() => setActiveChatId(null)}>
+            <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
+          </TouchableOpacity>
+          <View style={styles.chatHeaderInfo}>
+            <Text style={styles.chatFriendName}>{activeChatFriend.name}</Text>
+            <Text style={styles.chatFriendStatus}>
+              {activeChatFriend.status === 'online' ? 'Online now' : 'Available later'}
+            </Text>
+          </View>
+          <TouchableOpacity style={styles.chatTopAction} onPress={() => startFriendCall(activeChatFriend.name, 'voice')}>
+            <Ionicons name="call" size={18} color={colors.maroon} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.chatTopAction} onPress={() => startFriendCall(activeChatFriend.name, 'video')}>
+            <Ionicons name="videocam" size={18} color={colors.maroon} />
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView style={styles.chatScroll} contentContainerStyle={styles.chatContent} keyboardShouldPersistTaps="handled">
+          {messages.map((message) => (
+            <View key={message.id} style={[styles.messageRow, message.from === 'me' && styles.messageRowMe]}>
+              <View style={[styles.messageBubble, message.from === 'me' && styles.messageBubbleMe]}>
+                <Text style={[styles.messageText, message.from === 'me' && styles.messageTextMe]}>{message.text}</Text>
+                <Text style={[styles.messageTime, message.from === 'me' && styles.messageTimeMe]}>{message.time}</Text>
+              </View>
+            </View>
           ))}
-        </motion.div>
+        </ScrollView>
 
-        <AnimatePresence mode="wait">
-          {/* ===== Friends Tab ===== */}
-          {activeTab === 'friends' && (
-            <motion.div key="friends" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="px-6 mt-5">
-              {onlineFriends.length > 0 && (
-                <>
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-                    <h3 className="font-body text-xs font-semibold text-text-secondary uppercase tracking-wider">Active Now</h3>
-                  </div>
-                  <div className="flex gap-3 overflow-x-auto hide-scrollbar mb-5 -mx-1 px-1">
-                    {onlineFriends.map((friend) => (
-                      <button key={friend.id} onClick={() => openChat(friend)} className="flex flex-col items-center gap-1.5 shrink-0">
-                        <div className="relative">
-                          <Avatar color={friend.color} iconColor={friend.iconColor} size={64} className="border-2 border-white shadow-md" />
-                          <div className={`absolute bottom-0 right-0 w-4 h-4 rounded-full border-2 border-white ${statusColor(friend.status)}`} />
-                        </div>
-                        <p className="font-body text-[11px] text-text-primary font-medium w-16 truncate text-center">{friend.name.split(' ')[0]}</p>
-                      </button>
-                    ))}
-                  </div>
-                </>
+        <View style={styles.chatComposer}>
+          <TextInput
+            style={styles.chatInput}
+            value={draftMessage}
+            onChangeText={setDraftMessage}
+            placeholder="Message"
+            placeholderTextColor={colors.textTertiary}
+          />
+          <TouchableOpacity style={styles.sendBtn} onPress={sendMessage}>
+            <Ionicons name="send" size={16} color="white" />
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.title}>Friends</Text>
+            <Text style={styles.subtitle}>Connect, chat, and jump into live sessions</Text>
+          </View>
+          <View style={styles.avatarWrap}>
+            {profilePicture ? (
+              <Image source={{ uri: profilePicture }} style={styles.avatar} />
+            ) : (
+              <Ionicons name="person" size={24} color={colors.textTertiary} />
+            )}
+          </View>
+        </View>
+
+        <View style={styles.searchBox}>
+          <Ionicons name="search" size={18} color={colors.textTertiary} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search friends..."
+            placeholderTextColor={colors.textTertiary}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+        </View>
+
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs}>
+          {(['friends', 'requests', 'sessions', 'discover'] as Tab[]).map((tab) => (
+            <TouchableOpacity key={tab} style={[styles.tab, activeTab === tab && styles.tabActive]} onPress={() => setActiveTab(tab)}>
+              <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>{tab[0].toUpperCase() + tab.slice(1)}</Text>
+              {tab === 'friends' && (
+                <View style={[styles.tabBadge, activeTab === tab && styles.tabBadgeActive]}>
+                  <Text style={[styles.tabBadgeText, activeTab === tab && styles.tabBadgeTextActive]}>{friendsDirectory.length}</Text>
+                </View>
               )}
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
 
-              <h3 className="font-body text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">All Friends</h3>
-              <div className="flex flex-col gap-2">
-                {filteredFriends.filter((f) => f.status !== 'offline').map((friend, i) => (
-                  <motion.div key={friend.id} initial={{ y: 15, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.05 * i }} className="bg-white rounded-2xl p-3.5 shadow-sm shadow-black/3 flex items-center gap-3">
-                    <button onClick={() => openChat(friend)} className="relative shrink-0">
-                      <Avatar color={friend.color} iconColor={friend.iconColor} size={48} />
-                      <div className={`absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full border-2 border-white ${statusColor(friend.status)}`} />
-                    </button>
-                    <button onClick={() => openChat(friend)} className="flex-1 min-w-0 text-left">
-                      <p className="font-body text-sm font-semibold text-text-primary">{friend.name}</p>
-                      <span className={`font-body text-[11px] ${friend.status === 'studying' ? 'text-amber-500' : 'text-green-500'}`}>{statusLabel(friend.status)}</span>
-                    </button>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button onClick={() => openChat(friend)} className="w-9 h-9 rounded-full bg-maroon/5 flex items-center justify-center"><MessageCircle className="w-4 h-4 text-maroon" /></button>
-                      <button onClick={() => startCall(friend, 'audio')} className="w-9 h-9 rounded-full bg-maroon/5 flex items-center justify-center"><Phone className="w-4 h-4 text-maroon" /></button>
-                      <button onClick={() => startCall(friend, 'video')} className="w-9 h-9 rounded-full bg-maroon/5 flex items-center justify-center"><Video className="w-4 h-4 text-maroon" /></button>
-                    </div>
-                  </motion.div>
+        {requestFeedback && (
+          <Animated.View
+            style={[
+              styles.feedbackBanner,
+              {
+                backgroundColor: requestFeedback.color,
+                opacity: requestFeedbackOpacity,
+                transform: [{ translateY: requestFeedbackTranslate }],
+              },
+            ]}
+          >
+            <Ionicons name="checkmark-circle" size={14} color="white" />
+            <Text style={styles.feedbackText}>{requestFeedback.text}</Text>
+          </Animated.View>
+        )}
+
+        {activeTab === 'friends' && (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Active Now</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalList}>
+              {filteredFriends
+                .filter((f) => f.status !== 'offline')
+                .map((friend) => (
+                  <TouchableOpacity key={friend.id} style={styles.friendChip} onPress={() => setActiveChatId(friend.id)}>
+                    <View style={[styles.friendChipAvatar, { backgroundColor: friend.color }]}>
+                      <Ionicons name="person" size={24} color="#6366f1" />
+                    </View>
+                    <View
+                      style={[
+                        styles.statusDot,
+                        friend.status === 'online' && styles.statusOnline,
+                        friend.status === 'studying' && styles.statusStudying,
+                      ]}
+                    />
+                    <Text style={styles.friendChipName} numberOfLines={1}>
+                      {friend.name.split(' ')[0]}
+                    </Text>
+                  </TouchableOpacity>
                 ))}
-              </div>
+            </ScrollView>
 
-              {offlineFriends.length > 0 && (
-                <>
-                  <h3 className="font-body text-xs font-semibold text-text-secondary uppercase tracking-wider mt-5 mb-3">Offline</h3>
-                  <div className="flex flex-col gap-2">
-                    {offlineFriends.map((friend, i) => (
-                      <motion.div key={friend.id} initial={{ y: 15, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.3 + 0.05 * i }} className="bg-white rounded-2xl p-3.5 shadow-sm shadow-black/3 flex items-center gap-3 opacity-60">
-                        <div className="relative shrink-0">
-                          <Avatar color={friend.color} iconColor={friend.iconColor} size={48} className="grayscale-[0.3]" />
-                          <div className="absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full border-2 border-white bg-gray-300" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-body text-sm font-semibold text-text-primary">{friend.name}</p>
-                          <p className="font-body text-[11px] text-text-tertiary">{friend.school}</p>
-                        </div>
-                        <button onClick={() => openChat(friend)} className="w-9 h-9 rounded-full bg-bg-secondary flex items-center justify-center shrink-0">
-                          <MessageCircle className="w-4 h-4 text-text-tertiary" />
-                        </button>
-                      </motion.div>
-                    ))}
-                  </div>
-                </>
-              )}
-            </motion.div>
-          )}
+            <Text style={[styles.sectionLabel, { marginTop: 20 }]}>All Friends</Text>
+            {filteredFriends.map((friend) => (
+              <View key={friend.id} style={styles.friendRow}>
+                <View style={[styles.friendAvatar, { backgroundColor: friend.color }]}>
+                  <Ionicons name="person" size={20} color="#6366f1" />
+                </View>
+                <View
+                  style={[
+                    styles.statusDotSmall,
+                    friend.status === 'online' && styles.statusOnline,
+                    friend.status === 'studying' && styles.statusStudying,
+                  ]}
+                />
+                <View style={styles.friendInfo}>
+                  <Text style={styles.friendName}>{friend.name}</Text>
+                  <Text style={[styles.friendStatus, friend.status === 'studying' && styles.friendStatusStudying]}>
+                    {friend.status === 'online' ? 'Online' : friend.status === 'studying' ? 'Studying' : 'Offline'}
+                  </Text>
+                </View>
+                <View style={styles.friendActions}>
+                  <TouchableOpacity style={styles.actionBtn} onPress={() => setActiveChatId(friend.id)}>
+                    <Ionicons name="chatbubble-outline" size={18} color={colors.maroon} />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.actionBtn} onPress={() => startFriendCall(friend.name, 'voice')}>
+                    <Ionicons name="call-outline" size={18} color={colors.maroon} />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.actionBtn} onPress={() => startFriendCall(friend.name, 'video')}>
+                    <Ionicons name="videocam-outline" size={18} color={colors.maroon} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
 
-          {/* ===== Requests Tab ===== */}
-          {activeTab === 'requests' && (
-            <motion.div key="requests" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="px-6 mt-5">
-              <h3 className="font-body text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">Incoming Requests</h3>
-              {incomingRequests.filter((r) => !dismissedRequests.includes(r.id) && !acceptedRequests.includes(r.id)).length === 0 ? (
-                <div className="bg-white rounded-3xl p-8 text-center shadow-sm">
-                  <div className="w-14 h-14 rounded-full bg-bg-secondary flex items-center justify-center mx-auto mb-3"><UserPlus className="w-6 h-6 text-text-tertiary" /></div>
-                  <p className="font-body text-sm font-medium text-text-primary">No pending requests</p>
-                  <p className="font-body text-xs text-text-tertiary mt-1">You&apos;re all caught up!</p>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-2.5">
-                  {incomingRequests.filter((r) => !dismissedRequests.includes(r.id) && !acceptedRequests.includes(r.id)).map((request, i) => (
-                    <motion.div key={request.id} initial={{ y: 15, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.05 * i }} className="bg-white rounded-2xl p-4 shadow-sm shadow-black/3">
-                      <div className="flex items-center gap-3">
-                        <Avatar color={request.color} iconColor={request.iconColor} size={48} />
-                        <div className="flex-1 min-w-0">
-                          <p className="font-body text-sm font-semibold text-text-primary">{request.name}</p>
-                          <p className="font-body text-[11px] text-text-tertiary">{request.school} • {request.mutualFriends} mutual friends</p>
-                        </div>
-                      </div>
-                      <div className="flex gap-2 mt-3">
-                        <button onClick={() => setAcceptedRequests([...acceptedRequests, request.id])} className="flex-1 h-10 bg-maroon text-white font-body font-semibold text-sm rounded-full flex items-center justify-center gap-1.5 active:scale-[0.97] transition-transform"><Check className="w-4 h-4" /> Accept</button>
-                        <button onClick={() => setDismissedRequests([...dismissedRequests, request.id])} className="flex-1 h-10 bg-bg-secondary text-text-secondary font-body font-semibold text-sm rounded-full flex items-center justify-center gap-1.5 active:scale-[0.97] transition-transform"><X className="w-4 h-4" /> Decline</button>
-                      </div>
-                    </motion.div>
-                  ))}
-                </div>
-              )}
-              {acceptedRequests.length > 0 && (
-                <motion.div initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="bg-green-50 border border-green-100 rounded-2xl p-4 mt-4">
-                  <div className="flex items-center gap-2"><Check className="w-4 h-4 text-green-600" /><p className="font-body text-sm text-green-700 font-medium">{acceptedRequests.length} request{acceptedRequests.length > 1 ? 's' : ''} accepted!</p></div>
-                </motion.div>
-              )}
-              <h3 className="font-body text-xs font-semibold text-text-secondary uppercase tracking-wider mt-6 mb-3">Sent Requests</h3>
-              <div className="bg-white rounded-2xl p-4 shadow-sm shadow-black/3">
-                <div className="flex items-center gap-3">
-                  <Avatar color="#E0E7FF" iconColor="text-indigo-500" size={40} />
-                  <div className="flex-1 min-w-0"><p className="font-body text-sm font-semibold text-text-primary">Rick Reaves</p><p className="font-body text-[11px] text-text-tertiary">Sent 2 days ago</p></div>
-                  <span className="font-body text-[11px] font-medium text-amber-500 bg-amber-50 px-2.5 py-1 rounded-full">Pending</span>
-                </div>
-              </div>
-            </motion.div>
-          )}
+        {activeTab === 'requests' && (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Incoming Requests</Text>
+            {requests.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Ionicons name="person-add" size={24} color={colors.textTertiary} />
+                <Text style={styles.emptyTitle}>No pending requests</Text>
+              </View>
+            ) : (
+              requests.map((request, index) => (
+                <Animated.View
+                  key={request.id}
+                  style={[
+                    styles.requestCardWrap,
+                    {
+                      opacity: requestReveal,
+                      transform: [
+                        {
+                          translateY: requestReveal.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [12 + index * 6, 0],
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                >
+                  <View style={styles.requestCard}>
+                    <Text style={styles.requestName}>{request.name}</Text>
+                    <Text style={styles.requestMeta}>{request.school}</Text>
+                    <View style={styles.requestActions}>
+                      <TouchableOpacity style={styles.requestDecline} onPress={() => toggleRequest(request.id, false)}>
+                        <Ionicons name="close" size={14} color={colors.textSecondary} />
+                        <Text style={styles.requestDeclineText}>Decline</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.requestAccept} onPress={() => toggleRequest(request.id, true)}>
+                        <Ionicons name="checkmark" size={14} color="white" />
+                        <Text style={styles.requestAcceptText}>Accept</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </Animated.View>
+              ))
+            )}
+          </View>
+        )}
 
-          {/* ===== Sessions Tab ===== */}
-          {activeTab === 'sessions' && (
-            <motion.div key="sessions" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="px-6 mt-5">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-body text-xs font-semibold text-text-secondary uppercase tracking-wider">Study Sessions</h3>
-                <button onClick={() => setShowCreateSession(true)} className="h-8 px-4 bg-maroon text-white font-body text-xs font-semibold rounded-full flex items-center gap-1.5 active:scale-95 transition-transform shadow-md shadow-maroon/20">
-                  <Plus className="w-3.5 h-3.5" /> New Session
-                </button>
-              </div>
+        {activeTab === 'sessions' && (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Live Session</Text>
+            <View style={styles.sessionCardLive}>
+              <View style={styles.sessionBadge}>
+                <View style={styles.liveDot} />
+                <Text style={styles.liveText}>LIVE</Text>
+              </View>
+              <Text style={styles.sessionTitle}>AP Human Geography Multi-Person Review</Text>
+              <Text style={styles.sessionSub}>Laasya, Anya, Andrew, and others are in this room now.</Text>
+              <TouchableOpacity style={styles.joinBtn} onPress={openLiveSession}>
+                <Ionicons name="videocam" size={14} color="white" />
+                <Text style={styles.joinBtnText}>Join Live Video</Text>
+              </TouchableOpacity>
+            </View>
 
-              {/* Create Session Form */}
-              <AnimatePresence>
-                {showCreateSession && (
-                  <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden mb-4">
-                    <div className="bg-white rounded-3xl p-5 shadow-sm border border-gray-100">
-                      <div className="flex items-center justify-between mb-4">
-                        <h4 className="font-display text-base font-bold text-text-primary">Create Session</h4>
-                        <button onClick={() => setShowCreateSession(false)} className="w-7 h-7 rounded-full bg-bg-secondary flex items-center justify-center"><X className="w-3.5 h-3.5 text-text-tertiary" /></button>
-                      </div>
-                      <input type="text" placeholder="Session title (e.g. Unit 5 Review)" value={newSessionTitle} onChange={(e) => setNewSessionTitle(e.target.value)} className="w-full h-11 px-4 bg-bg-secondary rounded-xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none mb-3 focus:ring-2 focus:ring-maroon/20" />
-                      <input type="text" placeholder="Course (e.g. AP Biology)" value={newSessionCourse} onChange={(e) => setNewSessionCourse(e.target.value)} className="w-full h-11 px-4 bg-bg-secondary rounded-xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none mb-3 focus:ring-2 focus:ring-maroon/20" />
-                      <div className="grid grid-cols-2 gap-3 mb-4">
-                        <div>
-                          <label className="font-body text-[10px] font-semibold text-text-tertiary uppercase mb-1 block">Date</label>
-                          <input type="text" placeholder="e.g. Tomorrow" value={newSessionDate} onChange={(e) => setNewSessionDate(e.target.value)} className="w-full h-11 px-4 bg-bg-secondary rounded-xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20" />
-                        </div>
-                        <div>
-                          <label className="font-body text-[10px] font-semibold text-text-tertiary uppercase mb-1 block">Time</label>
-                          <input type="text" placeholder="e.g. 5:00 PM" value={newSessionTime} onChange={(e) => setNewSessionTime(e.target.value)} className="w-full h-11 px-4 bg-bg-secondary rounded-xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20" />
-                        </div>
-                      </div>
-                      <button onClick={createSession} disabled={!newSessionTitle.trim() || !newSessionCourse.trim()} className={`w-full h-11 rounded-full font-body text-sm font-semibold flex items-center justify-center gap-2 transition-all ${newSessionTitle.trim() && newSessionCourse.trim() ? 'bg-maroon text-white shadow-md shadow-maroon/20' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
-                        <Calendar className="w-4 h-4" /> Create Session
-                      </button>
-                    </div>
-                  </motion.div>
+            <View style={styles.sessionHeaderRow}>
+              <Text style={styles.sectionLabel}>Upcoming Sessions</Text>
+              <TouchableOpacity style={styles.createSessionBtn} onPress={openCreateSessionEditor}>
+                <Ionicons name="add" size={14} color="white" />
+                <Text style={styles.createSessionText}>Create</Text>
+              </TouchableOpacity>
+            </View>
+
+            {upcomingSessions.map((session) => (
+              <View key={session.id} style={styles.sessionCard}>
+                <Text style={styles.sessionCourse}>{session.course}</Text>
+                <Text style={styles.sessionTitle}>{session.title}</Text>
+                <Text style={styles.sessionMeta}>{session.time}</Text>
+                <Text style={styles.sessionParticipants} numberOfLines={1}>
+                  {session.participants.join(', ')}
+                </Text>
+
+                <View style={styles.sessionActionsRow}>
+                  <TouchableOpacity
+                    style={[styles.rsvpBtn, session.rsvped && styles.rsvpBtnActive]}
+                    onPress={() => toggleRsvp(session.id)}
+                  >
+                    <Text style={[styles.rsvpText, session.rsvped && styles.rsvpTextActive]}>
+                      {session.rsvped ? 'RSVPed' : 'RSVP'}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.openSessionBtn} onPress={() => openSession(session)}>
+                    <Text style={styles.openSessionBtnText}>Open Session</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {session.createdByMe && (
+                  <View style={styles.ownerActions}>
+                    <TouchableOpacity style={styles.ownerActionBtn} onPress={() => openEditSessionEditor(session)}>
+                      <Ionicons name="pencil" size={14} color={colors.maroon} />
+                      <Text style={styles.ownerActionText}>Edit</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.ownerActionBtn} onPress={() => deleteSession(session.id)}>
+                      <Ionicons name="trash" size={14} color="#b91c1c" />
+                      <Text style={styles.ownerActionDangerText}>Delete</Text>
+                    </TouchableOpacity>
+                  </View>
                 )}
-              </AnimatePresence>
+              </View>
+            ))}
+          </View>
+        )}
 
-              {/* Session Cards */}
-              <div className="flex flex-col gap-3">
-                {sessions.map((session, i) => {
-                  const sessionHost = getFriendById(session.hostId);
-                  const sessionParticipants = session.participantIds.map((pid) => getFriendById(pid)).filter(Boolean) as Friend[];
-                  return (
-                    <motion.div key={session.id} initial={{ y: 15, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.05 * i }} className="bg-white rounded-2xl p-4 shadow-sm shadow-black/3">
-                      <div className="flex items-start justify-between mb-3">
-                        <div>
-                          <div className="flex items-center gap-2 mb-1">
-                            {session.isLive && <span className="flex items-center gap-1 px-2 py-0.5 bg-red-50 rounded-full"><div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" /><span className="font-body text-[10px] font-bold text-red-500">LIVE</span></span>}
-                            <span className="font-body text-[10px] text-text-tertiary bg-bg-secondary px-2 py-0.5 rounded-full">{session.course}</span>
-                          </div>
-                          <h4 className="font-body text-sm font-bold text-text-primary">{session.title}</h4>
-                        </div>
-                        <div className="text-right">
-                          <p className="font-body text-[11px] font-medium text-text-primary">{session.date}</p>
-                          <p className="font-body text-[11px] text-text-tertiary">{session.time}</p>
-                        </div>
-                      </div>
-
-                      {/* Host + Participants */}
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <div className="flex items-center -space-x-2">
-                            {sessionHost ? (
-                              <Avatar color={sessionHost.color} iconColor={sessionHost.iconColor} size={28} className="border-2 border-white ring-1 ring-gray-100" />
-                            ) : (
-                              <div className="w-7 h-7 rounded-full bg-maroon/20 flex items-center justify-center border-2 border-white ring-1 ring-gray-100">
-                                {profilePicture ? <img src={profilePicture} alt="You" className="w-full h-full rounded-full object-cover" /> : <User className="w-3.5 h-3.5 text-maroon" />}
-                              </div>
-                            )}
-                            {sessionParticipants.slice(0, 3).map((p) => (
-                              <Avatar key={p.id} color={p.color} iconColor={p.iconColor} size={28} className="border-2 border-white ring-1 ring-gray-100" />
-                            ))}
-                          </div>
-                          <span className="font-body text-[11px] text-text-tertiary">{sessionParticipants.length + 1}/{session.maxParticipants}</span>
-                        </div>
-
-                        {session.isLive ? (
-                          <button onClick={() => setInGroupCall(session)} className="h-9 px-4 bg-maroon text-white font-body text-xs font-semibold rounded-full flex items-center gap-1.5 active:scale-95 transition-transform shadow-md shadow-maroon/20">
-                            <Phone className="w-3.5 h-3.5" /> Join Call
-                          </button>
-                        ) : joinedSessions.has(session.id) ? (
-                          <span className="h-9 px-4 bg-green-50 text-green-700 font-body text-xs font-semibold rounded-full flex items-center gap-1.5">
-                            <Check className="w-3.5 h-3.5" /> Joined
-                          </span>
-                        ) : (
-                          <button onClick={() => joinSession(session.id)} className="h-9 px-4 bg-maroon/10 text-maroon font-body text-xs font-semibold rounded-full flex items-center gap-1.5 active:scale-95 transition-transform">
-                            <Users className="w-3.5 h-3.5" /> RSVP
-                          </button>
-                        )}
-                      </div>
-
-                      {/* Host info */}
-                      <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-gray-50">
-                        <Clock className="w-3 h-3 text-text-tertiary" />
-                        <span className="font-body text-[11px] text-text-tertiary">Hosted by {sessionHost ? sessionHost.name : userName || 'You'}</span>
-                      </div>
-                    </motion.div>
-                  );
-                })}
-              </div>
-            </motion.div>
-          )}
-
-          {/* ===== Discover Tab ===== */}
-          {activeTab === 'discover' && (
-            <motion.div key="discover" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="px-6 mt-5">
-              <div className="bg-maroon/5 rounded-2xl p-4 mb-5">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-maroon/10 flex items-center justify-center shrink-0 mt-0.5"><UserPlus className="w-5 h-5 text-maroon" /></div>
-                  <div><p className="font-body text-sm font-semibold text-text-primary">Find Study Partners</p><p className="font-body text-xs text-text-secondary mt-0.5 leading-relaxed">Connect with classmates who share your courses and study together.</p></div>
-                </div>
-              </div>
-              <h3 className="font-body text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">Suggested for You</h3>
-              <div className="flex flex-col gap-2.5">
-                {discoverPeople.map((person, i) => (
-                  <motion.div key={person.id} initial={{ y: 15, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.05 * i }} className="bg-white rounded-2xl p-4 shadow-sm shadow-black/3">
-                    <div className="flex items-center gap-3">
-                      <div className="relative shrink-0">
-                        <Avatar color={person.color} iconColor={person.iconColor} size={48} />
-                        <div className={`absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full border-2 border-white ${statusColor(person.status)}`} />
-                      </div>
-                      <div className="flex-1 min-w-0"><p className="font-body text-sm font-semibold text-text-primary">{person.name}</p><p className="font-body text-[11px] text-text-tertiary">{person.school} • {person.mutualFriends} mutual friends</p></div>
-                      <button onClick={() => { if (!sentRequests.includes(person.id)) setSentRequests([...sentRequests, person.id]); }} className={`h-9 px-4 rounded-full font-body text-xs font-semibold transition-all active:scale-[0.95] flex items-center gap-1.5 ${sentRequests.includes(person.id) ? 'bg-bg-secondary text-text-tertiary' : 'bg-maroon text-white shadow-md shadow-maroon/20'}`}>
-                        {sentRequests.includes(person.id) ? <><Check className="w-3.5 h-3.5" /> Sent</> : <><UserPlus className="w-3.5 h-3.5" /> Add</>}
-                      </button>
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-              <motion.div initial={{ y: 15, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.3 }} className="mt-5 bg-white rounded-2xl p-5 shadow-sm shadow-black/3 text-center">
-                <div className="w-12 h-12 rounded-full bg-maroon/5 flex items-center justify-center mx-auto mb-3"><UserPlus className="w-5 h-5 text-maroon" /></div>
-                <p className="font-body text-sm font-semibold text-text-primary">Invite by Link</p>
-                <p className="font-body text-xs text-text-tertiary mt-1 mb-3">Share your invite link with friends</p>
-                <button className="h-10 px-6 bg-maroon text-white font-body font-semibold text-sm rounded-full active:scale-[0.97] transition-transform shadow-md shadow-maroon/20">Copy Invite Link</button>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+        {activeTab === 'discover' && (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Discover Friends</Text>
+            {discoverPeople.map((person) => (
+              <View key={person.id} style={styles.discoverCard}>
+                <View style={styles.discoverAvatar}>
+                  <Ionicons name="person" size={18} color={colors.maroon} />
+                </View>
+                <View style={styles.discoverInfo}>
+                  <Text style={styles.discoverName}>{person.name}</Text>
+                  <Text style={styles.discoverSchool}>{person.school}</Text>
+                </View>
+                <TouchableOpacity
+                  style={[styles.discoverAddBtn, sentDiscoverInvites.has(person.id) && styles.discoverAddBtnSent]}
+                  onPress={() => sendDiscoverInvite(person)}
+                  disabled={sentDiscoverInvites.has(person.id)}
+                >
+                  <Text style={styles.discoverAddText}>{sentDiscoverInvites.has(person.id) ? 'Requested' : 'Add'}</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        )}
+      </ScrollView>
 
       <BottomNav active="people" onHome={onHome} onScan={onScan} onFriends={() => {}} onFiles={onFiles} />
-    </div>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.bgSecondary },
+  scroll: { flex: 1 },
+  scrollContent: { paddingTop: 56, paddingHorizontal: 24, paddingBottom: 120 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  title: { fontSize: 28, fontWeight: '700', color: colors.textPrimary },
+  subtitle: { fontSize: 14, color: colors.textSecondary, marginTop: 4 },
+  avatarWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: `${colors.maroon}18`,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatar: { width: '100%', height: '100%' },
+
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    borderRadius: 16,
+    paddingHorizontal: 20,
+    height: 48,
+    gap: 12,
+    marginTop: 20,
+  },
+  searchInput: { flex: 1, fontSize: 14, color: colors.textPrimary, paddingVertical: 0 },
+
+  tabs: { flexDirection: 'row', gap: 8, marginTop: 20 },
+  tab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: 'white',
+  },
+  tabActive: { backgroundColor: colors.maroon },
+  tabText: { fontSize: 14, fontWeight: '500', color: colors.textSecondary },
+  tabTextActive: { color: 'white' },
+  tabBadge: { backgroundColor: `${colors.maroon}18`, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10 },
+  tabBadgeActive: { backgroundColor: 'rgba(255,255,255,0.2)' },
+  tabBadgeText: { fontSize: 10, fontWeight: '700', color: colors.maroon },
+  tabBadgeTextActive: { color: 'white' },
+  feedbackBanner: {
+    marginTop: 10,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+  },
+  feedbackText: { color: 'white', fontSize: 12, fontWeight: '700' },
+
+  section: { marginTop: 24 },
+  sectionLabel: { fontSize: 12, fontWeight: '600', color: colors.textSecondary, marginBottom: 12, letterSpacing: 0.5 },
+  horizontalList: { gap: 12, paddingBottom: 8 },
+  friendChip: { alignItems: 'center', width: 72 },
+  friendChipAvatar: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center' },
+  statusDot: {
+    position: 'absolute',
+    bottom: 18,
+    right: 8,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#9ca3af',
+    borderWidth: 2,
+    borderColor: 'white',
+  },
+  statusDotSmall: {
+    position: 'absolute',
+    left: 36,
+    top: 36,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#9ca3af',
+    borderWidth: 2,
+    borderColor: 'white',
+  },
+  statusOnline: { backgroundColor: '#22c55e' },
+  statusStudying: { backgroundColor: '#f59e0b' },
+  friendChipName: { fontSize: 11, fontWeight: '500', color: colors.textPrimary, marginTop: 6, maxWidth: 72 },
+  friendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 8,
+  },
+  friendAvatar: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
+  friendInfo: { flex: 1, marginLeft: 12 },
+  friendName: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
+  friendStatus: { fontSize: 11, color: '#22c55e' },
+  friendStatusStudying: { color: '#f59e0b' },
+  friendActions: { flexDirection: 'row', gap: 4 },
+  actionBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: `${colors.maroon}12`,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  requestCardWrap: { marginBottom: 10 },
+  requestCard: { backgroundColor: 'white', borderRadius: 16, padding: 16 },
+  requestName: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
+  requestMeta: { fontSize: 12, color: colors.textSecondary, marginTop: 4 },
+  requestActions: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  requestDecline: {
+    flex: 1,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#f3f1f1',
+    flexDirection: 'row',
+    gap: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  requestDeclineText: { fontSize: 13, color: colors.textSecondary, fontWeight: '700' },
+  requestAccept: {
+    flex: 1,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.maroon,
+    flexDirection: 'row',
+    gap: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  requestAcceptText: { fontSize: 13, color: 'white', fontWeight: '700' },
+  emptyState: { backgroundColor: 'white', borderRadius: 16, padding: 22, alignItems: 'center' },
+  emptyTitle: { marginTop: 8, fontWeight: '700', color: colors.textPrimary },
+
+  sessionCardLive: { backgroundColor: 'white', borderRadius: 16, padding: 16 },
+  sessionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 16 },
+  createSessionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.maroon,
+    borderRadius: 16,
+    height: 30,
+    paddingHorizontal: 10,
+  },
+  createSessionText: { color: 'white', fontSize: 11, fontWeight: '700' },
+  sessionCard: { backgroundColor: 'white', borderRadius: 16, padding: 14, marginBottom: 8 },
+  sessionBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-start',
+    backgroundColor: '#fef2f2',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#ef4444' },
+  liveText: { fontSize: 10, fontWeight: '700', color: '#ef4444' },
+  sessionCourse: { fontSize: 10, color: colors.textTertiary, marginTop: 8 },
+  sessionTitle: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
+  sessionSub: { fontSize: 12, color: colors.textSecondary, marginTop: 4 },
+  sessionMeta: { fontSize: 11, color: colors.textSecondary, marginTop: 6 },
+  sessionParticipants: { fontSize: 11, color: colors.textSecondary, marginTop: 4 },
+  joinBtn: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    height: 36,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 16,
+    backgroundColor: colors.maroon,
+    borderRadius: 18,
+  },
+  joinBtnText: { fontSize: 12, fontWeight: '600', color: 'white' },
+  sessionActionsRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  rsvpBtn: {
+    flex: 1,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: '#e5e1e1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rsvpBtnActive: { backgroundColor: `${colors.maroon}12`, borderColor: `${colors.maroon}40` },
+  rsvpText: { color: colors.textSecondary, fontSize: 12, fontWeight: '700' },
+  rsvpTextActive: { color: colors.maroon },
+  openSessionBtn: {
+    flex: 1,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.maroon,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  openSessionBtnText: { color: 'white', fontSize: 12, fontWeight: '700' },
+  ownerActions: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  ownerActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    backgroundColor: '#f7f4f4',
+  },
+  ownerActionText: { fontSize: 12, fontWeight: '700', color: colors.maroon },
+  ownerActionDangerText: { fontSize: 12, fontWeight: '700', color: '#b91c1c' },
+
+  discoverCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'white',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 8,
+  },
+  discoverAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: `${colors.maroon}15`,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  discoverInfo: { flex: 1 },
+  discoverName: { fontSize: 14, color: colors.textPrimary, fontWeight: '700' },
+  discoverSchool: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
+  discoverAddBtn: {
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.maroon,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  discoverAddBtnSent: { backgroundColor: '#166534' },
+  discoverAddText: { color: 'white', fontSize: 11, fontWeight: '700' },
+
+  chatHeader: {
+    paddingTop: 56,
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'white',
+  },
+  backBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#f2efef',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chatHeaderInfo: { flex: 1 },
+  chatFriendName: { fontSize: 16, fontWeight: '700', color: colors.textPrimary },
+  chatFriendStatus: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+  chatTopAction: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: `${colors.maroon}12`,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chatScroll: { flex: 1 },
+  chatContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 16 },
+  messageRow: { marginBottom: 10, alignItems: 'flex-start' },
+  messageRowMe: { alignItems: 'flex-end' },
+  messageBubble: { maxWidth: '78%', backgroundColor: 'white', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10 },
+  messageBubbleMe: { backgroundColor: colors.maroon },
+  messageText: { fontSize: 13, color: colors.textPrimary, lineHeight: 18 },
+  messageTextMe: { color: 'white' },
+  messageTime: { fontSize: 10, color: colors.textTertiary, marginTop: 4 },
+  messageTimeMe: { color: 'rgba(255,255,255,0.8)' },
+  chatComposer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: 'white',
+  },
+  chatInput: {
+    flex: 1,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#f3f1f1',
+    paddingHorizontal: 14,
+    fontSize: 13,
+    color: colors.textPrimary,
+  },
+  sendBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.maroon,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  callScreen: { flex: 1, backgroundColor: '#140709', paddingTop: 56, paddingHorizontal: 18, paddingBottom: 24 },
+  callGlowOne: {
+    position: 'absolute',
+    top: -80,
+    right: -60,
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: 'rgba(127,29,29,0.45)',
+  },
+  callGlowTwo: {
+    position: 'absolute',
+    bottom: 120,
+    left: -90,
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: 'rgba(30,64,175,0.22)',
+  },
+  callTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  callTopBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  callTopBtnPlaceholder: { width: 40, height: 40 },
+  callTitleWrap: { alignItems: 'center', flex: 1, paddingHorizontal: 12 },
+  callTypeLabel: { fontSize: 10, letterSpacing: 1, color: 'rgba(255,255,255,0.7)', fontWeight: '700' },
+  callTitleText: { fontSize: 18, color: 'white', fontWeight: '800', marginTop: 4 },
+  callClock: { fontSize: 12, color: 'rgba(255,255,255,0.75)', marginTop: 3 },
+  callStatusRow: { flexDirection: 'row', gap: 8, marginTop: 14, flexWrap: 'wrap' },
+  callStatusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(34,197,94,0.16)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+  },
+  callStatusPillMuted: { backgroundColor: 'rgba(220,38,38,0.18)' },
+  callStatusText: { color: 'white', fontSize: 11, fontWeight: '700' },
+
+  videoStage: { flex: 1, marginTop: 16 },
+  videoFocusTile: {
+    flex: 1,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    minHeight: 280,
+  },
+  videoFocusName: { color: 'white', fontSize: 20, fontWeight: '800' },
+  videoFocusHint: { color: 'rgba(255,255,255,0.8)', fontSize: 12 },
+  videoThumbRow: { flexDirection: 'row', gap: 8, marginTop: 10, paddingBottom: 8 },
+  videoThumb: {
+    width: 104,
+    height: 78,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+  },
+  videoThumbText: { color: 'white', fontSize: 11, fontWeight: '700' },
+
+  voiceStage: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
+  voiceAvatarOuter: {
+    width: 190,
+    height: 190,
+    borderRadius: 95,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  voiceAvatarInner: {
+    width: 142,
+    height: 142,
+    borderRadius: 71,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: `${colors.maroon}95`,
+  },
+  voiceName: { color: 'white', fontSize: 24, fontWeight: '800' },
+  voiceHint: { color: 'rgba(255,255,255,0.78)', fontSize: 12 },
+
+  callControlsDock: {
+    marginTop: 12,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+    paddingBottom: 4,
+  },
+  callControlBtn: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: 'white',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  callControlBtnActive: { backgroundColor: colors.maroon },
+  callEndBtn: { backgroundColor: '#dc2626' },
+
+  editorHeader: {
+    paddingTop: 56,
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  editorTitleWrap: { flex: 1 },
+  editorTitle: { fontSize: 22, fontWeight: '800', color: colors.textPrimary },
+  editorSubtitle: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+  editorScroll: { flex: 1 },
+  editorContent: { paddingHorizontal: 20, paddingBottom: 40 },
+  editorCard: { marginTop: 12, backgroundColor: 'white', borderRadius: 18, padding: 16 },
+  editorSaveBtn: {
+    marginTop: 18,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: colors.maroon,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  editorSaveText: { color: 'white', fontSize: 14, fontWeight: '700' },
+
+  modalLabel: { fontSize: 12, color: colors.textSecondary, fontWeight: '700', marginTop: 8, marginBottom: 6 },
+  modalInput: {
+    height: 46,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ece8e8',
+    backgroundColor: '#faf8f8',
+    paddingHorizontal: 12,
+    fontSize: 14,
+    color: colors.textPrimary,
+  },
+});

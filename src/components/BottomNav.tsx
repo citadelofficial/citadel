@@ -1,42 +1,85 @@
-import { Home, Camera, Users, Folder } from 'lucide-react';
+import React from 'react';
+import { View, TouchableOpacity, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { colors } from '../theme';
+
+type TabId = 'home' | 'scan' | 'people' | 'files';
 
 interface Props {
-  active: 'home' | 'scan' | 'people' | 'files';
+  active: TabId;
   onHome?: () => void;
   onScan?: () => void;
   onFriends?: () => void;
   onFiles?: () => void;
 }
 
+const items: { id: TabId; icon: keyof typeof Ionicons.glyphMap; label: string }[] = [
+  { id: 'home', icon: 'home', label: 'Home' },
+  { id: 'scan', icon: 'camera', label: 'Scan' },
+  { id: 'people', icon: 'people', label: 'People' },
+  { id: 'files', icon: 'folder', label: 'Files' },
+];
+
 export function BottomNav({ active, onHome, onScan, onFriends, onFiles }: Props) {
-  const items = [
-    { id: 'home' as const, icon: Home, label: 'Home', action: onHome },
-    { id: 'scan' as const, icon: Camera, label: 'Scan', action: onScan },
-    { id: 'people' as const, icon: Users, label: 'People', action: onFriends },
-    { id: 'files' as const, icon: Folder, label: 'Files', action: onFiles },
-  ];
+  const insets = useSafeAreaInsets();
+  const actions: Record<TabId, (() => void) | undefined> = {
+    home: onHome,
+    scan: onScan,
+    people: onFriends,
+    files: onFiles,
+  };
 
   return (
-    <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50">
-      <div className="flex items-center gap-2 bg-maroon rounded-full px-4 py-3 shadow-lg shadow-maroon/30">
+    <View style={[styles.container, { paddingBottom: Math.max(insets.bottom, 12) + 12 }]}>
+      <View style={styles.bar}>
         {items.map((item) => {
           const isActive = active === item.id;
           return (
-            <button
+            <TouchableOpacity
               key={item.id}
-              onClick={item.action}
-              className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 ${
-                isActive ? 'bg-white' : 'bg-transparent hover:bg-white/10'
-              }`}
+              onPress={actions[item.id]}
+              style={[styles.item, isActive && styles.itemActive]}
+              activeOpacity={0.8}
             >
-              <item.icon
-                className={`w-5 h-5 ${isActive ? 'text-maroon' : 'text-white/80'}`}
-                strokeWidth={isActive ? 2.2 : 1.8}
+              <Ionicons
+                name={item.icon}
+                size={22}
+                color={isActive ? colors.maroon : 'rgba(255,255,255,0.8)'}
               />
-            </button>
+            </TouchableOpacity>
           );
         })}
-      </div>
-    </div>
+      </View>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+  },
+  bar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.maroon,
+    borderRadius: 28,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 8,
+  },
+  item: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  itemActive: {
+    backgroundColor: 'white',
+  },
+});

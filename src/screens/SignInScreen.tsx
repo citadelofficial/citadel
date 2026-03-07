@@ -1,6 +1,20 @@
-import { useState, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, Shield, User, Camera, X, Eye, EyeOff } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  ScrollView,
+  Image,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  Animated,
+  Easing,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
+import { colors } from '../theme';
 
 interface Props {
   onSignIn: (profilePicture: string | null, displayName?: string) => void;
@@ -16,296 +30,388 @@ export function SignInScreen({ onSignIn, onBack, userName }: Props) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setProfilePicture(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+  const introOpacity = useRef(new Animated.Value(0)).current;
+  const introTranslate = useRef(new Animated.Value(18)).current;
+  const avatarPulse = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    introOpacity.setValue(0);
+    introTranslate.setValue(18);
+
+    Animated.parallel([
+      Animated.timing(introOpacity, {
+        toValue: 1,
+        duration: 320,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(introTranslate, {
+        toValue: 0,
+        duration: 340,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [mode, introOpacity, introTranslate]);
+
+  useEffect(() => {
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(avatarPulse, {
+          toValue: 1,
+          duration: 1100,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(avatarPulse, {
+          toValue: 0,
+          duration: 1100,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+
+    if (mode === 'signup') pulseLoop.start();
+    return () => pulseLoop.stop();
+  }, [mode, avatarPulse]);
+
+  const pickImage = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets[0]) {
+      setProfilePicture(result.assets[0].uri);
     }
   };
 
-  const removePhoto = () => {
-    setProfilePicture(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
+  const pulseScale = avatarPulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.16],
+  });
+
+  const pulseOpacity = avatarPulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.28, 0.08],
+  });
 
   return (
-    <div className="h-full w-full flex flex-col bg-white">
-      <div className="flex-1 overflow-y-auto hide-scrollbar px-8 pt-14 pb-8">
-        {/* Back button */}
-        <motion.button
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          onClick={onBack}
-          className="w-10 h-10 rounded-full bg-bg-secondary flex items-center justify-center mb-5"
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <View style={styles.blobTop} />
+      <View style={styles.blobBottom} />
+
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+        <TouchableOpacity onPress={onBack} style={styles.backBtn}>
+          <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
+        </TouchableOpacity>
+
+        <View style={styles.logoRow}>
+          <Ionicons name="shield-checkmark" size={24} color={colors.maroon} />
+          <Text style={styles.logoText}>Citadel</Text>
+        </View>
+
+        <View style={styles.toggleRow}>
+          <TouchableOpacity style={[styles.toggleBtn, mode === 'signup' && styles.toggleActive]} onPress={() => setMode('signup')}>
+            <Text style={[styles.toggleText, mode === 'signup' && styles.toggleTextActive]}>Sign Up</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.toggleBtn, mode === 'signin' && styles.toggleActive]} onPress={() => setMode('signin')}>
+            <Text style={[styles.toggleText, mode === 'signin' && styles.toggleTextActive]}>Sign In</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Animated.View
+          style={{
+            opacity: introOpacity,
+            transform: [{ translateY: introTranslate }],
+          }}
         >
-          <ArrowLeft className="w-5 h-5 text-text-primary" />
-        </motion.button>
+          <Text style={styles.h1}>
+            {mode === 'signup'
+              ? `Create your account${userName ? `, ${userName}` : ''}`
+              : `Welcome back${userName ? `, ${userName}` : ''}`}
+          </Text>
+          <Text style={styles.subtitle}>
+            {mode === 'signup' ? 'Build your study identity in seconds.' : 'Sign in to continue your workflow.'}
+          </Text>
 
-        {/* Logo */}
-        <motion.div
-          initial={{ y: -10, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.1 }}
-          className="flex items-center gap-2 mb-6"
-        >
-          <Shield className="w-6 h-6 text-maroon" strokeWidth={1.5} />
-          <span className="font-display text-lg font-semibold text-maroon">Citadel</span>
-        </motion.div>
+          {mode === 'signup' && (
+            <View style={styles.photoCard}>
+              <Text style={styles.photoTitle}>Upload a profile picture</Text>
+              <Text style={styles.photoSubtitle}>A clear photo helps friends find you faster.</Text>
 
-        {/* Toggle Sign In / Sign Up */}
-        <motion.div
-          initial={{ y: 10, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.15 }}
-          className="flex items-center gap-1 bg-bg-secondary rounded-full p-1 mb-6"
-        >
-          <button
-            onClick={() => setMode('signup')}
-            className={`flex-1 py-2.5 rounded-full font-body text-sm font-semibold transition-all duration-300 ${
-              mode === 'signup'
-                ? 'bg-maroon text-white shadow-md shadow-maroon/20'
-                : 'text-text-secondary'
-            }`}
-          >
-            Sign Up
-          </button>
-          <button
-            onClick={() => setMode('signin')}
-            className={`flex-1 py-2.5 rounded-full font-body text-sm font-semibold transition-all duration-300 ${
-              mode === 'signin'
-                ? 'bg-maroon text-white shadow-md shadow-maroon/20'
-                : 'text-text-secondary'
-            }`}
-          >
-            Sign In
-          </button>
-        </motion.div>
+              <View style={styles.avatarStage}>
+                <Animated.View
+                  style={[
+                    styles.avatarPulse,
+                    {
+                      transform: [{ scale: pulseScale }],
+                      opacity: pulseOpacity,
+                    },
+                  ]}
+                />
 
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={mode}
-            initial={{ opacity: 0, x: mode === 'signup' ? -30 : 30 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: mode === 'signup' ? 30 : -30 }}
-            transition={{ duration: 0.25 }}
-          >
-            {/* Heading */}
-            <h1 className="font-display text-[1.7rem] font-bold text-text-primary leading-tight">
-              {mode === 'signup'
-                ? `Create your account${userName ? `, ${userName}` : ''}`
-                : `Welcome back${userName ? `, ${userName}` : ''}`}
-            </h1>
-            <p className="font-body text-text-secondary text-sm mt-1.5 mb-6">
-              {mode === 'signup'
-                ? 'Set up your profile to get started'
-                : 'Sign in to continue your studies'}
-            </p>
-
-            {/* Profile Picture Upload (Sign Up only) */}
-            {mode === 'signup' && (
-              <motion.div
-                initial={{ scale: 0.9, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ delay: 0.1 }}
-                className="flex flex-col items-center mb-7"
-              >
-                <div className="relative">
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-24 h-24 rounded-full overflow-hidden border-[3px] border-dashed border-maroon/25 flex items-center justify-center bg-bg-secondary transition-all hover:border-maroon/50 group"
-                  >
-                    {profilePicture ? (
-                      <img
-                        src={profilePicture}
-                        alt="Profile"
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div className="flex flex-col items-center justify-center">
-                        <User className="w-10 h-10 text-text-tertiary/60 group-hover:text-maroon/50 transition-colors" strokeWidth={1.2} />
-                      </div>
-                    )}
-                  </button>
-
-                  {/* Camera badge */}
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="absolute -bottom-1 -right-1 w-8 h-8 rounded-full bg-maroon flex items-center justify-center shadow-lg shadow-maroon/30 border-2 border-white"
-                  >
-                    <Camera className="w-3.5 h-3.5 text-white" />
-                  </button>
-
-                  {/* Remove photo */}
-                  {profilePicture && (
-                    <motion.button
-                      initial={{ scale: 0 }}
-                      animate={{ scale: 1 }}
-                      onClick={removePhoto}
-                      className="absolute -top-1 -right-1 w-7 h-7 rounded-full bg-red-500 flex items-center justify-center shadow-md border-2 border-white"
-                    >
-                      <X className="w-3.5 h-3.5 text-white" />
-                    </motion.button>
+                <TouchableOpacity onPress={pickImage} style={styles.avatarWrap} activeOpacity={0.9}>
+                  {profilePicture ? (
+                    <Image source={{ uri: profilePicture }} style={styles.avatar} />
+                  ) : (
+                    <View style={styles.avatarEmpty}>
+                      <Ionicons name="person" size={42} color={colors.textTertiary} />
+                    </View>
                   )}
-                </div>
+                </TouchableOpacity>
+              </View>
 
-                <p className="font-body text-xs text-text-tertiary mt-3">
-                  {profilePicture ? 'Tap to change photo' : 'Upload a profile picture'}
-                </p>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  onChange={handleFileUpload}
-                  className="hidden"
-                />
-              </motion.div>
-            )}
+              <TouchableOpacity onPress={pickImage} style={styles.photoActionBtn} activeOpacity={0.85}>
+                <Ionicons name="images" size={18} color="white" />
+                <Text style={styles.photoActionBtnText}>{profilePicture ? 'Change Photo' : 'Choose Photo'}</Text>
+              </TouchableOpacity>
 
-            {/* Form fields */}
-            <div className="flex flex-col gap-3.5">
-              {mode === 'signup' && (
-                <div>
-                  <label className="font-body text-xs font-medium text-text-secondary mb-1.5 block">
-                    Full Name
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Your name"
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    className="w-full h-[52px] px-5 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20 transition-shadow"
-                  />
-                </div>
+              {profilePicture && (
+                <TouchableOpacity onPress={() => setProfilePicture(null)} style={styles.photoRemoveBtn}>
+                  <Ionicons name="trash-outline" size={16} color={colors.textSecondary} />
+                  <Text style={styles.photoRemoveText}>Remove</Text>
+                </TouchableOpacity>
               )}
+            </View>
+          )}
 
-              <div>
-                <label className="font-body text-xs font-medium text-text-secondary mb-1.5 block">
-                  Email
-                </label>
-                <input
-                  type="email"
-                  placeholder="School Email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full h-[52px] px-5 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20 transition-shadow"
-                />
-              </div>
+          {mode === 'signup' && (
+            <View style={styles.field}>
+              <Text style={styles.label}>Full Name</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Your name"
+                placeholderTextColor={colors.textTertiary}
+                value={displayName}
+                onChangeText={setDisplayName}
+              />
+            </View>
+          )}
 
-              <div>
-                <label className="font-body text-xs font-medium text-text-secondary mb-1.5 block">
-                  Password
-                </label>
-                <div className="relative">
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    placeholder="Password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full h-[52px] px-5 pr-12 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20 transition-shadow"
-                  />
-                  <button
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2"
-                  >
-                    {showPassword ? (
-                      <EyeOff className="w-4.5 h-4.5 text-text-tertiary" />
-                    ) : (
-                      <Eye className="w-4.5 h-4.5 text-text-tertiary" />
-                    )}
-                  </button>
-                </div>
-              </div>
+          <View style={styles.field}>
+            <Text style={styles.label}>Email</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="School Email"
+              placeholderTextColor={colors.textTertiary}
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+            />
+          </View>
 
-              {mode === 'signup' && (
-                <div>
-                  <label className="font-body text-xs font-medium text-text-secondary mb-1.5 block">
-                    Confirm Password
-                  </label>
-                  <input
-                    type="password"
-                    placeholder="Confirm Password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    className="w-full h-[52px] px-5 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20 transition-shadow"
-                  />
-                </div>
-              )}
+          <View style={styles.field}>
+            <Text style={styles.label}>Password</Text>
+            <View style={styles.passwordWrap}>
+              <TextInput
+                style={[styles.input, styles.inputPassword]}
+                placeholder="Password"
+                placeholderTextColor={colors.textTertiary}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry={!showPassword}
+              />
+              <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeBtn}>
+                <Ionicons name={showPassword ? 'eye-off' : 'eye'} size={18} color={colors.textTertiary} />
+              </TouchableOpacity>
+            </View>
+          </View>
 
-              {mode === 'signin' && (
-                <button className="self-end font-body text-xs text-maroon font-medium mt-0.5">
-                  Forgot Password?
-                </button>
-              )}
-            </div>
+          {mode === 'signup' && (
+            <View style={styles.field}>
+              <Text style={styles.label}>Confirm Password</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Confirm Password"
+                placeholderTextColor={colors.textTertiary}
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                secureTextEntry
+              />
+            </View>
+          )}
 
-            {/* Action button */}
-            <button
-              onClick={() => onSignIn(profilePicture, mode === 'signup' ? displayName.trim() : undefined)}
-              className="w-full h-14 bg-maroon text-white font-body font-semibold text-base rounded-full mt-5 active:scale-[0.98] transition-transform shadow-lg shadow-maroon/25"
-            >
-              {mode === 'signup' ? 'Create Account' : 'Sign In'}
-            </button>
+          <TouchableOpacity
+            style={styles.submitBtn}
+            onPress={() => onSignIn(profilePicture, mode === 'signup' ? displayName.trim() : undefined)}
+            activeOpacity={0.88}
+          >
+            <Text style={styles.submitText}>{mode === 'signup' ? 'Create Account' : 'Sign In'}</Text>
+            <Ionicons name="arrow-forward" size={18} color="white" />
+          </TouchableOpacity>
 
-            {/* Divider */}
-            <div className="flex items-center gap-4 my-4">
-              <div className="flex-1 h-px bg-gray-200" />
-              <span className="font-body text-xs text-text-tertiary">or</span>
-              <div className="flex-1 h-px bg-gray-200" />
-            </div>
+          <View style={styles.divider}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>or</Text>
+            <View style={styles.dividerLine} />
+          </View>
 
-            {/* Social login */}
-            <button className="w-full h-13 bg-text-primary text-white font-body font-semibold text-sm rounded-full flex items-center justify-center gap-3 active:scale-[0.98] transition-transform">
-              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z" />
-              </svg>
-              Continue with Apple
-            </button>
-
-            <button className="w-full h-13 bg-white text-text-primary font-body font-semibold text-sm rounded-full flex items-center justify-center gap-3 active:scale-[0.98] transition-transform border border-gray-200 mt-2.5">
-              <svg className="w-5 h-5" viewBox="0 0 24 24">
-                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" />
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-              </svg>
-              Continue with Google
-            </button>
-
-            {/* Toggle mode text */}
-            <p className="text-center text-text-tertiary text-xs font-body mt-5 pb-4">
-              {mode === 'signup' ? (
-                <>
-                  Already have an account?{' '}
-                  <button
-                    onClick={() => setMode('signin')}
-                    className="text-maroon font-semibold underline"
-                  >
-                    Sign In
-                  </button>
-                </>
-              ) : (
-                <>
-                  Don&apos;t have an account?{' '}
-                  <button
-                    onClick={() => setMode('signup')}
-                    className="text-maroon font-semibold underline"
-                  >
-                    Sign Up
-                  </button>
-                </>
-              )}
-            </p>
-          </motion.div>
-        </AnimatePresence>
-      </div>
-    </div>
+          <TouchableOpacity style={styles.socialBtn}>
+            <Ionicons name="logo-apple" size={20} color="white" />
+            <Text style={styles.socialBtnText}>Continue with Apple</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.socialBtn, styles.socialBtnOutline]}>
+            <Ionicons name="logo-google" size={20} color={colors.textPrimary} />
+            <Text style={[styles.socialBtnText, styles.socialBtnTextDark]}>Continue with Google</Text>
+          </TouchableOpacity>
+        </Animated.View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#faf8f7' },
+  blobTop: {
+    position: 'absolute',
+    width: 250,
+    height: 250,
+    borderRadius: 125,
+    backgroundColor: '#f3e5e6',
+    top: -130,
+    right: -60,
+  },
+  blobBottom: {
+    position: 'absolute',
+    width: 190,
+    height: 190,
+    borderRadius: 95,
+    backgroundColor: '#f7ecec',
+    bottom: -90,
+    left: -30,
+  },
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: 28, paddingTop: 56, paddingBottom: 40 },
+  backBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'white',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: '#ece8e8',
+  },
+  logoRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 22 },
+  logoText: { fontSize: 18, fontWeight: '700', color: colors.maroon },
+  toggleRow: {
+    flexDirection: 'row',
+    backgroundColor: '#f0eded',
+    borderRadius: 24,
+    padding: 4,
+    marginBottom: 24,
+  },
+  toggleBtn: { flex: 1, paddingVertical: 10, borderRadius: 20, alignItems: 'center' },
+  toggleActive: { backgroundColor: colors.maroon },
+  toggleText: { fontSize: 14, fontWeight: '700', color: colors.textSecondary },
+  toggleTextActive: { color: 'white' },
+  h1: { fontSize: 28, fontWeight: '800', color: colors.textPrimary, marginBottom: 8 },
+  subtitle: { fontSize: 14, color: colors.textSecondary, marginBottom: 22 },
+  photoCard: {
+    backgroundColor: 'white',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: '#ece8e8',
+    padding: 18,
+    marginBottom: 22,
+  },
+  photoTitle: { fontSize: 18, fontWeight: '800', color: colors.textPrimary, marginBottom: 4 },
+  photoSubtitle: { fontSize: 13, color: colors.textSecondary, marginBottom: 14 },
+  avatarStage: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+    minHeight: 130,
+  },
+  avatarPulse: {
+    position: 'absolute',
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: `${colors.maroon}33`,
+  },
+  avatarWrap: {
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+    borderWidth: 3,
+    borderColor: `${colors.maroon}55`,
+    backgroundColor: '#f3f1f1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarEmpty: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' },
+  avatar: { width: '100%', height: '100%' },
+  photoActionBtn: {
+    height: 46,
+    borderRadius: 24,
+    backgroundColor: colors.maroon,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  photoActionBtnText: { color: 'white', fontSize: 14, fontWeight: '700' },
+  photoRemoveBtn: {
+    marginTop: 10,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: '#f5f4f4',
+  },
+  photoRemoveText: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
+  field: { marginBottom: 14 },
+  label: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, marginBottom: 7 },
+  input: {
+    height: 52,
+    paddingHorizontal: 18,
+    backgroundColor: 'white',
+    borderRadius: 14,
+    fontSize: 14,
+    color: colors.textPrimary,
+    borderWidth: 1,
+    borderColor: '#ece8e8',
+  },
+  passwordWrap: { position: 'relative' },
+  inputPassword: { paddingRight: 46 },
+  eyeBtn: { position: 'absolute', right: 14, top: 14 },
+  submitBtn: {
+    height: 56,
+    backgroundColor: colors.maroon,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 14,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  submitText: { fontSize: 16, fontWeight: '700', color: 'white' },
+  divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 18, gap: 12 },
+  dividerLine: { flex: 1, height: 1, backgroundColor: '#e8e5e5' },
+  dividerText: { fontSize: 12, color: colors.textTertiary },
+  socialBtn: {
+    height: 52,
+    backgroundColor: colors.textPrimary,
+    borderRadius: 26,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginBottom: 10,
+  },
+  socialBtnOutline: { backgroundColor: 'white', borderWidth: 1, borderColor: '#e5e2e2' },
+  socialBtnText: { fontSize: 14, fontWeight: '700', color: 'white' },
+  socialBtnTextDark: { color: colors.textPrimary },
+});

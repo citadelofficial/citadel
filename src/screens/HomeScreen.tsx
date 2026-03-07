@@ -1,259 +1,266 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Search, SlidersHorizontal, Plus, Heart, Users, FileText,
-  ArrowRight, User, X, BookOpen, Link2, Camera, Clock, Check,
-  GraduationCap, Palette, FlaskConical, Globe, ChevronDown, Trash2, ImagePlus,
-  Filter,
-} from 'lucide-react';
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  ScrollView,
+  Image,
+  StyleSheet,
+  Dimensions,
+  FlatList,
+  Modal,
+  KeyboardAvoidingView,
+  Platform,
+  Animated,
+  Easing,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { BottomNav } from '../components/BottomNav';
-import type { ClassData } from '../App';
+import { colors } from '../theme';
+import type { ClassData, FriendData, UserData, UnitData } from '../types';
+import { friendsDirectory } from '../data/friends';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const CARD_WIDTH = SCREEN_WIDTH - 48 - 72;
+const CARD_GAP = 16;
+
+type SearchFilter = 'all' | 'classes' | 'files' | 'friends' | 'actions';
+type ShortcutType = 'class' | 'friend' | 'scan' | 'files';
+type ClassTemplate = 'Standard' | 'AP Exam' | 'Lab' | 'Seminar';
+
+type SearchResult =
+  | { id: string; type: 'class'; title: string; subtitle: string; classId: string }
+  | { id: string; type: 'file'; title: string; subtitle: string; classId: string }
+  | { id: string; type: 'friend'; title: string; subtitle: string }
+  | { id: string; type: 'action'; title: string; subtitle: string; actionId: 'scan' | 'files' | 'friends' };
+
+interface ShortcutItem {
+  id: string;
+  type: ShortcutType;
+  label: string;
+  refId?: string;
+}
 
 interface Props {
   onCourseOpen: (classId: string) => void;
-  onFilesOpen: () => void;
+  onFilesOpen: (classId?: string) => void;
   onScanOpen: () => void;
   onFriendsOpen: () => void;
   userName?: string;
   profilePicture?: string | null;
+  grade?: string;
+  school?: string;
+  onUpdateProfile: (updates: Partial<UserData>) => void;
   classes: ClassData[];
   onAddClass: (cls: ClassData) => void;
   onRemoveClass: (id: string) => void;
 }
 
-type ShortcutType = 'course' | 'person' | 'scan' | 'link';
+const blocks = ['Block 1', 'Block 2', 'Block 3', 'Block 4', 'Block 5', 'Block 6', 'Block 7', 'Block 8'];
+const classGoals = ['Notes', 'Projects', 'Exam Prep', 'Labs'];
 
-interface Shortcut {
-  id: string;
-  type: ShortcutType;
-  label: string;
-  avatar?: string;
-  url?: string;
+function makeClassCode(title: string) {
+  const prefix = title
+    .replace(/[^A-Za-z0-9 ]/g, '')
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || '')
+    .join('') || 'CL';
+  const suffix = Math.random().toString(36).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(2, 6);
+  return `${prefix}-${suffix}`;
 }
 
-const defaultShortcuts: Shortcut[] = [
-  { id: '1', type: 'course', label: 'Unit 4: AP HUG' },
-  { id: '2', type: 'person', label: 'Zara', avatar: '' },
-  { id: '3', type: 'scan', label: 'Quick Scan to Math' },
-];
+function buildStarterUnits(template: ClassTemplate): UnitData[] {
+  const base =
+    template === 'AP Exam'
+      ? ['Unit 1 Review', 'Unit 2 Review', 'Practice FRQ']
+      : template === 'Lab'
+        ? ['Lab Setup', 'Lab Notebook', 'Lab Analysis']
+        : template === 'Seminar'
+          ? ['Discussion 1', 'Reading Circle', 'Final Reflection']
+          : ['Week 1', 'Week 2', 'Week 3'];
 
-const shortcutOptions = [
-  { type: 'course' as ShortcutType, icon: BookOpen, title: 'Course Unit', desc: 'Quick access to a specific unit', color: 'bg-blue-50', iconColor: 'text-blue-600' },
-  { type: 'person' as ShortcutType, icon: Users, title: 'Study Buddy', desc: "Jump to a friend's profile", color: 'bg-green-50', iconColor: 'text-green-600' },
-  { type: 'scan' as ShortcutType, icon: Camera, title: 'Quick Scan', desc: 'Scan notes for a specific course', color: 'bg-amber-50', iconColor: 'text-amber-600' },
-  { type: 'link' as ShortcutType, icon: Link2, title: 'Resource Link', desc: 'Save a link to study material', color: 'bg-purple-50', iconColor: 'text-purple-600' },
-];
+  return base.map((title, idx) => ({
+    id: idx + 1,
+    title,
+    pages: 0,
+    collaborators: 0,
+    examDate: 'TBD',
+    daysLeft: 0,
+    subUnits: [
+      { id: `${idx + 1}.1`, title: 'Core Concepts', notes: [] },
+      { id: `${idx + 1}.2`, title: 'Resources', notes: [] },
+    ],
+  }));
+}
 
-const courseSuggestions = ['AP Human Geography', 'AP Biology', 'DE English', 'AP Calculus AB', 'AP US History', 'Physics 1'];
-
-const friendSuggestions = [
-  { name: 'Zara', color: '#DBEAFE', iconColor: 'text-blue-500' },
-  { name: 'Annika', color: '#FCE7F3', iconColor: 'text-pink-500' },
-  { name: 'Jack', color: '#D1FAE5', iconColor: 'text-emerald-500' },
-  { name: 'Will', color: '#FEF3C7', iconColor: 'text-amber-500' },
-  { name: 'Nick', color: '#EDE9FE', iconColor: 'text-violet-500' },
-  { name: 'Paul', color: '#CCFBF1', iconColor: 'text-teal-500' },
-];
-
-const availableClassTemplates = [
-  { title: 'AP Calculus AB', icon: GraduationCap, color: '#7c3aed', image: 'https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=600&h=500&fit=crop' },
-  { title: 'AP US History', icon: Globe, color: '#b45309', image: 'https://images.unsplash.com/photo-1461360370896-922624d12a74?w=600&h=500&fit=crop' },
-  { title: 'Physics 1', icon: FlaskConical, color: '#0369a1', image: 'https://images.unsplash.com/photo-1636466497217-26a8cbeaf0aa?w=600&h=500&fit=crop' },
-  { title: 'AP Art History', icon: Palette, color: '#be185d', image: 'https://images.unsplash.com/photo-1544967082-d9d25d867d66?w=600&h=500&fit=crop' },
-  { title: 'AP Chemistry', icon: FlaskConical, color: '#047857', image: 'https://images.unsplash.com/photo-1532094349884-543bc11b234d?w=600&h=500&fit=crop' },
-  { title: 'DE Statistics', icon: GraduationCap, color: '#6d28d9', image: 'https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=600&h=500&fit=crop' },
-];
-
-const blockOptions = ['Block 1', 'Block 2', 'Block 3', 'Block 4', 'Block 5', 'Block 6', 'Block 7', 'Block 8'];
-
-// Friends list for search
-const friendNames = ['Zara Ramadan', 'Annika Shah', 'Jack Swartz', 'Will Caling', 'Nick Burrus', 'Paul Van Haver'];
-
-export function HomeScreen({ onCourseOpen, onFilesOpen, onScanOpen, onFriendsOpen, userName, profilePicture, classes, onAddClass, onRemoveClass }: Props) {
-  const [shortcuts, setShortcuts] = useState<Shortcut[]>(defaultShortcuts);
+export function HomeScreen({
+  onCourseOpen,
+  onFilesOpen,
+  onScanOpen,
+  onFriendsOpen,
+  userName,
+  profilePicture,
+  grade,
+  school,
+  onUpdateProfile,
+  classes,
+  onAddClass,
+  onRemoveClass,
+}: Props) {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchFilter, setSearchFilter] = useState<SearchFilter>('all');
+  const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [currentCardIndex, setCurrentCardIndex] = useState(0);
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [modalStep, setModalStep] = useState<'type' | 'detail'>('type');
-  const [selectedType, setSelectedType] = useState<ShortcutType | null>(null);
-  const [shortcutLabel, setShortcutLabel] = useState('');
-  const [shortcutUrl, setShortcutUrl] = useState('');
-  const [shortcutAdded, setShortcutAdded] = useState(false);
-
-  const [showAddClassModal, setShowAddClassModal] = useState(false);
-  const [addClassStep, setAddClassStep] = useState<'browse' | 'custom' | 'configure'>('browse');
-  const [selectedTemplate, setSelectedTemplate] = useState<typeof availableClassTemplates[0] | null>(null);
-  const [customClassName, setCustomClassName] = useState('');
-  const [selectedBlock, setSelectedBlock] = useState('');
-  const [showBlockDropdown, setShowBlockDropdown] = useState(false);
-  const [classAdded, setClassAdded] = useState(false);
-  const [customClassImage, setCustomClassImage] = useState<string | null>(null);
-
   const [likedCards, setLikedCards] = useState<Set<string>>(new Set());
 
-  // Search state
-  const [searchQuery, setSearchQuery] = useState('');
-  const [showSearchResults, setShowSearchResults] = useState(false);
-  const searchRef = useRef<HTMLDivElement>(null);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [profileName, setProfileName] = useState(userName || '');
+  const [profileGrade, setProfileGrade] = useState(grade || '');
+  const [profileSchool, setProfileSchool] = useState(school || '');
 
-  // Filter state
-  const [showFilterModal, setShowFilterModal] = useState(false);
-  const [sortBy, setSortBy] = useState('recent');
-  const [filterChips, setFilterChips] = useState<Set<string>>(new Set(['all']));
+  const [showShortcutModal, setShowShortcutModal] = useState(false);
+  const [shortcutType, setShortcutType] = useState<ShortcutType>('class');
+  const [shortcutLabel, setShortcutLabel] = useState('');
+  const [shortcutRef, setShortcutRef] = useState<string | undefined>(classes[0]?.id);
+  const [shortcuts, setShortcuts] = useState<ShortcutItem[]>([
+    { id: 'shortcut-class', type: 'class', label: 'Unit 4: AP HUG', refId: classes[0]?.id },
+    { id: 'shortcut-friend', type: 'friend', label: 'Laasya', refId: 'laasya' },
+    { id: 'shortcut-scan', type: 'scan', label: 'Quick Scan' },
+  ]);
 
-  const totalCards = classes.length + 1;
+  const [showClassModal, setShowClassModal] = useState(false);
+  const [newClassName, setNewClassName] = useState('');
+  const [newClassBlock, setNewClassBlock] = useState('Block 1');
+  const [newClassTemplate, setNewClassTemplate] = useState<ClassTemplate>('Standard');
+  const [newClassColor, setNewClassColor] = useState(colors.maroon);
+  const [newClassGoal, setNewClassGoal] = useState('Notes');
+  const [newClassImage, setNewClassImage] = useState<string | null>(null);
 
-  // Carousel measurement
-  const carouselRef = useRef<HTMLDivElement>(null);
-  const [containerWidth, setContainerWidth] = useState(0);
-  const cardGap = 16;
-  const cardPad = 24;
-  const cardWidth = containerWidth > 0 ? containerWidth - 72 : 280;
-  const stepSize = cardWidth + cardGap;
+  const flatListRef = useRef<FlatList>(null);
+  const heroPulse = useRef(new Animated.Value(0)).current;
+  const heroDrift = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    const el = carouselRef.current;
-    if (!el) return;
-    const measure = () => setContainerWidth(el.offsetWidth);
-    measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-  }, []);
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(heroPulse, {
+          toValue: 1,
+          duration: 1300,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(heroPulse, {
+          toValue: 0,
+          duration: 1300,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ])
+    );
 
-  // Close search when clicking outside
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
-        setShowSearchResults(false);
-      }
+    const driftLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(heroDrift, {
+          toValue: 1,
+          duration: 1700,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+        Animated.timing(heroDrift, {
+          toValue: 0,
+          duration: 1700,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+
+    pulseLoop.start();
+    driftLoop.start();
+
+    return () => {
+      pulseLoop.stop();
+      driftLoop.stop();
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
+  }, [heroDrift, heroPulse]);
 
-  // ===== CAROUSEL SWIPE — pointer events for unified touch+mouse =====
-  const pointerStartX = useRef<number | null>(null);
-  const pointerStartY = useRef<number | null>(null);
-  const pointerDragging = useRef(false);
-  const totalPointerDelta = useRef(0);
+  const heroScale = heroPulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.03],
+  });
 
-  const onPointerDown = useCallback((e: React.PointerEvent) => {
-    pointerStartX.current = e.clientX;
-    pointerStartY.current = e.clientY;
-    pointerDragging.current = false;
-    totalPointerDelta.current = 0;
-  }, []);
+  const heroOrbX = heroDrift.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-6, 8],
+  });
 
-  const onPointerMove = useCallback((e: React.PointerEvent) => {
-    if (pointerStartX.current === null || pointerStartY.current === null) return;
-    const dx = Math.abs(e.clientX - pointerStartX.current);
-    const dy = Math.abs(e.clientY - pointerStartY.current);
-    totalPointerDelta.current = dx + dy;
-    if (dx > dy && dx > 8) {
-      pointerDragging.current = true;
-    }
-  }, []);
+  const heroOrbY = heroDrift.interpolate({
+    inputRange: [0, 1],
+    outputRange: [8, -8],
+  });
 
-  const onPointerUp = useCallback((e: React.PointerEvent) => {
-    if (pointerStartX.current === null) return;
-    const dx = e.clientX - pointerStartX.current;
-    const threshold = 30; // Low threshold for easy swiping
-    if (pointerDragging.current) {
-      if (dx < -threshold && currentCardIndex < totalCards - 1) {
-        setCurrentCardIndex((prev) => prev + 1);
-      } else if (dx > threshold && currentCardIndex > 0) {
-        setCurrentCardIndex((prev) => prev - 1);
-      }
-    }
-    pointerStartX.current = null;
-    pointerStartY.current = null;
-    // Small delay to let the click event be prevented if needed
-    setTimeout(() => { pointerDragging.current = false; }, 50);
-  }, [currentCardIndex, totalCards]);
+  const searchResults = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
 
-  const handleCardClick = useCallback((classId: string) => {
-    if (totalPointerDelta.current < 10) {
-      onCourseOpen(classId);
-    }
-  }, [onCourseOpen]);
+    const classResults: SearchResult[] = classes.map((cls) => ({
+      id: `class-${cls.id}`,
+      type: 'class',
+      title: cls.title,
+      subtitle: `${cls.block} • ${cls.description}`,
+      classId: cls.id,
+    }));
 
-  // ===== SHORTCUT CLICK HANDLERS =====
-  const handleShortcutClick = useCallback((shortcut: Shortcut) => {
-    switch (shortcut.type) {
-      case 'course': {
-        // Find matching class
-        const match = classes.find((c) =>
-          c.title.toLowerCase().includes(shortcut.label.toLowerCase()) ||
-          shortcut.label.toLowerCase().includes(c.title.toLowerCase().split(' ').slice(0, 2).join(' '))
-        );
-        if (match) {
-          onCourseOpen(match.id);
-        } else {
-          // Default to first class
-          if (classes.length > 0) onCourseOpen(classes[0].id);
-        }
-        break;
-      }
-      case 'person':
-        onFriendsOpen();
-        break;
-      case 'scan':
-        onScanOpen();
-        break;
-      case 'link':
-        if (shortcut.url) {
-          window.open(shortcut.url, '_blank');
-        } else {
-          onFilesOpen();
-        }
-        break;
-    }
-  }, [classes, onCourseOpen, onFriendsOpen, onScanOpen, onFilesOpen]);
+    const fileResults: SearchResult[] = classes.flatMap((cls) =>
+      cls.files.map((file) => ({
+        id: `file-${cls.id}-${file.id}`,
+        type: 'file',
+        title: file.name,
+        subtitle: `${cls.title} • ${file.pages} pages`,
+        classId: cls.id,
+      }))
+    );
 
-  // ===== SEARCH =====
-  const getSearchResults = () => {
-    const q = searchQuery.toLowerCase().trim();
-    if (!q) return { classes: [], friends: [], files: [] };
+    const friendResults: SearchResult[] = friendsDirectory.map((friend) => ({
+      id: `friend-${friend.id}`,
+      type: 'friend',
+      title: friend.name,
+      subtitle: friend.course ? `${friend.status} • ${friend.course}` : friend.status,
+    }));
 
-    const matchedClasses = classes.filter((c) =>
-      c.title.toLowerCase().includes(q) || c.description.toLowerCase().includes(q)
-    ).slice(0, 3);
+    const actionResults: SearchResult[] = [
+      { id: 'action-scan', type: 'action', title: 'Open Scan', subtitle: 'Capture notes or files', actionId: 'scan' },
+      { id: 'action-files', type: 'action', title: 'Open Files', subtitle: 'Browse all class files', actionId: 'files' },
+      { id: 'action-friends', type: 'action', title: 'Open Friends', subtitle: 'Start chat or calls', actionId: 'friends' },
+    ];
 
-    const matchedFriends = friendNames.filter((f) =>
-      f.toLowerCase().includes(q)
-    ).slice(0, 3);
+    let merged = [...classResults, ...fileResults, ...friendResults, ...actionResults];
 
-    const matchedFiles: { name: string; classTitle: string; classId: string }[] = [];
-    for (const cls of classes) {
-      for (const file of cls.files) {
-        if (file.name.toLowerCase().includes(q) || file.previewTitle.toLowerCase().includes(q)) {
-          matchedFiles.push({ name: file.name, classTitle: cls.title, classId: cls.id });
-        }
-      }
+    if (searchFilter !== 'all') {
+      merged = merged.filter((item) => {
+        if (searchFilter === 'classes') return item.type === 'class';
+        if (searchFilter === 'files') return item.type === 'file';
+        if (searchFilter === 'friends') return item.type === 'friend';
+        return item.type === 'action';
+      });
     }
 
-    return { classes: matchedClasses, friends: matchedFriends, files: matchedFiles.slice(0, 3) };
-  };
+    if (!q) return merged.slice(0, 8);
 
-  const searchResults = searchQuery.trim() ? getSearchResults() : { classes: [], friends: [], files: [] };
-  const hasResults = searchResults.classes.length + searchResults.friends.length + searchResults.files.length > 0;
+    return merged
+      .filter((item) => `${item.title} ${item.subtitle}`.toLowerCase().includes(q))
+      .sort((a, b) => {
+        const aStarts = a.title.toLowerCase().startsWith(q) ? 0 : 1;
+        const bStarts = b.title.toLowerCase().startsWith(q) ? 0 : 1;
+        return aStarts - bStarts;
+      })
+      .slice(0, 10);
+  }, [classes, searchFilter, searchQuery]);
 
-  // ===== FILTER =====
-  const toggleFilterChip = (chip: string) => {
-    setFilterChips((prev) => {
-      const next = new Set(prev);
-      if (chip === 'all') {
-        return new Set(['all']);
-      }
-      next.delete('all');
-      if (next.has(chip)) next.delete(chip);
-      else next.add(chip);
-      if (next.size === 0) next.add('all');
-      return next;
-    });
-  };
-
-  const toggleLike = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const toggleLike = (id: string) => {
     setLikedCards((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -262,689 +269,762 @@ export function HomeScreen({ onCourseOpen, onFilesOpen, onScanOpen, onFriendsOpe
     });
   };
 
+  const openProfile = () => {
+    setProfileName(userName || '');
+    setProfileGrade(grade || '');
+    setProfileSchool(school || '');
+    setShowProfileModal(true);
+  };
+
+  const saveProfile = () => {
+    onUpdateProfile({
+      name: profileName.trim() || userName || '',
+      grade: profileGrade.trim(),
+      school: profileSchool.trim(),
+    });
+    setShowProfileModal(false);
+  };
+
+  const shortcutIcon = (item: ShortcutItem): keyof typeof Ionicons.glyphMap => {
+    if (item.type === 'class') return 'document-text';
+    if (item.type === 'friend') return 'person';
+    if (item.type === 'files') return 'folder';
+    return 'camera';
+  };
+
+  const runShortcut = (item: ShortcutItem) => {
+    if (item.type === 'class' && item.refId) {
+      onCourseOpen(item.refId);
+      return;
+    }
+    if (item.type === 'friend') {
+      onFriendsOpen();
+      return;
+    }
+    if (item.type === 'files') {
+      onFilesOpen();
+      return;
+    }
+    onScanOpen();
+  };
+
+  const saveShortcut = () => {
+    const fallbackLabel =
+      shortcutType === 'class'
+        ? classes.find((cls) => cls.id === shortcutRef)?.title || 'Class Shortcut'
+        : shortcutType === 'friend'
+          ? friendsDirectory.find((friend) => friend.id === shortcutRef)?.name || 'Friend Shortcut'
+          : shortcutType === 'files'
+            ? 'Files'
+            : 'Quick Scan';
+
+    const item: ShortcutItem = {
+      id: `shortcut-${Date.now()}`,
+      type: shortcutType,
+      label: shortcutLabel.trim() || fallbackLabel,
+      refId: shortcutRef,
+    };
+
+    setShortcuts((prev) => [item, ...prev]);
+    setShowShortcutModal(false);
+    setShortcutLabel('');
+    setShortcutRef(classes[0]?.id);
+  };
+
   const openAddClassModal = () => {
-    setShowAddClassModal(true);
-    setAddClassStep('browse');
-    setSelectedTemplate(null);
-    setCustomClassName('');
-    setSelectedBlock('');
-    setShowBlockDropdown(false);
-    setClassAdded(false);
-    setCustomClassImage(null);
+    setNewClassName('');
+    setNewClassBlock('Block 1');
+    setNewClassTemplate('Standard');
+    setNewClassColor(colors.maroon);
+    setNewClassGoal('Notes');
+    setNewClassImage(null);
+    setShowClassModal(true);
   };
 
-  const selectTemplate = (template: typeof availableClassTemplates[0]) => {
-    setSelectedTemplate(template);
-    setCustomClassName(template.title);
-    setCustomClassImage(null);
-    setAddClassStep('configure');
-  };
+  const pickClassImage = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => setCustomClassImage(reader.result as string);
-      reader.readAsDataURL(file);
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      quality: 0.9,
+      aspect: [3, 2],
+    });
+
+    if (!result.canceled && result.assets[0]) {
+      setNewClassImage(result.assets[0].uri);
     }
   };
 
-  const addClass = () => {
-    const name = customClassName.trim();
-    if (!name || !selectedBlock) return;
-    const template = selectedTemplate;
+  const saveNewClass = () => {
+    const title = newClassName.trim() || 'New Class';
+
+    const templateImage =
+      newClassTemplate === 'AP Exam'
+        ? 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=600&h=500&fit=crop'
+        : newClassTemplate === 'Lab'
+          ? 'https://images.unsplash.com/photo-1532187863486-abf9dbad1b69?w=600&h=500&fit=crop'
+          : newClassTemplate === 'Seminar'
+            ? 'https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=600&h=500&fit=crop'
+            : 'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?w=600&h=500&fit=crop';
+
     const newClass: ClassData = {
       id: Date.now().toString(),
-      title: name,
-      block: selectedBlock,
-      image: customClassImage || template?.image || 'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?w=600&h=500&fit=crop',
+      title,
+      block: newClassBlock,
+      classCode: makeClassCode(title),
+      image: newClassImage || templateImage,
       classmates: 0,
       documents: 0,
-      color: template?.color || '#3D0C11',
-      description: 'No units started yet',
+      color: newClassColor,
+      description: `${newClassTemplate} setup • Focus: ${newClassGoal}`,
       files: [],
-      units: [],
+      units: buildStarterUnits(newClassTemplate),
     };
+
     onAddClass(newClass);
-    setClassAdded(true);
+    setShowClassModal(false);
+    setCurrentCardIndex(classes.length);
     setTimeout(() => {
-      setShowAddClassModal(false);
-      setCurrentCardIndex(classes.length);
-    }, 900);
+      flatListRef.current?.scrollToOffset({ offset: classes.length * (CARD_WIDTH + CARD_GAP), animated: true });
+    }, 120);
   };
 
-  const removeClass = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    onRemoveClass(id);
-    if (currentCardIndex >= classes.length - 1) {
-      setCurrentCardIndex(Math.max(0, classes.length - 2));
+  const handleSearchSelect = (item: SearchResult) => {
+    if (item.type === 'class') {
+      onCourseOpen(item.classId);
+    } else if (item.type === 'file') {
+      onFilesOpen(item.classId);
+    } else if (item.type === 'friend') {
+      onFriendsOpen();
+    } else {
+      if (item.actionId === 'scan') onScanOpen();
+      if (item.actionId === 'files') onFilesOpen();
+      if (item.actionId === 'friends') onFriendsOpen();
     }
-  };
 
-  const openModal = () => {
-    setShowAddModal(true);
-    setModalStep('type');
-    setSelectedType(null);
-    setShortcutLabel('');
-    setShortcutUrl('');
-    setShortcutAdded(false);
-  };
-
-  const closeModal = () => setShowAddModal(false);
-
-  const selectType = (type: ShortcutType) => {
-    setSelectedType(type);
-    setModalStep('detail');
-    setShortcutLabel('');
-    setShortcutUrl('');
-  };
-
-  const addShortcut = (label: string, avatar?: string, url?: string) => {
-    const newShortcut: Shortcut = { id: Date.now().toString(), type: selectedType || 'course', label, avatar, url };
-    setShortcuts((prev) => [...prev, newShortcut]);
-    setShortcutAdded(true);
-    setTimeout(() => closeModal(), 800);
+    setSearchQuery('');
+    setShowFilterMenu(false);
   };
 
   return (
-    <div className="h-full w-full bg-bg-secondary relative academic-texture">
-      <div className="relative z-10 h-full overflow-y-auto hide-scrollbar pb-28">
-        {/* Header */}
-        <motion.div initial={{ y: -20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="flex items-start justify-between px-6 pt-14">
-          <div>
-            {userName ? (
-              <h1 className="font-display text-[1.75rem] font-bold text-text-primary leading-tight">Hello, {userName}</h1>
-            ) : (
-              <h1 className="font-display text-[1.75rem] font-bold text-text-primary leading-tight">Welcome Back</h1>
-            )}
-            <p className="font-body text-sm text-text-secondary mt-1">Welcome to Citadel</p>
-          </div>
-          <div className="w-12 h-12 rounded-full overflow-hidden bg-bg-secondary ring-2 ring-maroon/20">
+    <View style={styles.container}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.greeting}>{userName ? `Hello, ${userName}` : 'Welcome Back'}</Text>
+            <Text style={styles.subtitle}>Welcome to Citadel</Text>
+          </View>
+          <TouchableOpacity style={styles.avatarWrap} onPress={openProfile}>
             {profilePicture ? (
-              <img src={profilePicture} alt="" className="w-full h-full object-cover" />
+              <Image source={{ uri: profilePicture }} style={styles.avatar} />
             ) : (
-              <div className="w-full h-full flex items-center justify-center bg-bg-secondary">
-                <User className="w-7 h-7 text-text-tertiary/60" strokeWidth={1.2} />
-              </div>
+              <Ionicons name="person" size={28} color={colors.textTertiary} />
             )}
-          </div>
-        </motion.div>
+          </TouchableOpacity>
+        </View>
 
-        {/* Search + Filter */}
-        <motion.div initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.1 }} className="px-6 mt-6" ref={searchRef}>
-          <div className="flex items-center gap-3">
-            <div className="flex-1 relative">
-              <div className="flex items-center gap-3 bg-white rounded-2xl px-5 h-13 shadow-sm shadow-black/5">
-                <Search className="w-4.5 h-4.5 text-text-tertiary" />
-                <input
-                  type="text"
-                  placeholder="Search classes, friends, files..."
-                  value={searchQuery}
-                  onChange={(e) => {
-                    setSearchQuery(e.target.value);
-                    setShowSearchResults(e.target.value.trim().length > 0);
-                  }}
-                  onFocus={() => {
-                    if (searchQuery.trim()) setShowSearchResults(true);
-                  }}
-                  className="flex-1 font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none bg-transparent"
-                />
-                {searchQuery && (
-                  <button onClick={() => { setSearchQuery(''); setShowSearchResults(false); }}>
-                    <X className="w-4 h-4 text-text-tertiary" />
-                  </button>
-                )}
-              </div>
+        <Animated.View style={[styles.heroCard, { transform: [{ scale: heroScale }] }]}>
+          <Animated.View style={[styles.heroOrbA, { transform: [{ translateX: heroOrbX }] }]} />
+          <Animated.View style={[styles.heroOrbB, { transform: [{ translateY: heroOrbY }] }]} />
+          <View style={styles.heroRow}>
+            <View style={styles.heroBadge}>
+              <Ionicons name="sparkles" size={13} color={colors.maroon} />
+              <Text style={styles.heroBadgeText}>Today’s Momentum</Text>
+            </View>
+            <Text style={styles.heroDate}>{new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</Text>
+          </View>
+          <Text style={styles.heroTitle}>Keep the streak alive.</Text>
+          <Text style={styles.heroSubtitle}>Open a class, merge notes, or launch a live session to build progress fast.</Text>
+          <View style={styles.heroMiniStats}>
+            <View style={styles.heroMiniCard}>
+              <Text style={styles.heroMiniValue}>{classes.length}</Text>
+              <Text style={styles.heroMiniLabel}>Classes</Text>
+            </View>
+            <View style={styles.heroMiniCard}>
+              <Text style={styles.heroMiniValue}>{classes.reduce((a, c) => a + c.files.length, 0)}</Text>
+              <Text style={styles.heroMiniLabel}>Files</Text>
+            </View>
+            <View style={styles.heroMiniCard}>
+              <Text style={styles.heroMiniValue}>{friendsDirectory.length}</Text>
+              <Text style={styles.heroMiniLabel}>Friends</Text>
+            </View>
+          </View>
+        </Animated.View>
 
-              {/* Search Results Dropdown */}
-              <AnimatePresence>
-                {showSearchResults && searchQuery.trim() && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -5, scale: 0.98 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: -5, scale: 0.98 }}
-                    transition={{ duration: 0.15 }}
-                    className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-xl shadow-black/10 border border-gray-100 overflow-hidden z-30 max-h-[300px] overflow-y-auto hide-scrollbar"
-                  >
-                    {!hasResults ? (
-                      <div className="p-6 text-center">
-                        <Search className="w-8 h-8 text-text-tertiary/40 mx-auto mb-2" />
-                        <p className="font-body text-sm text-text-secondary">No results for "{searchQuery}"</p>
-                      </div>
-                    ) : (
-                      <div className="py-2">
-                        {searchResults.classes.length > 0 && (
-                          <>
-                            <p className="px-4 pt-2 pb-1 font-body text-[10px] font-semibold text-text-tertiary uppercase tracking-wider">Classes</p>
-                            {searchResults.classes.map((cls) => (
-                              <button key={cls.id} onClick={() => { onCourseOpen(cls.id); setShowSearchResults(false); setSearchQuery(''); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-bg-secondary transition-colors text-left">
-                                <div className="w-9 h-9 rounded-xl bg-maroon/10 flex items-center justify-center shrink-0">
-                                  <BookOpen className="w-4 h-4 text-maroon" />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <p className="font-body text-sm font-medium text-text-primary truncate">{cls.title}</p>
-                                  <p className="font-body text-[11px] text-text-tertiary">{cls.block}</p>
-                                </div>
-                                <ArrowRight className="w-3.5 h-3.5 text-text-tertiary" />
-                              </button>
-                            ))}
-                          </>
-                        )}
-                        {searchResults.friends.length > 0 && (
-                          <>
-                            <p className="px-4 pt-3 pb-1 font-body text-[10px] font-semibold text-text-tertiary uppercase tracking-wider">Friends</p>
-                            {searchResults.friends.map((name) => (
-                              <button key={name} onClick={() => { onFriendsOpen(); setShowSearchResults(false); setSearchQuery(''); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-bg-secondary transition-colors text-left">
-                                <div className="w-9 h-9 rounded-xl bg-green-50 flex items-center justify-center shrink-0">
-                                  <User className="w-4 h-4 text-green-600" />
-                                </div>
-                                <p className="font-body text-sm font-medium text-text-primary flex-1">{name}</p>
-                                <ArrowRight className="w-3.5 h-3.5 text-text-tertiary" />
-                              </button>
-                            ))}
-                          </>
-                        )}
-                        {searchResults.files.length > 0 && (
-                          <>
-                            <p className="px-4 pt-3 pb-1 font-body text-[10px] font-semibold text-text-tertiary uppercase tracking-wider">Files</p>
-                            {searchResults.files.map((file) => (
-                              <button key={file.name} onClick={() => { onCourseOpen(file.classId); setShowSearchResults(false); setSearchQuery(''); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-bg-secondary transition-colors text-left">
-                                <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
-                                  <FileText className="w-4 h-4 text-blue-600" />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <p className="font-body text-sm font-medium text-text-primary truncate">{file.name}</p>
-                                  <p className="font-body text-[11px] text-text-tertiary">{file.classTitle}</p>
-                                </div>
-                                <ArrowRight className="w-3.5 h-3.5 text-text-tertiary" />
-                              </button>
-                            ))}
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-            <button onClick={() => setShowFilterModal(true)} className="w-13 h-13 rounded-full bg-maroon flex items-center justify-center shadow-lg shadow-maroon/30">
-              <SlidersHorizontal className="w-4.5 h-4.5 text-white" />
-            </button>
-          </div>
-        </motion.div>
+        <View style={styles.searchRow}>
+          <View style={styles.searchBox}>
+            <Ionicons name="search" size={18} color={colors.textTertiary} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Smart Search: classes, files, friends, actions"
+              placeholderTextColor={colors.textTertiary}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <Ionicons name="close" size={16} color={colors.textTertiary} />
+              </TouchableOpacity>
+            )}
+          </View>
+          <TouchableOpacity style={[styles.filterBtn, searchFilter !== 'all' && styles.filterBtnActive]} onPress={() => setShowFilterMenu((v) => !v)}>
+            <Ionicons name="options" size={20} color="white" />
+          </TouchableOpacity>
+        </View>
 
-        {/* Shortcuts */}
-        <motion.div initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.2 }} className="mt-7">
-          <h2 className="font-display text-lg font-bold text-text-primary px-6">Shortcuts</h2>
-          <div className="flex gap-3 mt-3 px-6 overflow-x-auto hide-scrollbar">
-            <button onClick={openModal} className="w-14 h-14 rounded-2xl bg-maroon flex items-center justify-center shrink-0 shadow-md shadow-maroon/20 active:scale-95 transition-transform">
-              <Plus className="w-6 h-6 text-white" />
-            </button>
-            {shortcuts.map((shortcut) => (
-              <button
-                key={shortcut.id}
-                onClick={() => handleShortcutClick(shortcut)}
-                className="h-14 px-5 rounded-full bg-white flex items-center gap-2 shrink-0 shadow-sm shadow-black/5 active:scale-95 transition-transform"
+        {showFilterMenu && (
+          <View style={styles.filterMenu}>
+            {(['all', 'classes', 'files', 'friends', 'actions'] as SearchFilter[]).map((filter) => (
+              <TouchableOpacity
+                key={filter}
+                style={[styles.filterChip, searchFilter === filter && styles.filterChipActive]}
+                onPress={() => {
+                  setSearchFilter(filter);
+                  setShowFilterMenu(false);
+                }}
               >
-                {shortcut.type === 'person' ? (
-                  <div className="w-7 h-7 rounded-full flex items-center justify-center bg-blue-100">
-                    <User className="w-3.5 h-3.5 text-blue-500" strokeWidth={1.5} />
-                  </div>
-                ) : shortcut.type === 'course' ? (
-                  <FileText className="w-4 h-4 text-maroon" />
-                ) : shortcut.type === 'scan' ? (
-                  <Camera className="w-4 h-4 text-maroon" />
-                ) : (
-                  <Link2 className="w-4 h-4 text-maroon" />
-                )}
-                <span className="font-body text-sm font-medium text-text-primary whitespace-nowrap">{shortcut.label}</span>
-              </button>
+                <Text style={[styles.filterChipText, searchFilter === filter && styles.filterChipTextActive]}>
+                  {filter[0].toUpperCase() + filter.slice(1)}
+                </Text>
+              </TouchableOpacity>
             ))}
-          </div>
-        </motion.div>
+          </View>
+        )}
 
-        {/* Classes Carousel */}
-        <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.35 }} className="mt-7">
-          <div className="flex items-center justify-between px-6 mb-4">
-            <h2 className="font-display text-lg font-bold text-text-primary">My Classes</h2>
-            <span className="font-body text-xs text-text-tertiary">
-              {currentCardIndex < classes.length ? `${currentCardIndex + 1} / ${classes.length}` : ''}
-            </span>
-          </div>
+        {searchQuery.trim().length > 0 && (
+          <View style={styles.searchResultsBox}>
+            {searchResults.length === 0 ? (
+              <Text style={styles.searchEmpty}>No results found</Text>
+            ) : (
+              searchResults.map((item) => (
+                <TouchableOpacity key={item.id} style={styles.searchResultRow} onPress={() => handleSearchSelect(item)}>
+                  <View style={styles.searchResultIcon}>
+                    <Ionicons
+                      name={
+                        item.type === 'class'
+                          ? 'book'
+                          : item.type === 'file'
+                            ? 'document-text'
+                            : item.type === 'friend'
+                              ? 'people'
+                              : 'flash'
+                      }
+                      size={15}
+                      color={colors.maroon}
+                    />
+                  </View>
+                  <View style={styles.searchResultInfo}>
+                    <Text style={styles.searchResultTitle}>{item.title}</Text>
+                    <Text style={styles.searchResultSub}>{item.subtitle}</Text>
+                  </View>
+                  <Ionicons name="arrow-forward" size={16} color={colors.textTertiary} />
+                </TouchableOpacity>
+              ))
+            )}
+          </View>
+        )}
 
-          {/* Swipeable Carousel — touch-action: pan-y lets browser handle vertical, we handle horizontal */}
-          <div
-            ref={carouselRef}
-            className="relative overflow-hidden select-none"
-            style={{ touchAction: 'pan-y' }}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-          >
-            <motion.div
-              className="flex"
-              animate={{ x: -currentCardIndex * stepSize }}
-              transition={{ type: 'spring', stiffness: 300, damping: 35 }}
-              style={{ gap: cardGap, paddingLeft: cardPad }}
+        <Text style={styles.sectionTitle}>Shortcuts</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.shortcuts} contentContainerStyle={styles.shortcutsContent}>
+          <TouchableOpacity style={styles.shortcutAdd} onPress={() => setShowShortcutModal(true)}>
+            <Ionicons name="add" size={24} color="white" />
+          </TouchableOpacity>
+
+          {shortcuts.map((shortcut) => (
+            <TouchableOpacity key={shortcut.id} style={styles.shortcut} onPress={() => runShortcut(shortcut)}>
+              <Ionicons name={shortcutIcon(shortcut)} size={16} color={colors.maroon} />
+              <Text style={styles.shortcutLabel} numberOfLines={1}>
+                {shortcut.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        <View style={styles.carouselHeader}>
+          <Text style={styles.sectionTitle}>My Classes</Text>
+          {classes.length > 0 && (
+            <Text style={styles.counter}>
+              {currentCardIndex + 1} / {classes.length + 1}
+            </Text>
+          )}
+        </View>
+
+        <FlatList
+          ref={flatListRef}
+          data={[...classes, { id: 'add', isAdd: true }] as (ClassData | { id: string; isAdd: true })[]}
+          horizontal
+          snapToInterval={CARD_WIDTH + CARD_GAP}
+          snapToAlignment="start"
+          decelerationRate="fast"
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.carouselContent}
+          onMomentumScrollEnd={(e) => {
+            const index = Math.round(e.nativeEvent.contentOffset.x / (CARD_WIDTH + CARD_GAP));
+            setCurrentCardIndex(Math.min(index, classes.length));
+          }}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => {
+            if ('isAdd' in item && item.isAdd) {
+              return (
+                <TouchableOpacity style={[styles.classCard, styles.addCard]} onPress={openAddClassModal}>
+                  <View style={styles.addCardInner}>
+                    <View style={styles.addCardIcon}><Ionicons name="add" size={34} color={colors.maroon} /></View>
+                    <Text style={styles.addCardTitle}>Create / Join Class</Text>
+                    <Text style={styles.addCardSub}>Pick a template, focus area, and class code</Text>
+                    <View style={styles.addCardPills}>
+                      <View style={styles.addCardPill}><Text style={styles.addCardPillText}>Template</Text></View>
+                      <View style={styles.addCardPill}><Text style={styles.addCardPillText}>Block</Text></View>
+                      <View style={styles.addCardPill}><Text style={styles.addCardPillText}>Code</Text></View>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              );
+            }
+
+            const cls = item as ClassData;
+            const isLiked = likedCards.has(cls.id);
+
+            return (
+              <TouchableOpacity
+                style={[styles.classCard, { width: CARD_WIDTH }]}
+                onPress={() => onCourseOpen(cls.id)}
+                activeOpacity={0.95}
+              >
+                <Image source={{ uri: cls.image }} style={styles.classImage} />
+                <View style={styles.classOverlay} />
+                <TouchableOpacity style={styles.heartBtn} onPress={() => toggleLike(cls.id)}>
+                  <Ionicons name={isLiked ? 'heart' : 'heart-outline'} size={18} color="white" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.trashBtn} onPress={() => onRemoveClass(cls.id)}>
+                  <Ionicons name="trash-outline" size={16} color="rgba(255,255,255,0.8)" />
+                </TouchableOpacity>
+                <View style={styles.classFooter}>
+                  <Text style={styles.classBlock}>{cls.block}</Text>
+                  <Text style={styles.classTitle}>{cls.title}</Text>
+                  <Text style={styles.classDesc}>{cls.description}</Text>
+                  <View style={styles.classMeta}>
+                    <View style={styles.classMetaItem}>
+                      <Ionicons name="key" size={14} color="rgba(255,255,255,0.8)" />
+                      <Text style={styles.classMetaText}>{cls.classCode}</Text>
+                    </View>
+                    <Text style={styles.classMetaText}>{cls.documents > 0 ? `${cls.documents} Documents` : 'No documents yet'}</Text>
+                  </View>
+                  <View style={styles.keepLearning}>
+                    <Text style={styles.keepLearningText}>{cls.documents > 0 ? 'Open Class' : 'Set Up Class'}</Text>
+                    <View style={styles.keepLearningIcon}>
+                      <Ionicons name="arrow-forward" size={16} color={colors.textPrimary} />
+                    </View>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            );
+          }}
+        />
+
+        <View style={styles.dots}>
+          {Array.from({ length: classes.length + 1 }).map((_, i) => (
+            <TouchableOpacity
+              key={i}
+              onPress={() => flatListRef.current?.scrollToOffset({ offset: i * (CARD_WIDTH + CARD_GAP), animated: true })}
             >
-              {classes.map((cls) => (
-                <div key={cls.id} className="shrink-0" style={{ width: cardWidth }}>
-                  <div
-                    onClick={() => handleCardClick(cls.id)}
-                    className="w-full rounded-[28px] overflow-hidden relative block text-left cursor-pointer"
-                    style={{ height: '370px' }}
+              <View style={[styles.dot, currentCardIndex === i && styles.dotActive]} />
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Overview</Text>
+        <View style={styles.statsRow}>
+          <View style={styles.statCard}>
+            <View style={styles.statIcon}>
+              <Ionicons name="book" size={20} color={colors.maroon} />
+            </View>
+            <Text style={styles.statValue}>{classes.length}</Text>
+            <Text style={styles.statLabel}>Classes</Text>
+          </View>
+          <View style={styles.statCard}>
+            <View style={[styles.statIcon, { backgroundColor: '#dbeafe' }]}>
+              <Ionicons name="document-text" size={20} color="#2563eb" />
+            </View>
+            <Text style={styles.statValue}>{classes.reduce((a, c) => a + c.documents, 0)}</Text>
+            <Text style={styles.statLabel}>Documents</Text>
+          </View>
+          <View style={styles.statCard}>
+            <View style={[styles.statIcon, { backgroundColor: '#d1fae5' }]}>
+              <Ionicons name="people" size={20} color="#059669" />
+            </View>
+            <Text style={styles.statValue}>{friendsDirectory.length}</Text>
+            <Text style={styles.statLabel}>Friends</Text>
+          </View>
+        </View>
+      </ScrollView>
+
+      <BottomNav active="home" onHome={() => {}} onScan={onScanOpen} onFriends={onFriendsOpen} onFiles={() => onFilesOpen()} />
+
+      <Modal visible={showProfileModal} transparent animationType="slide" onRequestClose={() => setShowProfileModal(false)}>
+        <KeyboardAvoidingView style={styles.modalKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Profile & Settings</Text>
+                <TouchableOpacity onPress={() => setShowProfileModal(false)}>
+                  <Ionicons name="close" size={22} color={colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.modalLabel}>Name</Text>
+              <TextInput style={styles.modalInput} value={profileName} onChangeText={setProfileName} placeholder="Your name" />
+              <Text style={styles.modalLabel}>Grade / Year</Text>
+              <TextInput style={styles.modalInput} value={profileGrade} onChangeText={setProfileGrade} placeholder="11th Grade / College Sophomore" />
+              <Text style={styles.modalLabel}>School</Text>
+              <TextInput style={styles.modalInput} value={profileSchool} onChangeText={setProfileSchool} placeholder="School name" />
+              <TouchableOpacity style={styles.modalSaveBtn} onPress={saveProfile}>
+                <Text style={styles.modalSaveBtnText}>Save Profile</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal visible={showShortcutModal} transparent animationType="fade" onRequestClose={() => setShowShortcutModal(false)}>
+        <KeyboardAvoidingView style={styles.modalKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Add Shortcut</Text>
+                <TouchableOpacity onPress={() => setShowShortcutModal(false)}>
+                  <Ionicons name="close" size={22} color={colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.optionRow}>
+                {(['class', 'friend', 'scan', 'files'] as ShortcutType[]).map((type) => (
+                  <TouchableOpacity
+                    key={type}
+                    style={[styles.optionChip, shortcutType === type && styles.optionChipActive]}
+                    onPress={() => {
+                      setShortcutType(type);
+                      if (type === 'class') setShortcutRef(classes[0]?.id);
+                      if (type === 'friend') setShortcutRef(friendsDirectory[0]?.id);
+                      if (type === 'scan' || type === 'files') setShortcutRef(undefined);
+                    }}
                   >
-                    <img src={cls.image} alt={cls.title} className="absolute inset-0 w-full h-full object-cover pointer-events-none" draggable={false} />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent pointer-events-none" />
-                    <div className="absolute top-5 right-5 flex gap-2 z-10">
-                      <motion.button
-                        whileTap={{ scale: 0.85 }}
-                        onClick={(e) => toggleLike(cls.id, e)}
-                        className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${likedCards.has(cls.id) ? 'bg-red-500' : 'bg-white/20 backdrop-blur-sm'}`}
+                    <Text style={[styles.optionChipText, shortcutType === type && styles.optionChipTextActive]}>
+                      {type[0].toUpperCase() + type.slice(1)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {(shortcutType === 'class' || shortcutType === 'friend') && (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
+                  {(shortcutType === 'class' ? classes : friendsDirectory).map((item) => {
+                    const id = shortcutType === 'class' ? (item as ClassData).id : (item as FriendData).id;
+                    const label = shortcutType === 'class' ? (item as ClassData).title : (item as FriendData).name;
+                    const active = shortcutRef === id;
+                    return (
+                      <TouchableOpacity
+                        key={id}
+                        style={[styles.pickChip, active && styles.pickChipActive]}
+                        onPress={() => setShortcutRef(id)}
                       >
-                        <Heart className="w-4.5 h-4.5 text-white" strokeWidth={1.5} fill={likedCards.has(cls.id) ? 'white' : 'none'} />
-                      </motion.button>
-                    </div>
-                    <div className="absolute top-5 left-5 z-10">
-                      <motion.button whileTap={{ scale: 0.85 }} onClick={(e) => removeClass(cls.id, e)} className="w-9 h-9 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
-                        <Trash2 className="w-4 h-4 text-white/80" />
-                      </motion.button>
-                    </div>
-                    <div className="absolute bottom-0 left-0 right-0 p-6 pointer-events-none">
-                      <span className="font-body text-xs font-medium text-white/80 tracking-wider uppercase">{cls.block}</span>
-                      <h3 className="font-display text-2xl font-bold text-white mt-1 leading-tight">{cls.title}</h3>
-                      <p className="font-body text-xs text-white/60 mt-1.5">{cls.description}</p>
-                      <div className="flex items-center gap-4 mt-3">
-                        {cls.classmates > 0 && (
-                          <div className="flex items-center gap-1.5">
-                            <Users className="w-3.5 h-3.5 text-white/70" />
-                            <span className="font-body text-xs text-white/80">{cls.classmates}</span>
-                          </div>
-                        )}
-                        <span className="font-body text-xs text-white/70">
-                          {cls.documents > 0 ? `${cls.documents} Documents` : 'No documents yet'}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between bg-black/50 backdrop-blur-md rounded-full mt-4 px-5 py-3.5 pointer-events-auto">
-                        <span className="font-body text-sm font-semibold text-white">
-                          {cls.documents > 0 ? 'Keep Learning' : 'Get Started'}
-                        </span>
-                        <div className="w-8 h-8 rounded-full bg-white flex items-center justify-center">
-                          <ArrowRight className="w-4 h-4 text-text-primary" />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
+                        <Text style={[styles.pickChipText, active && styles.pickChipTextActive]}>{label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              )}
 
-              {/* Add Class Card */}
-              <div className="shrink-0" style={{ width: cardWidth }}>
-                <button onClick={openAddClassModal} className="w-full rounded-[28px] overflow-hidden relative block" style={{ height: '370px' }}>
-                  <div className="absolute inset-0 bg-gradient-to-br from-maroon/5 via-bg-secondary to-maroon/10 border-2 border-dashed border-maroon/20 rounded-[28px]" />
-                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
-                    <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} className="w-20 h-20 rounded-3xl bg-maroon/10 flex items-center justify-center">
-                      <Plus className="w-9 h-9 text-maroon" strokeWidth={1.5} />
-                    </motion.div>
-                    <div className="text-center">
-                      <p className="font-display text-lg font-bold text-text-primary">Add a Class</p>
-                      <p className="font-body text-sm text-text-secondary mt-1">Join or create a new course</p>
-                    </div>
-                  </div>
-                </button>
-              </div>
-            </motion.div>
-          </div>
+              <Text style={styles.modalLabel}>Shortcut Label</Text>
+              <TextInput
+                style={styles.modalInput}
+                value={shortcutLabel}
+                onChangeText={setShortcutLabel}
+                placeholder="Custom label (optional)"
+              />
 
-          {/* Carousel Dots */}
-          <div className="flex items-center justify-center gap-2 mt-5">
-            {Array.from({ length: totalCards }).map((_, i) => (
-              <button key={i} onClick={() => setCurrentCardIndex(i)} className="relative p-1">
-                <motion.div
-                  animate={{ width: currentCardIndex === i ? 24 : 8, backgroundColor: currentCardIndex === i ? '#3D0C11' : '#d1d5db' }}
-                  transition={{ type: 'spring', stiffness: 350, damping: 30 }}
-                  className="h-2 rounded-full"
-                />
-              </button>
-            ))}
-          </div>
-        </motion.div>
+              <TouchableOpacity style={styles.modalSaveBtn} onPress={saveShortcut}>
+                <Text style={styles.modalSaveBtnText}>Add Shortcut</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
-        {/* Quick Stats */}
-        <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.45 }} className="px-6 mt-7 mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="font-display text-lg font-bold text-text-primary">Overview</h2>
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-white rounded-3xl p-4 shadow-sm shadow-black/5 text-center">
-              <div className="w-10 h-10 rounded-xl bg-maroon/10 flex items-center justify-center mx-auto mb-2">
-                <BookOpen className="w-5 h-5 text-maroon" />
-              </div>
-              <p className="font-display text-xl font-bold text-text-primary">{classes.length}</p>
-              <p className="font-body text-[11px] text-text-tertiary mt-0.5">Classes</p>
-            </div>
-            <div className="bg-white rounded-3xl p-4 shadow-sm shadow-black/5 text-center">
-              <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center mx-auto mb-2">
-                <FileText className="w-5 h-5 text-blue-600" />
-              </div>
-              <p className="font-display text-xl font-bold text-text-primary">{classes.reduce((a, c) => a + c.documents, 0)}</p>
-              <p className="font-body text-[11px] text-text-tertiary mt-0.5">Documents</p>
-            </div>
-            <div className="bg-white rounded-3xl p-4 shadow-sm shadow-black/5 text-center">
-              <div className="w-10 h-10 rounded-xl bg-green-50 flex items-center justify-center mx-auto mb-2">
-                <Users className="w-5 h-5 text-green-600" />
-              </div>
-              <p className="font-display text-xl font-bold text-text-primary">{classes.reduce((a, c) => a + c.classmates, 0)}</p>
-              <p className="font-body text-[11px] text-text-tertiary mt-0.5">Classmates</p>
-            </div>
-          </div>
-        </motion.div>
-      </div>
+      <Modal visible={showClassModal} transparent animationType="slide" onRequestClose={() => setShowClassModal(false)}>
+        <KeyboardAvoidingView style={styles.modalKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCardLarge}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Create New Class</Text>
+                <TouchableOpacity onPress={() => setShowClassModal(false)}>
+                  <Ionicons name="close" size={22} color={colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
 
-      <BottomNav active="home" onHome={() => {}} onScan={onScanOpen} onFriends={onFriendsOpen} onFiles={onFilesOpen} />
+              <Text style={styles.modalLabel}>Class Name</Text>
+              <TextInput style={styles.modalInput} value={newClassName} onChangeText={setNewClassName} placeholder="Ex: AP Physics" />
 
-      {/* ===== Filter Modal ===== */}
-      <AnimatePresence>
-        {showFilterModal && (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowFilterModal(false)} className="absolute inset-0 bg-black/40 z-40 backdrop-blur-sm" />
-            <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 300 }} className="absolute bottom-0 left-0 right-0 z-50 bg-white rounded-t-[28px] shadow-2xl" style={{ maxHeight: '70%' }}>
-              <div className="flex justify-center pt-3 pb-1"><div className="w-10 h-1 rounded-full bg-gray-300" /></div>
-              <div className="flex items-center justify-between px-6 pt-2 pb-4">
-                <div className="flex items-center gap-2">
-                  <Filter className="w-5 h-5 text-maroon" />
-                  <h2 className="font-display text-xl font-bold text-text-primary">Filters</h2>
-                </div>
-                <div className="flex items-center gap-3">
-                  <button onClick={() => { setSortBy('recent'); setFilterChips(new Set(['all'])); }} className="font-body text-xs text-maroon font-medium">Reset</button>
-                  <button onClick={() => setShowFilterModal(false)} className="w-9 h-9 rounded-full bg-bg-secondary flex items-center justify-center">
-                    <X className="w-4.5 h-4.5 text-text-secondary" />
-                  </button>
-                </div>
-              </div>
-              <div className="px-6 pb-10 overflow-y-auto hide-scrollbar">
-                {/* Sort By */}
-                <p className="font-body text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">Sort By</p>
-                <div className="flex flex-col gap-2 mb-6">
-                  {[
-                    { id: 'recent', label: 'Recent Activity' },
-                    { id: 'alpha', label: 'Alphabetical' },
-                    { id: 'docs', label: 'Most Documents' },
-                    { id: 'classmates', label: 'Most Classmates' },
-                  ].map((option) => (
-                    <button key={option.id} onClick={() => setSortBy(option.id)} className="flex items-center gap-3 py-2.5 px-1">
-                      <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${sortBy === option.id ? 'border-maroon bg-maroon' : 'border-gray-300'}`}>
-                        {sortBy === option.id && <div className="w-2 h-2 rounded-full bg-white" />}
-                      </div>
-                      <span className={`font-body text-sm ${sortBy === option.id ? 'font-semibold text-text-primary' : 'text-text-secondary'}`}>{option.label}</span>
-                    </button>
-                  ))}
-                </div>
+              <Text style={styles.modalLabel}>Class Background Image</Text>
+              <TouchableOpacity style={styles.imagePickerBtn} onPress={pickClassImage}>
+                <Ionicons name="image" size={16} color={colors.maroon} />
+                <Text style={styles.imagePickerBtnText}>Upload Background</Text>
+              </TouchableOpacity>
+              {newClassImage && <Image source={{ uri: newClassImage }} style={styles.newClassImagePreview} />}
 
-                {/* Filter By */}
-                <p className="font-body text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">Filter By</p>
-                <div className="flex flex-wrap gap-2 mb-6">
-                  {[
-                    { id: 'all', label: 'All Classes' },
-                    { id: 'ap', label: 'AP Courses' },
-                    { id: 'de', label: 'DE Courses' },
-                    { id: 'active', label: 'Active' },
-                    { id: 'favorites', label: 'Favorites' },
-                  ].map((chip) => (
-                    <button key={chip.id} onClick={() => toggleFilterChip(chip.id)} className={`px-4 py-2.5 rounded-full font-body text-sm font-medium transition-all ${filterChips.has(chip.id) ? 'bg-maroon text-white shadow-md shadow-maroon/20' : 'bg-bg-secondary text-text-secondary'}`}>
-                      {chip.label}
-                    </button>
-                  ))}
-                </div>
+              <Text style={styles.modalLabel}>Block</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
+                {blocks.map((block) => (
+                  <TouchableOpacity
+                    key={block}
+                    style={[styles.pickChip, newClassBlock === block && styles.pickChipActive]}
+                    onPress={() => setNewClassBlock(block)}
+                  >
+                    <Text style={[styles.pickChipText, newClassBlock === block && styles.pickChipTextActive]}>{block}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
 
-                <button onClick={() => setShowFilterModal(false)} className="w-full h-13 bg-maroon text-white font-body font-semibold text-sm rounded-full flex items-center justify-center gap-2 shadow-lg shadow-maroon/20 active:scale-[0.97] transition-transform">
-                  Apply Filters
-                </button>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
+              <Text style={styles.modalLabel}>Template</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
+                {(['Standard', 'AP Exam', 'Lab', 'Seminar'] as ClassTemplate[]).map((template) => (
+                  <TouchableOpacity
+                    key={template}
+                    style={[styles.pickChip, newClassTemplate === template && styles.pickChipActive]}
+                    onPress={() => setNewClassTemplate(template)}
+                  >
+                    <Text style={[styles.pickChipText, newClassTemplate === template && styles.pickChipTextActive]}>{template}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
 
-      {/* ===== Add Class Modal ===== */}
-      <AnimatePresence>
-        {showAddClassModal && (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowAddClassModal(false)} className="absolute inset-0 bg-black/40 z-40 backdrop-blur-sm" />
-            <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 300 }} className="absolute bottom-0 left-0 right-0 z-50 bg-white rounded-t-[28px] shadow-2xl" style={{ maxHeight: '88%' }}>
-              <div className="flex justify-center pt-3 pb-1"><div className="w-10 h-1 rounded-full bg-gray-300" /></div>
-              <div className="flex items-center justify-between px-6 pt-2 pb-4">
-                <div>
-                  <h2 className="font-display text-xl font-bold text-text-primary">
-                    {classAdded ? 'Class Added!' : addClassStep === 'browse' ? 'Add a Class' : addClassStep === 'custom' ? 'Create Custom Class' : 'Configure Class'}
-                  </h2>
-                  {addClassStep === 'browse' && !classAdded && <p className="font-body text-xs text-text-secondary mt-0.5">Choose from popular courses or create your own</p>}
-                </div>
-                <button onClick={() => setShowAddClassModal(false)} className="w-9 h-9 rounded-full bg-bg-secondary flex items-center justify-center active:scale-95 transition-transform">
-                  <X className="w-4.5 h-4.5 text-text-secondary" />
-                </button>
-              </div>
+              <Text style={styles.modalLabel}>Primary Focus</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
+                {classGoals.map((goal) => (
+                  <TouchableOpacity
+                    key={goal}
+                    style={[styles.pickChip, newClassGoal === goal && styles.pickChipActive]}
+                    onPress={() => setNewClassGoal(goal)}
+                  >
+                    <Text style={[styles.pickChipText, newClassGoal === goal && styles.pickChipTextActive]}>{goal}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
 
-              <div className="overflow-y-auto hide-scrollbar px-6 pb-10" style={{ maxHeight: 'calc(88vh - 100px)' }}>
-                <AnimatePresence mode="wait">
-                  {classAdded && (
-                    <motion.div key="class-success" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center justify-center py-8">
-                      <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 15 }} className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mb-4">
-                        <Check className="w-8 h-8 text-green-600" />
-                      </motion.div>
-                      <p className="font-body text-base font-semibold text-text-primary">{customClassName} added</p>
-                      <p className="font-body text-sm text-text-secondary mt-1">Swipe to find it in your classes</p>
-                    </motion.div>
-                  )}
+              <Text style={styles.modalLabel}>Theme Color</Text>
+              <View style={styles.colorRow}>
+                {['#3D0C11', '#0f766e', '#1d4ed8', '#7c3aed', '#b45309'].map((color) => (
+                  <TouchableOpacity
+                    key={color}
+                    style={[styles.colorDot, { backgroundColor: color }, newClassColor === color && styles.colorDotActive]}
+                    onPress={() => setNewClassColor(color)}
+                  />
+                ))}
+              </View>
 
-                  {addClassStep === 'browse' && !classAdded && (
-                    <motion.div key="browse" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
-                      <p className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-3">Popular Courses</p>
-                      <div className="grid grid-cols-2 gap-3 mb-6">
-                        {availableClassTemplates.map((template, i) => (
-                          <motion.button key={template.title} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }} onClick={() => selectTemplate(template)} className="rounded-2xl overflow-hidden relative text-left group active:scale-[0.97] transition-transform" style={{ height: '130px' }}>
-                            <img src={template.image} alt={template.title} className="absolute inset-0 w-full h-full object-cover" />
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/20 to-transparent" />
-                            <div className="absolute bottom-0 left-0 right-0 p-3">
-                              <div className="w-7 h-7 rounded-lg flex items-center justify-center mb-1.5" style={{ backgroundColor: template.color + '40' }}>
-                                <template.icon className="w-3.5 h-3.5 text-white" />
-                              </div>
-                              <p className="font-body text-xs font-semibold text-white leading-tight">{template.title}</p>
-                            </div>
-                          </motion.button>
-                        ))}
-                      </div>
-                      <button onClick={() => { setSelectedTemplate(null); setCustomClassName(''); setAddClassStep('custom'); }} className="w-full flex items-center gap-4 p-4 rounded-2xl border border-dashed border-gray-200 hover:border-maroon/30 active:bg-bg-secondary transition-all">
-                        <div className="w-12 h-12 rounded-xl bg-maroon/10 flex items-center justify-center shrink-0"><Plus className="w-5 h-5 text-maroon" /></div>
-                        <div className="text-left"><p className="font-body font-semibold text-sm text-text-primary">Create Custom Class</p><p className="font-body text-xs text-text-secondary mt-0.5">Add any course not listed above</p></div>
-                        <ArrowRight className="w-4 h-4 text-text-tertiary ml-auto" />
-                      </button>
-                      <div className="mt-4 p-4 rounded-2xl bg-bg-secondary">
-                        <p className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2">Have a class code?</p>
-                        <div className="flex gap-2">
-                          <input type="text" placeholder="Enter class code" className="flex-1 h-11 px-4 bg-white rounded-xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20" />
-                          <button className="h-11 px-5 rounded-xl bg-maroon text-white font-body text-sm font-semibold active:scale-95 transition-transform">Join</button>
-                        </div>
-                      </div>
-                    </motion.div>
-                  )}
-
-                  {addClassStep === 'custom' && !classAdded && (
-                    <motion.div key="custom" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}>
-                      <button onClick={() => setAddClassStep('browse')} className="flex items-center gap-1.5 text-text-secondary font-body text-xs mb-4 active:opacity-60">
-                        <ArrowRight className="w-3 h-3 rotate-180" /> Back
-                      </button>
-                      <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">Class Name</label>
-                      <input type="text" placeholder="e.g. AP World History" value={customClassName} onChange={(e) => setCustomClassName(e.target.value)} autoFocus className="w-full h-[52px] px-5 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20 transition-all" />
-                      <motion.button onClick={() => { if (customClassName.trim()) setAddClassStep('configure'); }} disabled={!customClassName.trim()} whileTap={{ scale: 0.97 }} className={`w-full h-13 font-body font-semibold text-sm rounded-full mt-6 flex items-center justify-center gap-2 transition-all duration-200 ${customClassName.trim() ? 'bg-maroon text-white shadow-lg shadow-maroon/20' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
-                        Continue <ArrowRight className="w-4 h-4" />
-                      </motion.button>
-                    </motion.div>
-                  )}
-
-                  {addClassStep === 'configure' && !classAdded && (
-                    <motion.div key="configure" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}>
-                      <button onClick={() => setAddClassStep(selectedTemplate ? 'browse' : 'custom')} className="flex items-center gap-1.5 text-text-secondary font-body text-xs mb-4 active:opacity-60">
-                        <ArrowRight className="w-3 h-3 rotate-180" /> Back
-                      </button>
-
-                      <div className="rounded-2xl overflow-hidden relative mb-5 group" style={{ height: '120px' }}>
-                        <img src={customClassImage || selectedTemplate?.image || 'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?w=600&h=300&fit=crop'} alt="" className="absolute inset-0 w-full h-full object-cover" />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-black/10" />
-                        <div className="absolute bottom-3 left-4"><p className="font-display text-lg font-bold text-white">{customClassName}</p></div>
-                        <label className="absolute top-3 right-3 w-9 h-9 rounded-full bg-white/90 backdrop-blur-sm flex items-center justify-center cursor-pointer hover:bg-white transition-colors">
-                          <ImagePlus className="w-4 h-4 text-text-primary" />
-                          <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
-                        </label>
-                        {customClassImage && (
-                          <button onClick={() => setCustomClassImage(null)} className="absolute top-3 left-3 w-7 h-7 rounded-full bg-red-500 flex items-center justify-center">
-                            <X className="w-3.5 h-3.5 text-white" />
-                          </button>
-                        )}
-                      </div>
-
-                      <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">Class Name</label>
-                      <input type="text" value={customClassName} onChange={(e) => setCustomClassName(e.target.value)} className="w-full h-[52px] px-5 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20 transition-all mb-4" />
-
-                      <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">Block / Period</label>
-                      <div className="relative mb-4">
-                        <button onClick={() => setShowBlockDropdown(!showBlockDropdown)} className="w-full h-[52px] px-5 bg-input-bg rounded-2xl font-body text-sm text-left flex items-center justify-between outline-none focus:ring-2 focus:ring-maroon/20 transition-all">
-                          <span className={selectedBlock ? 'text-text-primary' : 'text-text-tertiary'}>{selectedBlock || 'Select a block...'}</span>
-                          <motion.div animate={{ rotate: showBlockDropdown ? 180 : 0 }}><ChevronDown className="w-4 h-4 text-text-tertiary" /></motion.div>
-                        </button>
-                        <AnimatePresence>
-                          {showBlockDropdown && (
-                            <motion.div initial={{ opacity: 0, y: -10, scaleY: 0.9 }} animate={{ opacity: 1, y: 0, scaleY: 1 }} exit={{ opacity: 0, y: -10, scaleY: 0.9 }} transition={{ duration: 0.15 }} className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-xl shadow-black/10 border border-gray-100 overflow-hidden z-30" style={{ transformOrigin: 'top center' }}>
-                              <div className="max-h-[200px] overflow-y-auto hide-scrollbar py-1">
-                                {blockOptions.map((block) => (
-                                  <button key={block} onClick={() => { setSelectedBlock(block); setShowBlockDropdown(false); }} className={`w-full text-left px-5 py-3 font-body text-sm transition-colors flex items-center justify-between ${selectedBlock === block ? 'bg-maroon/5 text-maroon font-medium' : 'text-text-primary hover:bg-bg-secondary'}`}>
-                                    {block}
-                                    {selectedBlock === block && <Check className="w-4 h-4 text-maroon" />}
-                                  </button>
-                                ))}
-                              </div>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                      </div>
-
-                      <motion.button onClick={addClass} disabled={!customClassName.trim() || !selectedBlock} whileTap={{ scale: 0.97 }} className={`w-full h-13 font-body font-semibold text-sm rounded-full mt-2 flex items-center justify-center gap-2 transition-all duration-200 ${customClassName.trim() && selectedBlock ? 'bg-maroon text-white shadow-lg shadow-maroon/20' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
-                        <Plus className="w-4 h-4" /> Add Class
-                      </motion.button>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-
-      {/* ===== Add Shortcut Modal ===== */}
-      <AnimatePresence>
-        {showAddModal && (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={closeModal} className="absolute inset-0 bg-black/40 z-40 backdrop-blur-sm" />
-            <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 28, stiffness: 300 }} className="absolute bottom-0 left-0 right-0 z-50 bg-white rounded-t-[28px] shadow-2xl" style={{ maxHeight: '85%' }}>
-              <div className="flex justify-center pt-3 pb-1"><div className="w-10 h-1 rounded-full bg-gray-300" /></div>
-              <div className="flex items-center justify-between px-6 pt-2 pb-4">
-                <div>
-                  <h2 className="font-display text-xl font-bold text-text-primary">{modalStep === 'type' ? 'New Shortcut' : shortcutAdded ? 'Added!' : 'Set Up Shortcut'}</h2>
-                  {modalStep === 'type' && <p className="font-body text-xs text-text-secondary mt-0.5">Choose what you'd like quick access to</p>}
-                </div>
-                <button onClick={closeModal} className="w-9 h-9 rounded-full bg-bg-secondary flex items-center justify-center active:scale-95 transition-transform">
-                  <X className="w-4.5 h-4.5 text-text-secondary" />
-                </button>
-              </div>
-              <div className="overflow-y-auto hide-scrollbar px-6 pb-10" style={{ maxHeight: 'calc(85vh - 100px)' }}>
-                <AnimatePresence mode="wait">
-                  {modalStep === 'type' && (
-                    <motion.div key="type" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="flex flex-col gap-2.5">
-                      {shortcutOptions.map((option, i) => (
-                        <motion.button key={option.type} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }} onClick={() => selectType(option.type)} className="flex items-center gap-4 p-4 rounded-2xl border border-gray-100 hover:border-maroon/20 active:bg-bg-secondary transition-all text-left group">
-                          <div className={`w-12 h-12 rounded-xl ${option.color} flex items-center justify-center shrink-0`}><option.icon className={`w-5 h-5 ${option.iconColor}`} strokeWidth={1.8} /></div>
-                          <div className="flex-1"><p className="font-body font-semibold text-sm text-text-primary">{option.title}</p><p className="font-body text-xs text-text-secondary mt-0.5">{option.desc}</p></div>
-                          <ArrowRight className="w-4 h-4 text-text-tertiary group-hover:text-maroon transition-colors" />
-                        </motion.button>
-                      ))}
-                      <div className="mt-3 flex items-center gap-2 px-1">
-                        <Clock className="w-3.5 h-3.5 text-text-tertiary" />
-                        <span className="font-body text-xs text-text-tertiary">{shortcuts.length} shortcut{shortcuts.length !== 1 ? 's' : ''} active</span>
-                      </div>
-                    </motion.div>
-                  )}
-                  {modalStep === 'detail' && shortcutAdded && (
-                    <motion.div key="success" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col items-center justify-center py-8">
-                      <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 15 }} className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mb-4"><Check className="w-8 h-8 text-green-600" /></motion.div>
-                      <p className="font-body text-base font-semibold text-text-primary">Shortcut added</p>
-                      <p className="font-body text-sm text-text-secondary mt-1">You can find it in your shortcuts bar</p>
-                    </motion.div>
-                  )}
-                  {modalStep === 'detail' && selectedType === 'course' && !shortcutAdded && (
-                    <motion.div key="course-detail" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}>
-                      <button onClick={() => setModalStep('type')} className="flex items-center gap-1.5 text-text-secondary font-body text-xs mb-4"><ArrowRight className="w-3 h-3 rotate-180" /> Back</button>
-                      <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">Shortcut Name</label>
-                      <input type="text" placeholder="e.g. Unit 5: AP Bio" value={shortcutLabel} onChange={(e) => setShortcutLabel(e.target.value)} autoFocus className="w-full h-[52px] px-5 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20 transition-all" />
-                      <p className="font-body text-xs text-text-secondary mt-4 mb-2">Or pick a course:</p>
-                      <div className="flex flex-wrap gap-2">
-                        {courseSuggestions.map((c) => (<button key={c} onClick={() => addShortcut(c)} className="px-4 py-2.5 rounded-full bg-bg-secondary font-body text-xs font-medium text-text-primary hover:bg-maroon/10 hover:text-maroon active:scale-95 transition-all">{c}</button>))}
-                      </div>
-                      <motion.button onClick={() => shortcutLabel.trim() && addShortcut(shortcutLabel.trim())} disabled={!shortcutLabel.trim()} whileTap={{ scale: 0.97 }} className={`w-full h-13 font-body font-semibold text-sm rounded-full mt-6 flex items-center justify-center gap-2 transition-all ${shortcutLabel.trim() ? 'bg-maroon text-white shadow-lg shadow-maroon/20' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
-                        <Plus className="w-4 h-4" /> Add Shortcut
-                      </motion.button>
-                    </motion.div>
-                  )}
-                  {modalStep === 'detail' && selectedType === 'person' && !shortcutAdded && (
-                    <motion.div key="person-detail" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}>
-                      <button onClick={() => setModalStep('type')} className="flex items-center gap-1.5 text-text-secondary font-body text-xs mb-4"><ArrowRight className="w-3 h-3 rotate-180" /> Back</button>
-                      <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">Search Friends</label>
-                      <input type="text" placeholder="Type a name..." value={shortcutLabel} onChange={(e) => setShortcutLabel(e.target.value)} autoFocus className="w-full h-[52px] px-5 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20 transition-all" />
-                      <p className="font-body text-xs text-text-secondary mt-4 mb-3">Suggested:</p>
-                      <div className="flex flex-col gap-2">
-                        {friendSuggestions.filter((f) => !shortcutLabel.trim() || f.name.toLowerCase().includes(shortcutLabel.toLowerCase())).map((friend) => (
-                          <button key={friend.name} onClick={() => addShortcut(friend.name)} className="flex items-center gap-3 p-3 rounded-2xl hover:bg-bg-secondary active:bg-gray-100 transition-colors">
-                            <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: friend.color }}>
-                              <User className={`w-5 h-5 ${friend.iconColor}`} strokeWidth={1.5} />
-                            </div>
-                            <div className="flex-1 text-left"><p className="font-body text-sm font-medium text-text-primary">{friend.name}</p><p className="font-body text-xs text-text-tertiary">Classmate</p></div>
-                            <Plus className="w-4 h-4 text-text-tertiary" />
-                          </button>
-                        ))}
-                      </div>
-                    </motion.div>
-                  )}
-                  {modalStep === 'detail' && selectedType === 'scan' && !shortcutAdded && (
-                    <motion.div key="scan-detail" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}>
-                      <button onClick={() => setModalStep('type')} className="flex items-center gap-1.5 text-text-secondary font-body text-xs mb-4"><ArrowRight className="w-3 h-3 rotate-180" /> Back</button>
-                      <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">Shortcut Name</label>
-                      <input type="text" placeholder="e.g. Quick Scan to Bio" value={shortcutLabel} onChange={(e) => setShortcutLabel(e.target.value)} autoFocus className="w-full h-[52px] px-5 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20 transition-all" />
-                      <p className="font-body text-xs text-text-secondary mt-4 mb-2">Quick options:</p>
-                      <div className="flex flex-wrap gap-2">
-                        {['Quick Scan to Bio', 'Quick Scan to History', 'Scan Homework'].map((item) => (<button key={item} onClick={() => addShortcut(item)} className="px-4 py-2.5 rounded-full bg-bg-secondary font-body text-xs font-medium text-text-primary hover:bg-maroon/10 hover:text-maroon active:scale-95 transition-all">{item}</button>))}
-                      </div>
-                      <motion.button onClick={() => shortcutLabel.trim() && addShortcut(shortcutLabel.trim())} disabled={!shortcutLabel.trim()} whileTap={{ scale: 0.97 }} className={`w-full h-13 font-body font-semibold text-sm rounded-full mt-6 flex items-center justify-center gap-2 transition-all ${shortcutLabel.trim() ? 'bg-maroon text-white shadow-lg shadow-maroon/20' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
-                        <Plus className="w-4 h-4" /> Add Shortcut
-                      </motion.button>
-                    </motion.div>
-                  )}
-                  {modalStep === 'detail' && selectedType === 'link' && !shortcutAdded && (
-                    <motion.div key="link-detail" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }}>
-                      <button onClick={() => setModalStep('type')} className="flex items-center gap-1.5 text-text-secondary font-body text-xs mb-4"><ArrowRight className="w-3 h-3 rotate-180" /> Back</button>
-                      <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">Label</label>
-                      <input type="text" placeholder="e.g. Khan Academy" value={shortcutLabel} onChange={(e) => setShortcutLabel(e.target.value)} autoFocus className="w-full h-[52px] px-5 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20 transition-all mb-3" />
-                      <label className="font-body text-xs font-semibold text-text-secondary tracking-wide uppercase mb-2 block">URL</label>
-                      <input type="url" placeholder="https://..." value={shortcutUrl} onChange={(e) => setShortcutUrl(e.target.value)} className="w-full h-[52px] px-5 bg-input-bg rounded-2xl font-body text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:ring-2 focus:ring-maroon/20 transition-all" />
-                      <motion.button onClick={() => shortcutLabel.trim() && addShortcut(shortcutLabel.trim(), undefined, shortcutUrl.trim())} disabled={!shortcutLabel.trim()} whileTap={{ scale: 0.97 }} className={`w-full h-13 font-body font-semibold text-sm rounded-full mt-6 flex items-center justify-center gap-2 transition-all ${shortcutLabel.trim() ? 'bg-maroon text-white shadow-lg shadow-maroon/20' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
-                        <Plus className="w-4 h-4" /> Add Shortcut
-                      </motion.button>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-    </div>
+              <TouchableOpacity style={styles.modalSaveBtn} onPress={saveNewClass}>
+                <Text style={styles.modalSaveBtnText}>Create Class</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.bgSecondary },
+  scroll: { flex: 1 },
+  scrollContent: { paddingTop: 56, paddingHorizontal: 24, paddingBottom: 120 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  greeting: { fontSize: 28, fontWeight: '700', color: colors.textPrimary },
+  subtitle: { fontSize: 14, color: colors.textSecondary, marginTop: 4 },
+  avatarWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.bgSecondary,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#e7e3e3',
+  },
+  avatar: { width: '100%', height: '100%' },
+  heroCard: {
+    marginTop: 18,
+    backgroundColor: '#fff9f6',
+    borderRadius: 24,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#f0dfd9',
+    overflow: 'hidden',
+  },
+  heroOrbA: {
+    position: 'absolute',
+    top: -24,
+    right: -12,
+    width: 98,
+    height: 98,
+    borderRadius: 49,
+    backgroundColor: 'rgba(127,29,29,0.12)',
+  },
+  heroOrbB: {
+    position: 'absolute',
+    bottom: -26,
+    left: -14,
+    width: 86,
+    height: 86,
+    borderRadius: 43,
+    backgroundColor: 'rgba(37,99,235,0.12)',
+  },
+  heroRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  heroBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(127,29,29,0.1)',
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  heroBadgeText: { fontSize: 11, color: colors.maroon, fontWeight: '700' },
+  heroDate: { fontSize: 11, color: colors.textSecondary, fontWeight: '700' },
+  heroTitle: { marginTop: 10, fontSize: 24, fontWeight: '800', color: colors.textPrimary },
+  heroSubtitle: { marginTop: 4, fontSize: 13, color: colors.textSecondary, lineHeight: 19 },
+  heroMiniStats: { flexDirection: 'row', gap: 8, marginTop: 14 },
+  heroMiniCard: {
+    flex: 1,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.8)',
+    borderWidth: 1,
+    borderColor: '#ede2df',
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  heroMiniValue: { fontSize: 16, fontWeight: '800', color: colors.textPrimary },
+  heroMiniLabel: { fontSize: 10, color: colors.textSecondary, marginTop: 2, fontWeight: '700' },
+  searchRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 24 },
+  searchBox: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 16, paddingHorizontal: 20, height: 52, gap: 12 },
+  searchInput: { flex: 1, fontSize: 14, color: colors.textPrimary, paddingVertical: 0 },
+  filterBtn: { width: 52, height: 52, borderRadius: 26, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
+  filterBtnActive: { backgroundColor: '#7f1d1d' },
+  filterMenu: {
+    marginTop: 10,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 12,
+  },
+  filterChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, backgroundColor: '#f3f3f3' },
+  filterChipActive: { backgroundColor: colors.maroon },
+  filterChipText: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
+  filterChipTextActive: { color: 'white' },
+  searchResultsBox: {
+    marginTop: 10,
+    backgroundColor: 'white',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#ece8e8',
+    overflow: 'hidden',
+  },
+  searchResultRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f1f1',
+  },
+  searchResultIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#f7f3f3', alignItems: 'center', justifyContent: 'center' },
+  searchResultInfo: { flex: 1 },
+  searchResultTitle: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
+  searchResultSub: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
+  searchEmpty: { padding: 14, textAlign: 'center', color: colors.textSecondary },
+  sectionTitle: { fontSize: 18, fontWeight: '700', color: colors.textPrimary, marginTop: 28 },
+  shortcuts: { marginTop: 12 },
+  shortcutsContent: { paddingRight: 24, gap: 12, flexDirection: 'row', alignItems: 'center' },
+  shortcutAdd: { width: 56, height: 56, borderRadius: 16, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
+  shortcut: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'white', paddingHorizontal: 20, paddingVertical: 14, borderRadius: 24 },
+  shortcutLabel: { fontSize: 14, fontWeight: '500', color: colors.textPrimary, maxWidth: 130 },
+  carouselHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 28 },
+  counter: { fontSize: 12, color: colors.textTertiary },
+  carouselContent: { paddingRight: 24, gap: CARD_GAP, marginTop: 16 },
+  classCard: { height: 370, borderRadius: 28, overflow: 'hidden' },
+  addCard: { backgroundColor: '#fff', borderWidth: 2, borderColor: `${colors.maroon}35`, borderStyle: 'dashed' },
+  addCardInner: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14, paddingHorizontal: 24 },
+  addCardIcon: { width: 64, height: 64, borderRadius: 20, backgroundColor: `${colors.maroon}15`, alignItems: 'center', justifyContent: 'center' },
+  addCardTitle: { fontSize: 20, fontWeight: '800', color: colors.textPrimary },
+  addCardSub: { fontSize: 13, color: colors.textSecondary, textAlign: 'center' },
+  addCardPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' },
+  addCardPill: { backgroundColor: '#f3f0f0', borderRadius: 14, paddingHorizontal: 10, paddingVertical: 6 },
+  addCardPillText: { fontSize: 11, color: colors.textSecondary, fontWeight: '600' },
+  classImage: { ...StyleSheet.absoluteFillObject },
+  classOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)' },
+  heartBtn: { position: 'absolute', top: 20, right: 20, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center', zIndex: 10 },
+  trashBtn: { position: 'absolute', top: 20, left: 20, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center', zIndex: 10 },
+  classFooter: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 24 },
+  classBlock: { fontSize: 12, fontWeight: '500', color: 'rgba(255,255,255,0.8)', letterSpacing: 1 },
+  classTitle: { fontSize: 24, fontWeight: '700', color: 'white', marginTop: 4 },
+  classDesc: { fontSize: 12, color: 'rgba(255,255,255,0.6)', marginTop: 6 },
+  classMeta: { flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: 12, flexWrap: 'wrap' },
+  classMetaItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  classMetaText: { fontSize: 12, color: 'rgba(255,255,255,0.8)' },
+  keepLearning: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 24, paddingHorizontal: 20, paddingVertical: 14, marginTop: 16 },
+  keepLearningText: { fontSize: 14, fontWeight: '600', color: 'white' },
+  keepLearningIcon: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center' },
+  dots: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginTop: 20 },
+  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#d1d5db' },
+  dotActive: { width: 24, backgroundColor: colors.maroon },
+  statsRow: { flexDirection: 'row', gap: 12, marginTop: 12 },
+  statCard: { flex: 1, backgroundColor: 'white', borderRadius: 24, padding: 16, alignItems: 'center' },
+  statIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: `${colors.maroon}18`, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+  statValue: { fontSize: 20, fontWeight: '700', color: colors.textPrimary },
+  statLabel: { fontSize: 11, color: colors.textTertiary, marginTop: 2 },
+  modalKeyboard: { flex: 1 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  modalCard: { backgroundColor: 'white', borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 20, paddingBottom: 30 },
+  modalCardLarge: { backgroundColor: 'white', borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 20, paddingBottom: 34, maxHeight: '86%' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: colors.textPrimary },
+  modalLabel: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, marginBottom: 6, marginTop: 8 },
+  modalInput: { height: 50, borderRadius: 14, borderWidth: 1, borderColor: '#ece8e8', backgroundColor: '#faf8f8', paddingHorizontal: 14, fontSize: 14, color: colors.textPrimary },
+  modalSaveBtn: { marginTop: 16, height: 50, borderRadius: 25, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
+  modalSaveBtnText: { color: 'white', fontSize: 15, fontWeight: '700' },
+  optionRow: { flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 4 },
+  optionChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, backgroundColor: '#f3f1f1' },
+  optionChipActive: { backgroundColor: colors.maroon },
+  optionChipText: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
+  optionChipTextActive: { color: 'white' },
+  pickChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, borderWidth: 1, borderColor: '#e5e1e1', backgroundColor: 'white' },
+  pickChipActive: { borderColor: colors.maroon, backgroundColor: `${colors.maroon}12` },
+  pickChipText: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
+  pickChipTextActive: { color: colors.maroon },
+  imagePickerBtn: {
+    marginTop: 4,
+    height: 42,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: `${colors.maroon}40`,
+    backgroundColor: `${colors.maroon}10`,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+  },
+  imagePickerBtnText: { fontSize: 13, color: colors.maroon, fontWeight: '700' },
+  newClassImagePreview: {
+    marginTop: 8,
+    width: '100%',
+    height: 110,
+    borderRadius: 14,
+    backgroundColor: '#f0ecec',
+  },
+  colorRow: { flexDirection: 'row', gap: 12, marginTop: 8 },
+  colorDot: { width: 28, height: 28, borderRadius: 14, borderWidth: 2, borderColor: 'transparent' },
+  colorDotActive: { borderColor: '#111' },
+});

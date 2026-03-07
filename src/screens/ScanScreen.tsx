@@ -1,363 +1,334 @@
-import { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useMemo, useState } from 'react';
 import {
-  Zap,
-  FlipHorizontal,
-  Image,
-  X,
-  FileText,
-  BookOpen,
-  PenTool,
-  Check,
-  ChevronRight,
-  ScanLine,
-} from 'lucide-react';
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import { BottomNav } from '../components/BottomNav';
+import { colors } from '../theme';
+import type { ClassData, FileData } from '../types';
 
 interface Props {
   onHome: () => void;
   onFiles: () => void;
   onFriends: () => void;
+  classes: ClassData[];
+  onSaveScan: (classId: string, file: FileData) => void;
 }
 
 type ScanMode = 'notes' | 'document' | 'whiteboard';
-type ScanState = 'ready' | 'scanning' | 'scanned';
 
-const recentScans = [
-  {
-    id: 1,
-    title: 'AP HUG Unit 5 Notes',
-    date: 'Today, 3:45 PM',
-    pages: 3,
-    course: 'AP Human Geo',
-  },
-  {
-    id: 2,
-    title: 'Biology Lab Report',
-    date: 'Yesterday, 11:20 AM',
-    pages: 5,
-    course: 'AP Biology',
-  },
-  {
-    id: 3,
-    title: 'Math Homework Ch.7',
-    date: 'Jan 28, 2026',
-    pages: 2,
-    course: 'Calculus',
-  },
-];
+type PendingScan = {
+  uri: string;
+  name: string;
+  source: 'camera' | 'library' | 'document';
+  pages: number;
+  sizeBytes?: number;
+};
 
-export function ScanScreen({ onHome, onFiles, onFriends }: Props) {
+function formatDate(date = new Date()) {
+  return `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}/${date.getFullYear()}`;
+}
+
+function formatSize(sizeBytes?: number) {
+  if (!sizeBytes) return '1.2MB';
+  const mb = sizeBytes / (1024 * 1024);
+  return `${Math.max(0.1, mb).toFixed(1)}MB`;
+}
+
+export function ScanScreen({ onHome, onFiles, onFriends, classes, onSaveScan }: Props) {
+  const insets = useSafeAreaInsets();
   const [scanMode, setScanMode] = useState<ScanMode>('notes');
-  const [scanState, setScanState] = useState<ScanState>('ready');
   const [flashOn, setFlashOn] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [pending, setPending] = useState<PendingScan | null>(null);
+  const [destinationClassId, setDestinationClassId] = useState(classes[0]?.id || '');
 
-  const modes: { id: ScanMode; label: string; icon: typeof FileText }[] = [
-    { id: 'notes', label: 'Notes', icon: PenTool },
-    { id: 'document', label: 'Document', icon: FileText },
-    { id: 'whiteboard', label: 'Whiteboard', icon: BookOpen },
-  ];
+  const recentScans = useMemo(
+    () =>
+      classes
+        .flatMap((cls) =>
+          cls.files.map((file) => ({
+            id: `${cls.id}-${file.id}`,
+            title: file.name,
+            date: file.date,
+            pages: file.pages,
+            course: cls.title,
+            source: file.source || 'library',
+          }))
+        )
+        .sort((a, b) => Number(b.id.split('-').pop()) - Number(a.id.split('-').pop()))
+        .slice(0, 4),
+    [classes]
+  );
 
-  const handleScan = () => {
-    setScanState('scanning');
-    setTimeout(() => {
-      setScanState('scanned');
-    }, 2000);
+  const handleCameraCapture = async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) return;
+
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: true,
+      quality: 0.9,
+      mediaTypes: ['images'],
+    });
+
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      setPending({
+        uri: asset.uri,
+        name: `Scan_${Date.now()}.jpg`,
+        source: 'camera',
+        pages: 1,
+        sizeBytes: asset.fileSize,
+      });
+    }
   };
 
-  const resetScan = () => {
-    setScanState('ready');
+  const handlePickFromLibrary = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      allowsEditing: true,
+      quality: 0.9,
+      mediaTypes: ['images'],
+    });
+
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      setPending({
+        uri: asset.uri,
+        name: asset.fileName || `Library_${Date.now()}.jpg`,
+        source: 'library',
+        pages: 1,
+        sizeBytes: asset.fileSize,
+      });
+    }
+  };
+
+  const handlePickDocument = async () => {
+    const result = await DocumentPicker.getDocumentAsync({
+      copyToCacheDirectory: true,
+      multiple: false,
+      type: ['application/pdf', 'image/*', 'text/plain'],
+    });
+
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      const pages = asset.mimeType === 'application/pdf' ? 3 : 1;
+      setPending({
+        uri: asset.uri,
+        name: asset.name,
+        source: 'document',
+        pages,
+        sizeBytes: asset.size,
+      });
+    }
+  };
+
+  const saveScan = () => {
+    if (!pending || !destinationClassId) return;
+
+    setSaving(true);
+    const file: FileData = {
+      id: Date.now(),
+      name: pending.name,
+      date: formatDate(),
+      thumbnail:
+        pending.source === 'document'
+          ? 'https://images.unsplash.com/photo-1517842645767-c639042777db?w=120&h=80&fit=crop'
+          : pending.uri,
+      pages: pending.pages,
+      size: formatSize(pending.sizeBytes),
+      readTime: `${Math.max(2, pending.pages * 2)} Min Read`,
+      previewTitle: pending.name.replace(/\.[^/.]+$/, ''),
+      previewText:
+        'Scanned content is ready. Add tags, move to a unit, and share with your study group to collaborate faster.',
+      source: pending.source,
+    };
+
+    onSaveScan(destinationClassId, file);
+    setSaving(false);
+    setPending(null);
   };
 
   return (
-    <div className="h-full w-full bg-[#0a0a0a] relative flex flex-col">
-      {/* Camera Viewfinder Area */}
-      <div className="flex-1 relative overflow-hidden">
-        {/* Simulated camera feed - dark with grain texture */}
-        <div className="absolute inset-0 bg-gradient-to-b from-[#1a1a1a] via-[#111] to-[#0a0a0a]">
-          {/* Subtle grid pattern to simulate viewfinder */}
-          <div
-            className="absolute inset-0 opacity-[0.03]"
-            style={{
-              backgroundImage:
-                'linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)',
-              backgroundSize: '20px 20px',
-            }}
-          />
-        </div>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+        <View style={styles.topBar}>
+          <TouchableOpacity onPress={onHome} style={styles.topBtn}>
+            <Ionicons name="arrow-back" size={22} color="white" />
+          </TouchableOpacity>
+          <Text style={styles.topTitle}>Smart Scan</Text>
+          <TouchableOpacity style={[styles.topBtn, flashOn && styles.flashOn]} onPress={() => setFlashOn(!flashOn)}>
+            <Ionicons name="flash" size={20} color={flashOn ? '#111' : 'white'} />
+          </TouchableOpacity>
+        </View>
 
-        {/* Top Controls */}
-        <motion.div
-          initial={{ y: -20, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          className="relative z-10 flex items-center justify-between px-6 pt-14"
-        >
-          <button
-            onClick={onHome}
-            className="w-10 h-10 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center"
-          >
-            <X className="w-5 h-5 text-white" />
-          </button>
-
-          <div className="flex items-center gap-2">
-            <h1 className="font-display text-lg font-bold text-white">Scan</h1>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setFlashOn(!flashOn)}
-              className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
-                flashOn ? 'bg-yellow-400' : 'bg-white/10 backdrop-blur-md'
-              }`}
+        <View style={styles.modeRow}>
+          {(['notes', 'document', 'whiteboard'] as ScanMode[]).map((mode) => (
+            <TouchableOpacity
+              key={mode}
+              style={[styles.modeBtn, scanMode === mode && styles.modeBtnActive]}
+              onPress={() => setScanMode(mode)}
             >
-              <Zap
-                className={`w-5 h-5 ${flashOn ? 'text-black' : 'text-white'}`}
-                fill={flashOn ? 'currentColor' : 'none'}
-              />
-            </button>
-          </div>
-        </motion.div>
-
-        {/* Scan Mode Tabs */}
-        <motion.div
-          initial={{ y: 10, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.15 }}
-          className="relative z-10 flex items-center justify-center gap-2 mt-5"
-        >
-          {modes.map((mode) => (
-            <button
-              key={mode.id}
-              onClick={() => setScanMode(mode.id)}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-full font-body text-xs font-medium transition-all duration-300 ${
-                scanMode === mode.id
-                  ? 'bg-maroon text-white shadow-lg shadow-maroon/30'
-                  : 'bg-white/10 backdrop-blur-sm text-white/70'
-              }`}
-            >
-              <mode.icon className="w-3.5 h-3.5" />
-              {mode.label}
-            </button>
+              <Text style={[styles.modeText, scanMode === mode && styles.modeTextActive]}>
+                {mode[0].toUpperCase() + mode.slice(1)}
+              </Text>
+            </TouchableOpacity>
           ))}
-        </motion.div>
+        </View>
 
-        {/* Viewfinder Frame */}
-        <div className="relative z-10 flex-1 flex items-center justify-center px-10 mt-6">
-          <AnimatePresence mode="wait">
-            {scanState === 'ready' && (
-              <motion.div
-                key="ready"
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                className="w-full aspect-[3/4] relative max-h-[340px]"
-              >
-                {/* Corner brackets */}
-                <div className="absolute top-0 left-0 w-10 h-10 border-t-[3px] border-l-[3px] border-white rounded-tl-xl" />
-                <div className="absolute top-0 right-0 w-10 h-10 border-t-[3px] border-r-[3px] border-white rounded-tr-xl" />
-                <div className="absolute bottom-0 left-0 w-10 h-10 border-b-[3px] border-l-[3px] border-white rounded-bl-xl" />
-                <div className="absolute bottom-0 right-0 w-10 h-10 border-b-[3px] border-r-[3px] border-white rounded-br-xl" />
+        {!pending ? (
+          <View style={styles.capturePanel}>
+            <Text style={styles.captureTitle}>Capture or Import</Text>
+            <Text style={styles.captureSub}>Use your camera or bring files from your device.</Text>
 
-                {/* Center guide text */}
-                <div className="absolute inset-0 flex flex-col items-center justify-center">
-                  <ScanLine className="w-12 h-12 text-white/20 mb-3" />
-                  <p className="font-body text-sm text-white/40 text-center">
-                    Position your {scanMode === 'whiteboard' ? 'whiteboard' : scanMode === 'document' ? 'document' : 'notes'} here
-                  </p>
-                  <p className="font-body text-xs text-white/25 mt-1">
-                    Align edges within the frame
-                  </p>
-                </div>
-              </motion.div>
-            )}
+            <View style={styles.captureActions}>
+              <TouchableOpacity style={styles.captureCard} onPress={handleCameraCapture}>
+                <View style={styles.captureIcon}><Ionicons name="camera" size={22} color={colors.maroon} /></View>
+                <Text style={styles.captureCardTitle}>Camera</Text>
+                <Text style={styles.captureCardSub}>Scan notes instantly</Text>
+              </TouchableOpacity>
 
-            {scanState === 'scanning' && (
-              <motion.div
-                key="scanning"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="w-full aspect-[3/4] relative max-h-[340px]"
-              >
-                {/* Animated scan line */}
-                <motion.div
-                  className="absolute left-4 right-4 h-[2px] bg-maroon shadow-[0_0_15px_rgba(61,12,17,0.8)] z-10"
-                  animate={{ top: ['5%', '95%', '5%'] }}
-                  transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
-                />
-                {/* Corner brackets */}
-                <div className="absolute top-0 left-0 w-10 h-10 border-t-[3px] border-l-[3px] border-maroon rounded-tl-xl" />
-                <div className="absolute top-0 right-0 w-10 h-10 border-t-[3px] border-r-[3px] border-maroon rounded-tr-xl" />
-                <div className="absolute bottom-0 left-0 w-10 h-10 border-b-[3px] border-l-[3px] border-maroon rounded-bl-xl" />
-                <div className="absolute bottom-0 right-0 w-10 h-10 border-b-[3px] border-r-[3px] border-maroon rounded-br-xl" />
+              <TouchableOpacity style={styles.captureCard} onPress={handlePickFromLibrary}>
+                <View style={styles.captureIcon}><Ionicons name="images" size={22} color={colors.maroon} /></View>
+                <Text style={styles.captureCardTitle}>Photos</Text>
+                <Text style={styles.captureCardSub}>Import from gallery</Text>
+              </TouchableOpacity>
 
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="flex flex-col items-center">
-                    <div className="w-10 h-10 border-2 border-maroon border-t-transparent rounded-full animate-spin mb-3" />
-                    <p className="font-body text-sm text-white/60">Scanning...</p>
-                  </div>
-                </div>
-              </motion.div>
-            )}
+              <TouchableOpacity style={styles.captureCard} onPress={handlePickDocument}>
+                <View style={styles.captureIcon}><Ionicons name="folder-open" size={22} color={colors.maroon} /></View>
+                <Text style={styles.captureCardTitle}>Files</Text>
+                <Text style={styles.captureCardSub}>PDF, image, text</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.pendingPanel}>
+            <View style={styles.pendingHeader}>
+              <Ionicons name="checkmark-circle" size={24} color="#10b981" />
+              <Text style={styles.pendingTitle}>Ready to Save</Text>
+            </View>
+            <Text style={styles.pendingFileName}>{pending.name}</Text>
+            <Text style={styles.pendingMeta}>
+              Source: {pending.source} • {pending.pages} page{pending.pages > 1 ? 's' : ''}
+            </Text>
 
-            {scanState === 'scanned' && (
-              <motion.div
-                key="scanned"
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.9 }}
-                className="w-full aspect-[3/4] relative max-h-[340px] bg-white rounded-2xl overflow-hidden shadow-2xl"
-              >
-                {/* Simulated scanned document */}
-                <div className="p-5 h-full">
-                  <div className="space-y-2 mb-4">
-                    <div className="h-3 bg-gray-800 rounded-full w-3/4" />
-                    <div className="h-2 bg-gray-300 rounded-full w-full" />
-                    <div className="h-2 bg-gray-300 rounded-full w-5/6" />
-                    <div className="h-2 bg-gray-200 rounded-full w-full" />
-                    <div className="h-2 bg-gray-300 rounded-full w-2/3" />
-                  </div>
-                  <div className="space-y-2 mb-4">
-                    <div className="h-2.5 bg-gray-700 rounded-full w-1/2" />
-                    <div className="h-2 bg-gray-200 rounded-full w-full" />
-                    <div className="h-2 bg-gray-300 rounded-full w-4/5" />
-                    <div className="h-2 bg-gray-200 rounded-full w-full" />
-                    <div className="h-2 bg-gray-300 rounded-full w-3/4" />
-                    <div className="h-2 bg-gray-200 rounded-full w-5/6" />
-                  </div>
-                  <div className="w-full h-16 bg-gray-100 rounded-lg mt-3" />
-                  <div className="space-y-2 mt-4">
-                    <div className="h-2 bg-gray-300 rounded-full w-full" />
-                    <div className="h-2 bg-gray-200 rounded-full w-3/4" />
-                    <div className="h-2 bg-gray-300 rounded-full w-5/6" />
-                  </div>
-                </div>
-
-                {/* Success overlay */}
-                <div className="absolute inset-0 bg-maroon/10 flex items-center justify-center">
-                  <motion.div
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    transition={{ type: 'spring', delay: 0.2 }}
-                    className="w-16 h-16 rounded-full bg-maroon flex items-center justify-center shadow-xl shadow-maroon/40"
-                  >
-                    <Check className="w-8 h-8 text-white" />
-                  </motion.div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        {/* Bottom Controls */}
-        <motion.div
-          initial={{ y: 30, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ delay: 0.25 }}
-          className="relative z-10 px-6 pb-4 mt-4"
-        >
-          {scanState === 'scanned' ? (
-            <motion.div
-              initial={{ y: 10, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              className="flex flex-col gap-2.5"
-            >
-              <div className="bg-white/10 backdrop-blur-md rounded-2xl p-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-maroon/20 flex items-center justify-center">
-                    <FileText className="w-5 h-5 text-maroon" />
-                  </div>
-                  <div className="flex-1">
-                    <p className="font-body text-sm font-semibold text-white">Scan Complete</p>
-                    <p className="font-body text-xs text-white/50">1 page • Enhanced quality</p>
-                  </div>
-                </div>
-              </div>
-              <div className="flex gap-2.5">
-                <button
-                  onClick={resetScan}
-                  className="flex-1 h-12 bg-white/10 backdrop-blur-md text-white font-body font-semibold text-sm rounded-full active:scale-[0.97] transition-transform"
+            <Text style={styles.destinationTitle}>Choose Destination Class</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.destinationRow}>
+              {classes.map((cls) => (
+                <TouchableOpacity
+                  key={cls.id}
+                  style={[styles.destinationChip, destinationClassId === cls.id && styles.destinationChipActive]}
+                  onPress={() => setDestinationClassId(cls.id)}
                 >
-                  Retake
-                </button>
-                <button
-                  onClick={onFiles}
-                  className="flex-1 h-12 bg-maroon text-white font-body font-semibold text-sm rounded-full active:scale-[0.97] transition-transform shadow-lg shadow-maroon/30 flex items-center justify-center gap-2"
-                >
-                  Save
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
-            </motion.div>
+                  <Text style={[styles.destinationChipText, destinationClassId === cls.id && styles.destinationChipTextActive]}>
+                    {cls.title}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            <View style={styles.pendingActions}>
+              <TouchableOpacity style={styles.secondaryBtn} onPress={() => setPending(null)}>
+                <Text style={styles.secondaryBtnText}>Discard</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.primaryBtn} onPress={saveScan} disabled={saving || !destinationClassId}>
+                <Text style={styles.primaryBtnText}>{saving ? 'Saving...' : 'Save to Class'}</Text>
+                <Ionicons name="arrow-forward" size={16} color="white" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        <View style={styles.recentPanel}>
+          <View style={styles.recentHeader}>
+            <Text style={styles.recentTitle}>Recent Scans</Text>
+            <TouchableOpacity onPress={onFiles}>
+              <Text style={styles.recentLink}>Open Files</Text>
+            </TouchableOpacity>
+          </View>
+
+          {recentScans.length === 0 ? (
+            <Text style={styles.recentEmpty}>No scans yet. Capture your first file above.</Text>
           ) : (
-            <div className="flex items-center justify-between">
-              {/* Gallery button */}
-              <button className="w-12 h-12 rounded-xl bg-white/10 backdrop-blur-md flex items-center justify-center">
-                <Image className="w-5 h-5 text-white" />
-              </button>
-
-              {/* Shutter button */}
-              <button
-                onClick={handleScan}
-                disabled={scanState === 'scanning'}
-                className="relative"
-              >
-                <div className="w-[72px] h-[72px] rounded-full border-[3px] border-white flex items-center justify-center">
-                  <motion.div
-                    animate={scanState === 'scanning' ? { scale: [1, 0.85, 1] } : {}}
-                    transition={scanState === 'scanning' ? { duration: 1, repeat: Infinity } : {}}
-                    className="w-[58px] h-[58px] rounded-full bg-white"
-                  />
-                </div>
-              </button>
-
-              {/* Flip camera */}
-              <button className="w-12 h-12 rounded-xl bg-white/10 backdrop-blur-md flex items-center justify-center">
-                <FlipHorizontal className="w-5 h-5 text-white" />
-              </button>
-            </div>
+            recentScans.map((scan) => (
+              <View key={scan.id} style={styles.recentItem}>
+                <View style={styles.recentIcon}>
+                  <Ionicons name={scan.source === 'document' ? 'document-text' : 'image'} size={16} color={colors.maroon} />
+                </View>
+                <View style={styles.recentInfo}>
+                  <Text style={styles.recentName}>{scan.title}</Text>
+                  <Text style={styles.recentMeta}>{scan.date} • {scan.pages} pages</Text>
+                </View>
+                <Text style={styles.recentCourse}>{scan.course}</Text>
+              </View>
+            ))
           )}
-        </motion.div>
-      </div>
-
-      {/* Recent Scans Section */}
-      <motion.div
-        initial={{ y: 30, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.3 }}
-        className="bg-[#1a1a1a] rounded-t-[28px] px-6 pt-5 pb-28"
-      >
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="font-display text-base font-bold text-white">Recent Scans</h2>
-          <button className="font-body text-xs text-white/40">See all</button>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          {recentScans.map((scan) => (
-            <button
-              key={scan.id}
-              className="flex items-center gap-3 bg-white/5 rounded-2xl p-3 text-left transition-all active:bg-white/10"
-            >
-              <div className="w-11 h-11 rounded-xl bg-maroon/15 flex items-center justify-center shrink-0">
-                <FileText className="w-5 h-5 text-maroon" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-body text-sm font-semibold text-white truncate">
-                  {scan.title}
-                </p>
-                <p className="font-body text-[11px] text-white/40">
-                  {scan.date} • {scan.pages} pages
-                </p>
-              </div>
-              <span className="font-body text-[10px] font-medium text-white/30 bg-white/5 px-2.5 py-1 rounded-full shrink-0">
-                {scan.course}
-              </span>
-            </button>
-          ))}
-        </div>
-      </motion.div>
+        </View>
+      </ScrollView>
 
       <BottomNav active="scan" onHome={onHome} onFiles={onFiles} onScan={() => {}} onFriends={onFriends} />
-    </div>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#120a0b' },
+  scroll: { flex: 1 },
+  content: { paddingHorizontal: 20, paddingBottom: 120 },
+  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14 },
+  topBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center' },
+  flashOn: { backgroundColor: '#facc15' },
+  topTitle: { fontSize: 20, fontWeight: '800', color: 'white' },
+  modeRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  modeBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.08)' },
+  modeBtnActive: { backgroundColor: colors.maroon },
+  modeText: { fontSize: 12, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
+  modeTextActive: { color: 'white' },
+
+  capturePanel: { marginTop: 16, backgroundColor: 'white', borderRadius: 22, padding: 18 },
+  captureTitle: { fontSize: 20, fontWeight: '800', color: colors.textPrimary },
+  captureSub: { fontSize: 13, color: colors.textSecondary, marginTop: 4 },
+  captureActions: { gap: 10, marginTop: 14 },
+  captureCard: { backgroundColor: '#faf8f8', borderRadius: 16, padding: 14, borderWidth: 1, borderColor: '#efebeb' },
+  captureIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: `${colors.maroon}14`, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+  captureCardTitle: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
+  captureCardSub: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+
+  pendingPanel: { marginTop: 16, backgroundColor: 'white', borderRadius: 22, padding: 18 },
+  pendingHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  pendingTitle: { fontSize: 18, fontWeight: '800', color: colors.textPrimary },
+  pendingFileName: { fontSize: 15, fontWeight: '700', color: colors.textPrimary, marginTop: 10 },
+  pendingMeta: { fontSize: 12, color: colors.textSecondary, marginTop: 3 },
+  destinationTitle: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, marginTop: 16, marginBottom: 8 },
+  destinationRow: { gap: 8 },
+  destinationChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, borderWidth: 1, borderColor: '#ebe6e6', backgroundColor: 'white' },
+  destinationChipActive: { borderColor: colors.maroon, backgroundColor: `${colors.maroon}10` },
+  destinationChipText: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
+  destinationChipTextActive: { color: colors.maroon },
+  pendingActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  secondaryBtn: { flex: 1, height: 44, borderRadius: 22, backgroundColor: '#f2f0f0', alignItems: 'center', justifyContent: 'center' },
+  secondaryBtnText: { fontSize: 13, fontWeight: '700', color: colors.textSecondary },
+  primaryBtn: { flex: 1, height: 44, borderRadius: 22, backgroundColor: colors.maroon, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  primaryBtnText: { fontSize: 13, fontWeight: '700', color: 'white' },
+
+  recentPanel: { marginTop: 18, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 20, padding: 14 },
+  recentHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  recentTitle: { fontSize: 15, fontWeight: '700', color: 'white' },
+  recentLink: { fontSize: 12, color: 'rgba(255,255,255,0.7)' },
+  recentEmpty: { marginTop: 10, fontSize: 12, color: 'rgba(255,255,255,0.6)' },
+  recentItem: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 14, padding: 10 },
+  recentIcon: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center' },
+  recentInfo: { flex: 1 },
+  recentName: { fontSize: 13, color: 'white', fontWeight: '600' },
+  recentMeta: { fontSize: 11, color: 'rgba(255,255,255,0.6)', marginTop: 2 },
+  recentCourse: { fontSize: 10, color: 'rgba(255,255,255,0.7)', maxWidth: 92, textAlign: 'right' },
+});
