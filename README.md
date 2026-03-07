@@ -1,6 +1,8 @@
 # Citadel (React Native)
 
-A study and learning app built with **React Native** and **Expo**. Organize notes, collaborate with classmates, and track your courses.
+A study and learning app built with **React Native** and **Expo**. Organize and merge notes, collaborate with classmates, and track your courses!
+
+Built by **Annika Shah, Laasya Potuluri, Max Burrus, and Anya Vulupala**.
 
 ## Setup
 
@@ -33,13 +35,14 @@ A study and learning app built with **React Native** and **Expo**. Organize note
 - **Sign In / Sign Up** – Profile photo (image picker), email/password
 - **Home** – Class carousel, shortcuts, search, add/remove classes
 - **Course Detail** – Units, sections, notes
+- **Note Merging** – Merge two or more notes into a combined summary
 - **Files** – Per-class file list and document preview
 - **Scan** – Scan modes (notes, document, whiteboard), recent scans
 - **Friends** – Tabs (Friends, Requests, Sessions, Discover), friend list
 
 ## Tech stack
 
-- React Native + Expo SDK 52
+- React Native + Expo SDK 54
 - TypeScript
 - React Navigation (optional; current app uses in-App state for navigation)
 - Expo Image Picker (profile/photo)
