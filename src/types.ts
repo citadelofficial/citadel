@@ -12,6 +12,8 @@ export interface FriendData {
   status: 'online' | 'studying' | 'offline';
   course?: string;
   lastMessage?: string;
+  grade?: string;
+  school?: string;
 }
 
 export interface FileData {
@@ -36,10 +38,19 @@ export interface SubUnitNote {
   content: string;
 }
 
+export interface Quiz {
+  id: number;
+  title: string;
+  questions: number;
+  score?: number; // percentage 0-100 if taken
+  date: string;
+}
+
 export interface SubUnit {
   id: string;
   title: string;
   notes: SubUnitNote[];
+  quizzes?: Quiz[];
 }
 
 export interface UnitData {
@@ -59,6 +70,7 @@ export interface ClassData {
   classCode: string;
   image: string;
   classmates: number;
+  classmateNames?: string[];
   documents: number;
   color: string;
   description: string;
@@ -71,6 +83,9 @@ export type Screen =
   | 'onboarding'
   | 'signin'
   | 'home'
+  | 'profile'
+  | 'person-profile'
+  | 'info-page'
   | 'course-detail'
   | 'files'
   | 'scan'

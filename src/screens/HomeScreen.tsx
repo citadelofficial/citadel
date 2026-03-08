@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -18,13 +18,14 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { BottomNav } from '../components/BottomNav';
-import { colors } from '../theme';
+import { AnimatedPressable } from '../components/AnimatedPressable';
+import { colors, fonts } from '../theme';
 import type { ClassData, FriendData, UserData, UnitData } from '../types';
 import { friendsDirectory } from '../data/friends';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const CARD_WIDTH = SCREEN_WIDTH - 48 - 72;
-const CARD_GAP = 16;
+const CARD_WIDTH = SCREEN_WIDTH - 48 - 56;
+const CARD_GAP = 14;
 
 type SearchFilter = 'all' | 'classes' | 'files' | 'friends' | 'actions';
 type ShortcutType = 'class' | 'friend' | 'scan' | 'files';
@@ -48,6 +49,7 @@ interface Props {
   onFilesOpen: (classId?: string) => void;
   onScanOpen: () => void;
   onFriendsOpen: () => void;
+  onProfileOpen: () => void;
   userName?: string;
   profilePicture?: string | null;
   grade?: string;
@@ -71,6 +73,10 @@ function makeClassCode(title: string) {
     .join('') || 'CL';
   const suffix = Math.random().toString(36).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(2, 6);
   return `${prefix}-${suffix}`;
+}
+
+function normalizeClassCode(code: string) {
+  return code.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 }
 
 function buildStarterUnits(template: ClassTemplate): UnitData[] {
@@ -102,6 +108,7 @@ export function HomeScreen({
   onFilesOpen,
   onScanOpen,
   onFriendsOpen,
+  onProfileOpen,
   userName,
   profilePicture,
   grade,
@@ -116,11 +123,6 @@ export function HomeScreen({
   const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [currentCardIndex, setCurrentCardIndex] = useState(0);
   const [likedCards, setLikedCards] = useState<Set<string>>(new Set());
-
-  const [showProfileModal, setShowProfileModal] = useState(false);
-  const [profileName, setProfileName] = useState(userName || '');
-  const [profileGrade, setProfileGrade] = useState(grade || '');
-  const [profileSchool, setProfileSchool] = useState(school || '');
 
   const [showShortcutModal, setShowShortcutModal] = useState(false);
   const [shortcutType, setShortcutType] = useState<ShortcutType>('class');
@@ -139,69 +141,135 @@ export function HomeScreen({
   const [newClassColor, setNewClassColor] = useState(colors.maroon);
   const [newClassGoal, setNewClassGoal] = useState('Notes');
   const [newClassImage, setNewClassImage] = useState<string | null>(null);
+  const [showJoinClassModal, setShowJoinClassModal] = useState(false);
+  const [joinClassCode, setJoinClassCode] = useState('');
+  const [joinClassStatus, setJoinClassStatus] = useState('');
 
   const flatListRef = useRef<FlatList>(null);
-  const heroPulse = useRef(new Animated.Value(0)).current;
-  const heroDrift = useRef(new Animated.Value(0)).current;
+
+  // === Easter egg: tap greeting 5x for emoji burst ===
+  const [greetTaps, setGreetTaps] = useState(0);
+  const [emojiBurst, setEmojiBurst] = useState(false);
+  const emojiAnims = useRef(
+    Array.from({ length: 8 }, () => ({
+      y: new Animated.Value(0),
+      opacity: new Animated.Value(0),
+      x: new Animated.Value(0),
+      scale: new Animated.Value(0),
+    }))
+  ).current;
+
+  const triggerEmojiBurst = useCallback(() => {
+    setEmojiBurst(true);
+    emojiAnims.forEach((a) => {
+      a.y.setValue(0);
+      a.opacity.setValue(1);
+      a.x.setValue(0);
+      a.scale.setValue(0);
+    });
+    Animated.stagger(60, emojiAnims.map((a, i) =>
+      Animated.parallel([
+        Animated.timing(a.y, {
+          toValue: -180 - Math.random() * 80,
+          duration: 1200,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(a.x, {
+          toValue: (Math.random() - 0.5) * 160,
+          duration: 1200,
+          useNativeDriver: true,
+        }),
+        Animated.sequence([
+          Animated.spring(a.scale, { toValue: 1.2, useNativeDriver: true, speed: 20, bounciness: 18 }),
+          Animated.timing(a.scale, { toValue: 0.6, duration: 600, useNativeDriver: true }),
+        ]),
+        Animated.timing(a.opacity, {
+          toValue: 0,
+          duration: 1200,
+          easing: Easing.in(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ])
+    )).start(() => setEmojiBurst(false));
+  }, [emojiAnims]);
+
+  const handleGreetTap = useCallback(() => {
+    const next = greetTaps + 1;
+    setGreetTaps(next);
+    if (next >= 5) {
+      setGreetTaps(0);
+      triggerEmojiBurst();
+    }
+  }, [greetTaps, triggerEmojiBurst]);
+
+  // === Staggered section entrance ===
+  const sectionFade1 = useRef(new Animated.Value(0)).current;
+  const sectionSlide1 = useRef(new Animated.Value(24)).current;
+  const sectionFade2 = useRef(new Animated.Value(0)).current;
+  const sectionSlide2 = useRef(new Animated.Value(24)).current;
+  const sectionFade3 = useRef(new Animated.Value(0)).current;
+  const sectionSlide3 = useRef(new Animated.Value(24)).current;
+
+  // Stat cards pop in
+  const statScale1 = useRef(new Animated.Value(0)).current;
+  const statScale2 = useRef(new Animated.Value(0)).current;
+  const statScale3 = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    const pulseLoop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(heroPulse, {
-          toValue: 1,
-          duration: 1300,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.timing(heroPulse, {
-          toValue: 0,
-          duration: 1300,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ])
-    );
+    const makeSectionAnim = (fade: Animated.Value, slide: Animated.Value) =>
+      Animated.parallel([
+        Animated.timing(fade, { toValue: 1, duration: 400, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.spring(slide, { toValue: 0, useNativeDriver: true, speed: 14, bounciness: 6 }),
+      ]);
 
-    const driftLoop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(heroDrift, {
-          toValue: 1,
-          duration: 1700,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-        Animated.timing(heroDrift, {
-          toValue: 0,
-          duration: 1700,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-      ])
-    );
+    Animated.stagger(120, [
+      makeSectionAnim(sectionFade1, sectionSlide1),
+      makeSectionAnim(sectionFade2, sectionSlide2),
+      makeSectionAnim(sectionFade3, sectionSlide3),
+    ]).start();
 
-    pulseLoop.start();
-    driftLoop.start();
+    // Stats pop after sections
+    setTimeout(() => {
+      Animated.stagger(100, [
+        Animated.spring(statScale1, { toValue: 1, useNativeDriver: true, speed: 12, bounciness: 16 }),
+        Animated.spring(statScale2, { toValue: 1, useNativeDriver: true, speed: 12, bounciness: 16 }),
+        Animated.spring(statScale3, { toValue: 1, useNativeDriver: true, speed: 12, bounciness: 16 }),
+      ]).start();
+    }, 500);
+  }, [sectionFade1, sectionSlide1, sectionFade2, sectionSlide2, sectionFade3, sectionSlide3, statScale1, statScale2, statScale3]);
 
-    return () => {
-      pulseLoop.stop();
-      driftLoop.stop();
-    };
-  }, [heroDrift, heroPulse]);
+  const emojiPool = ['🎉', '🚀', '🔥', '⭐', '💪', '🎯', '✨', '🏆'];
 
-  const heroScale = heroPulse.interpolate({
-    inputRange: [0, 1],
-    outputRange: [1, 1.03],
-  });
+  // === Heart toggle microinteraction ===
+  const heartScale = useRef(new Animated.Value(1)).current;
+  const heartRingScale = useRef(new Animated.Value(0.5)).current;
+  const heartRingOpacity = useRef(new Animated.Value(0)).current;
+  const [heartRingPos, setHeartRingPos] = useState<{ top: number; left: number } | null>(null);
 
-  const heroOrbX = heroDrift.interpolate({
-    inputRange: [0, 1],
-    outputRange: [-6, 8],
-  });
+  // === Success toast for class creation ===
+  const [successToast, setSuccessToast] = useState<string | null>(null);
+  const toastSlide = useRef(new Animated.Value(80)).current;
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+  const toastScale = useRef(new Animated.Value(0.8)).current;
 
-  const heroOrbY = heroDrift.interpolate({
-    inputRange: [0, 1],
-    outputRange: [8, -8],
-  });
+  const showSuccessToast = useCallback((message: string) => {
+    setSuccessToast(message);
+    toastSlide.setValue(80);
+    toastOpacity.setValue(0);
+    toastScale.setValue(0.8);
+    Animated.parallel([
+      Animated.spring(toastSlide, { toValue: 0, useNativeDriver: true, speed: 14, bounciness: 10 }),
+      Animated.timing(toastOpacity, { toValue: 1, duration: 250, useNativeDriver: true }),
+      Animated.spring(toastScale, { toValue: 1, useNativeDriver: true, speed: 14, bounciness: 12 }),
+    ]).start();
+    setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(toastOpacity, { toValue: 0, duration: 300, useNativeDriver: true }),
+        Animated.timing(toastSlide, { toValue: 40, duration: 300, useNativeDriver: true }),
+      ]).start(() => setSuccessToast(null));
+    }, 2200);
+  }, [toastSlide, toastOpacity, toastScale]);
 
   const searchResults = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -260,30 +328,33 @@ export function HomeScreen({
       .slice(0, 10);
   }, [classes, searchFilter, searchQuery]);
 
-  const toggleLike = (id: string) => {
+  const toggleLike = useCallback((id: string) => {
+    const wasLiked = likedCards.has(id);
     setLikedCards((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  };
 
-  const openProfile = () => {
-    setProfileName(userName || '');
-    setProfileGrade(grade || '');
-    setProfileSchool(school || '');
-    setShowProfileModal(true);
-  };
-
-  const saveProfile = () => {
-    onUpdateProfile({
-      name: profileName.trim() || userName || '',
-      grade: profileGrade.trim(),
-      school: profileSchool.trim(),
-    });
-    setShowProfileModal(false);
-  };
+    if (!wasLiked) {
+      // Heart pop: scale up then bounce back
+      heartScale.setValue(0.3);
+      Animated.spring(heartScale, {
+        toValue: 1,
+        useNativeDriver: true,
+        speed: 10,
+        bounciness: 18,
+      }).start();
+      // Ring ripple
+      heartRingScale.setValue(0.5);
+      heartRingOpacity.setValue(0.6);
+      Animated.parallel([
+        Animated.timing(heartRingScale, { toValue: 2.5, duration: 500, useNativeDriver: true }),
+        Animated.timing(heartRingOpacity, { toValue: 0, duration: 500, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [likedCards, heartScale, heartRingScale, heartRingOpacity]);
 
   const shortcutIcon = (item: ShortcutItem): keyof typeof Ionicons.glyphMap => {
     if (item.type === 'class') return 'document-text';
@@ -376,6 +447,7 @@ export function HomeScreen({
       classCode: makeClassCode(title),
       image: newClassImage || templateImage,
       classmates: 0,
+      classmateNames: [],
       documents: 0,
       color: newClassColor,
       description: `${newClassTemplate} setup • Focus: ${newClassGoal}`,
@@ -386,6 +458,7 @@ export function HomeScreen({
     onAddClass(newClass);
     setShowClassModal(false);
     setCurrentCardIndex(classes.length);
+    showSuccessToast(`${title} created! 🎉`);
     setTimeout(() => {
       flatListRef.current?.scrollToOffset({ offset: classes.length * (CARD_WIDTH + CARD_GAP), animated: true });
     }, 120);
@@ -408,15 +481,41 @@ export function HomeScreen({
     setShowFilterMenu(false);
   };
 
+  const openJoinClassModal = () => {
+    setJoinClassCode('');
+    setJoinClassStatus('');
+    setShowJoinClassModal(true);
+  };
+
+  const joinExistingClass = () => {
+    const normalized = normalizeClassCode(joinClassCode.trim());
+
+    if (!normalized) {
+      setJoinClassStatus('Enter a class code to continue.');
+      return;
+    }
+
+    const match = classes.find((cls) => normalizeClassCode(cls.classCode) === normalized);
+
+    if (!match) {
+      setJoinClassStatus('Class code not found. Check it and try again.');
+      return;
+    }
+
+    setShowJoinClassModal(false);
+    setJoinClassStatus('');
+    onCourseOpen(match.id);
+  };
+
   return (
     <View style={styles.container}>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <View>
+          <TouchableOpacity onPress={handleGreetTap} activeOpacity={0.8}>
             <Text style={styles.greeting}>{userName ? `Hello, ${userName}` : 'Welcome Back'}</Text>
             <Text style={styles.subtitle}>Welcome to Citadel</Text>
-          </View>
-          <TouchableOpacity style={styles.avatarWrap} onPress={openProfile}>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.avatarWrap} onPress={onProfileOpen}>
             {profilePicture ? (
               <Image source={{ uri: profilePicture }} style={styles.avatar} />
             ) : (
@@ -425,33 +524,24 @@ export function HomeScreen({
           </TouchableOpacity>
         </View>
 
-        <Animated.View style={[styles.heroCard, { transform: [{ scale: heroScale }] }]}>
-          <Animated.View style={[styles.heroOrbA, { transform: [{ translateX: heroOrbX }] }]} />
-          <Animated.View style={[styles.heroOrbB, { transform: [{ translateY: heroOrbY }] }]} />
-          <View style={styles.heroRow}>
-            <View style={styles.heroBadge}>
-              <Ionicons name="sparkles" size={13} color={colors.maroon} />
-              <Text style={styles.heroBadgeText}>Today’s Momentum</Text>
-            </View>
-            <Text style={styles.heroDate}>{new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</Text>
+        {/* Easter egg emoji burst */}
+        {emojiBurst && (
+          <View style={{ position: 'absolute', top: 80, left: 60, zIndex: 999 }}>
+            {emojiAnims.map((a, i) => (
+              <Animated.Text
+                key={i}
+                style={{
+                  position: 'absolute',
+                  fontSize: 28,
+                  opacity: a.opacity,
+                  transform: [{ translateY: a.y }, { translateX: a.x }, { scale: a.scale }],
+                }}
+              >
+                {emojiPool[i % emojiPool.length]}
+              </Animated.Text>
+            ))}
           </View>
-          <Text style={styles.heroTitle}>Keep the streak alive.</Text>
-          <Text style={styles.heroSubtitle}>Open a class, merge notes, or launch a live session to build progress fast.</Text>
-          <View style={styles.heroMiniStats}>
-            <View style={styles.heroMiniCard}>
-              <Text style={styles.heroMiniValue}>{classes.length}</Text>
-              <Text style={styles.heroMiniLabel}>Classes</Text>
-            </View>
-            <View style={styles.heroMiniCard}>
-              <Text style={styles.heroMiniValue}>{classes.reduce((a, c) => a + c.files.length, 0)}</Text>
-              <Text style={styles.heroMiniLabel}>Files</Text>
-            </View>
-            <View style={styles.heroMiniCard}>
-              <Text style={styles.heroMiniValue}>{friendsDirectory.length}</Text>
-              <Text style={styles.heroMiniLabel}>Friends</Text>
-            </View>
-          </View>
-        </Animated.View>
+        )}
 
         <View style={styles.searchRow}>
           <View style={styles.searchBox}>
@@ -526,165 +616,208 @@ export function HomeScreen({
           </View>
         )}
 
-        <Text style={styles.sectionTitle}>Shortcuts</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.shortcuts} contentContainerStyle={styles.shortcutsContent}>
-          <TouchableOpacity style={styles.shortcutAdd} onPress={() => setShowShortcutModal(true)}>
-            <Ionicons name="add" size={24} color="white" />
-          </TouchableOpacity>
+        <Animated.View style={{ opacity: sectionFade1, transform: [{ translateY: sectionSlide1 }] }}>
+          <Text style={styles.sectionTitle}>Shortcuts</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.shortcuts} contentContainerStyle={styles.shortcutsContent}>
+            <AnimatedPressable style={styles.shortcutAdd} onPress={() => setShowShortcutModal(true)} scaleDown={0.88}>
+              <Ionicons name="add" size={24} color="white" />
+            </AnimatedPressable>
 
-          {shortcuts.map((shortcut) => (
-            <TouchableOpacity key={shortcut.id} style={styles.shortcut} onPress={() => runShortcut(shortcut)}>
-              <Ionicons name={shortcutIcon(shortcut)} size={16} color={colors.maroon} />
-              <Text style={styles.shortcutLabel} numberOfLines={1}>
-                {shortcut.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+            {shortcuts.map((shortcut) => (
+              <AnimatedPressable key={shortcut.id} style={styles.shortcut} onPress={() => runShortcut(shortcut)} scaleDown={0.92}>
+                <Ionicons name={shortcutIcon(shortcut)} size={16} color={colors.maroon} />
+                <Text style={styles.shortcutLabel} numberOfLines={1}>
+                  {shortcut.label}
+                </Text>
+              </AnimatedPressable>
+            ))}
+          </ScrollView>
+        </Animated.View>
 
-        <View style={styles.carouselHeader}>
-          <Text style={styles.sectionTitle}>My Classes</Text>
-          {classes.length > 0 && (
-            <Text style={styles.counter}>
-              {currentCardIndex + 1} / {classes.length + 1}
-            </Text>
-          )}
-        </View>
+        <Animated.View style={{ opacity: sectionFade2, transform: [{ translateY: sectionSlide2 }] }}>
+          <View style={styles.carouselHeader}>
+            <Text style={styles.sectionTitle}>My Classes</Text>
+            <View style={styles.carouselHeaderRight}>
+              <AnimatedPressable style={styles.joinClassBtn} onPress={openJoinClassModal} scaleDown={0.93}>
+                <Ionicons name="log-in-outline" size={15} color="white" />
+                <Text style={styles.joinClassBtnText}>Join Existing Class</Text>
+              </AnimatedPressable>
+              {classes.length > 0 && (
+                <Text style={styles.counter}>
+                  {currentCardIndex + 1} / {classes.length + 1}
+                </Text>
+              )}
+            </View>
+          </View>
 
-        <FlatList
-          ref={flatListRef}
-          data={[...classes, { id: 'add', isAdd: true }] as (ClassData | { id: string; isAdd: true })[]}
-          horizontal
-          snapToInterval={CARD_WIDTH + CARD_GAP}
-          snapToAlignment="start"
-          decelerationRate="fast"
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.carouselContent}
-          onMomentumScrollEnd={(e) => {
-            const index = Math.round(e.nativeEvent.contentOffset.x / (CARD_WIDTH + CARD_GAP));
-            setCurrentCardIndex(Math.min(index, classes.length));
-          }}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => {
-            if ('isAdd' in item && item.isAdd) {
+          <FlatList
+            ref={flatListRef}
+            data={[...classes, { id: 'add', isAdd: true }] as (ClassData | { id: string; isAdd: true })[]}
+            horizontal
+            snapToInterval={CARD_WIDTH + CARD_GAP}
+            snapToAlignment="start"
+            decelerationRate="fast"
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.carouselContent}
+            onMomentumScrollEnd={(e) => {
+              const index = Math.round(e.nativeEvent.contentOffset.x / (CARD_WIDTH + CARD_GAP));
+              setCurrentCardIndex(Math.min(index, classes.length));
+            }}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => {
+              if ('isAdd' in item && item.isAdd) {
+                return (
+                  <TouchableOpacity style={[styles.classCard, styles.addCard, { width: CARD_WIDTH }]} onPress={openAddClassModal}>
+                    <View style={styles.addCardInner}>
+                      <View style={styles.addCardIcon}><Ionicons name="add" size={34} color={colors.maroon} /></View>
+                      <Text style={styles.addCardTitle}>Create / Join Class</Text>
+                      <Text style={styles.addCardSub}>Pick a template, focus area, and class code</Text>
+                      <View style={styles.addCardPills}>
+                        <View style={styles.addCardPill}><Text style={styles.addCardPillText}>Template</Text></View>
+                        <View style={styles.addCardPill}><Text style={styles.addCardPillText}>Block</Text></View>
+                        <View style={styles.addCardPill}><Text style={styles.addCardPillText}>Code</Text></View>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                );
+              }
+
+              const cls = item as ClassData;
+              const isLiked = likedCards.has(cls.id);
+
               return (
-                <TouchableOpacity style={[styles.classCard, styles.addCard]} onPress={openAddClassModal}>
-                  <View style={styles.addCardInner}>
-                    <View style={styles.addCardIcon}><Ionicons name="add" size={34} color={colors.maroon} /></View>
-                    <Text style={styles.addCardTitle}>Create / Join Class</Text>
-                    <Text style={styles.addCardSub}>Pick a template, focus area, and class code</Text>
-                    <View style={styles.addCardPills}>
-                      <View style={styles.addCardPill}><Text style={styles.addCardPillText}>Template</Text></View>
-                      <View style={styles.addCardPill}><Text style={styles.addCardPillText}>Block</Text></View>
-                      <View style={styles.addCardPill}><Text style={styles.addCardPillText}>Code</Text></View>
+                <AnimatedPressable
+                  style={[styles.classCard, { width: CARD_WIDTH, shadowColor: cls.color }]}
+                  onPress={() => onCourseOpen(cls.id)}
+                  scaleDown={0.96}
+                >
+                  <Image source={{ uri: cls.image }} style={styles.classImage} />
+                  <View style={styles.classOverlay} />
+                  <TouchableOpacity style={styles.heartBtn} onPress={() => toggleLike(cls.id)} activeOpacity={1}>
+                    <Animated.View style={{ transform: [{ scale: isLiked ? heartScale : 1 }] }}>
+                      <Ionicons name={isLiked ? 'heart' : 'heart-outline'} size={18} color={isLiked ? '#ff4d6d' : 'white'} />
+                    </Animated.View>
+                    {/* Ring ripple */}
+                    <Animated.View
+                      style={{
+                        position: 'absolute',
+                        width: 36,
+                        height: 36,
+                        borderRadius: 18,
+                        borderWidth: 2,
+                        borderColor: '#ff4d6d',
+                        opacity: heartRingOpacity,
+                        transform: [{ scale: heartRingScale }],
+                      }}
+                    />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.trashBtn} onPress={() => onRemoveClass(cls.id)}>
+                    <Ionicons name="trash-outline" size={16} color="rgba(255,255,255,0.8)" />
+                  </TouchableOpacity>
+                  <View style={styles.classFooter}>
+                    <Text style={styles.classBlock}>{cls.block}</Text>
+                    <Text style={styles.classTitle}>{cls.title}</Text>
+                    <Text style={styles.classDesc}>{cls.description}</Text>
+                    <View style={styles.classMeta}>
+                      <View style={styles.classMetaItem}>
+                        <Ionicons name="key" size={14} color="rgba(255,255,255,0.8)" />
+                        <Text style={styles.classMetaText}>{cls.classCode}</Text>
+                      </View>
+                      <Text style={styles.classMetaText}>{cls.documents > 0 ? `${cls.documents} Documents` : 'No documents yet'}</Text>
+                    </View>
+                    <View style={styles.classHighlights}>
+                      <View style={styles.classHighlightPill}>
+                        <Ionicons name="people" size={13} color="white" />
+                        <Text style={styles.classHighlightText}>{cls.classmates} classmates</Text>
+                      </View>
+                      <View style={styles.classHighlightPill}>
+                        <Ionicons name="documents" size={13} color="white" />
+                        <Text style={styles.classHighlightText}>{cls.files.length} files</Text>
+                      </View>
                     </View>
                   </View>
-                </TouchableOpacity>
+                </AnimatedPressable>
               );
-            }
+            }}
+          />
 
-            const cls = item as ClassData;
-            const isLiked = likedCards.has(cls.id);
-
-            return (
+          <View style={styles.dots}>
+            {Array.from({ length: classes.length + 1 }).map((_, i) => (
               <TouchableOpacity
-                style={[styles.classCard, { width: CARD_WIDTH }]}
-                onPress={() => onCourseOpen(cls.id)}
-                activeOpacity={0.95}
+                key={i}
+                onPress={() => flatListRef.current?.scrollToOffset({ offset: i * (CARD_WIDTH + CARD_GAP), animated: true })}
               >
-                <Image source={{ uri: cls.image }} style={styles.classImage} />
-                <View style={styles.classOverlay} />
-                <TouchableOpacity style={styles.heartBtn} onPress={() => toggleLike(cls.id)}>
-                  <Ionicons name={isLiked ? 'heart' : 'heart-outline'} size={18} color="white" />
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.trashBtn} onPress={() => onRemoveClass(cls.id)}>
-                  <Ionicons name="trash-outline" size={16} color="rgba(255,255,255,0.8)" />
-                </TouchableOpacity>
-                <View style={styles.classFooter}>
-                  <Text style={styles.classBlock}>{cls.block}</Text>
-                  <Text style={styles.classTitle}>{cls.title}</Text>
-                  <Text style={styles.classDesc}>{cls.description}</Text>
-                  <View style={styles.classMeta}>
-                    <View style={styles.classMetaItem}>
-                      <Ionicons name="key" size={14} color="rgba(255,255,255,0.8)" />
-                      <Text style={styles.classMetaText}>{cls.classCode}</Text>
-                    </View>
-                    <Text style={styles.classMetaText}>{cls.documents > 0 ? `${cls.documents} Documents` : 'No documents yet'}</Text>
-                  </View>
-                  <View style={styles.keepLearning}>
-                    <Text style={styles.keepLearningText}>{cls.documents > 0 ? 'Open Class' : 'Set Up Class'}</Text>
-                    <View style={styles.keepLearningIcon}>
-                      <Ionicons name="arrow-forward" size={16} color={colors.textPrimary} />
-                    </View>
-                  </View>
-                </View>
+                <View style={[styles.dot, currentCardIndex === i && styles.dotActive]} />
               </TouchableOpacity>
-            );
-          }}
-        />
+            ))}
+          </View>
+        </Animated.View>
 
-        <View style={styles.dots}>
-          {Array.from({ length: classes.length + 1 }).map((_, i) => (
-            <TouchableOpacity
-              key={i}
-              onPress={() => flatListRef.current?.scrollToOffset({ offset: i * (CARD_WIDTH + CARD_GAP), animated: true })}
-            >
-              <View style={[styles.dot, currentCardIndex === i && styles.dotActive]} />
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Overview</Text>
-        <View style={styles.statsRow}>
-          <View style={styles.statCard}>
-            <View style={styles.statIcon}>
-              <Ionicons name="book" size={20} color={colors.maroon} />
-            </View>
-            <Text style={styles.statValue}>{classes.length}</Text>
-            <Text style={styles.statLabel}>Classes</Text>
+        <Animated.View style={{ opacity: sectionFade3, transform: [{ translateY: sectionSlide3 }] }}>
+          <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Overview</Text>
+          <View style={styles.statsRow}>
+            <Animated.View style={[styles.statCard, { transform: [{ scale: statScale1 }] }]}>
+              <View style={styles.statIcon}>
+                <Ionicons name="book" size={20} color={colors.maroon} />
+              </View>
+              <Text style={styles.statValue}>{classes.length}</Text>
+              <Text style={styles.statLabel}>Classes</Text>
+            </Animated.View>
+            <Animated.View style={[styles.statCard, { transform: [{ scale: statScale2 }] }]}>
+              <View style={[styles.statIcon, { backgroundColor: '#dbeafe' }]}>
+                <Ionicons name="document-text" size={20} color="#2563eb" />
+              </View>
+              <Text style={styles.statValue}>{classes.reduce((a, c) => a + c.documents, 0)}</Text>
+              <Text style={styles.statLabel}>Documents</Text>
+            </Animated.View>
+            <Animated.View style={[styles.statCard, { transform: [{ scale: statScale3 }] }]}>
+              <View style={[styles.statIcon, { backgroundColor: '#d1fae5' }]}>
+                <Ionicons name="people" size={20} color="#059669" />
+              </View>
+              <Text style={styles.statValue}>{friendsDirectory.length}</Text>
+              <Text style={styles.statLabel}>Friends</Text>
+            </Animated.View>
           </View>
-          <View style={styles.statCard}>
-            <View style={[styles.statIcon, { backgroundColor: '#dbeafe' }]}>
-              <Ionicons name="document-text" size={20} color="#2563eb" />
-            </View>
-            <Text style={styles.statValue}>{classes.reduce((a, c) => a + c.documents, 0)}</Text>
-            <Text style={styles.statLabel}>Documents</Text>
-          </View>
-          <View style={styles.statCard}>
-            <View style={[styles.statIcon, { backgroundColor: '#d1fae5' }]}>
-              <Ionicons name="people" size={20} color="#059669" />
-            </View>
-            <Text style={styles.statValue}>{friendsDirectory.length}</Text>
-            <Text style={styles.statLabel}>Friends</Text>
-          </View>
-        </View>
+        </Animated.View>
       </ScrollView>
 
-      <BottomNav active="home" onHome={() => {}} onScan={onScanOpen} onFriends={onFriendsOpen} onFiles={() => onFilesOpen()} />
-
-      <Modal visible={showProfileModal} transparent animationType="slide" onRequestClose={() => setShowProfileModal(false)}>
-        <KeyboardAvoidingView style={styles.modalKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={styles.modalBackdrop}>
-            <View style={styles.modalCard}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Profile & Settings</Text>
-                <TouchableOpacity onPress={() => setShowProfileModal(false)}>
-                  <Ionicons name="close" size={22} color={colors.textPrimary} />
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.modalLabel}>Name</Text>
-              <TextInput style={styles.modalInput} value={profileName} onChangeText={setProfileName} placeholder="Your name" />
-              <Text style={styles.modalLabel}>Grade / Year</Text>
-              <TextInput style={styles.modalInput} value={profileGrade} onChangeText={setProfileGrade} placeholder="11th Grade / College Sophomore" />
-              <Text style={styles.modalLabel}>School</Text>
-              <TextInput style={styles.modalInput} value={profileSchool} onChangeText={setProfileSchool} placeholder="School name" />
-              <TouchableOpacity style={styles.modalSaveBtn} onPress={saveProfile}>
-                <Text style={styles.modalSaveBtnText}>Save Profile</Text>
-              </TouchableOpacity>
-            </View>
+      {/* Success toast */}
+      {successToast && (
+        <Animated.View
+          style={{
+            position: 'absolute',
+            bottom: 120,
+            left: 30,
+            right: 30,
+            alignItems: 'center',
+            zIndex: 1000,
+            opacity: toastOpacity,
+            transform: [{ translateY: toastSlide }, { scale: toastScale }],
+          }}
+        >
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: colors.maroon,
+              paddingHorizontal: 20,
+              paddingVertical: 14,
+              borderRadius: 20,
+              gap: 10,
+              shadowColor: colors.maroon,
+              shadowOpacity: 0.3,
+              shadowRadius: 12,
+              shadowOffset: { width: 0, height: 4 },
+            }}
+          >
+            <Ionicons name="checkmark-circle" size={20} color="white" />
+            <Text style={{ color: 'white', fontFamily: fonts.bold, fontSize: 14 }}>{successToast}</Text>
           </View>
-        </KeyboardAvoidingView>
-      </Modal>
+        </Animated.View>
+      )}
+
+      <BottomNav active="home" onHome={() => { }} onScan={onScanOpen} onFriends={onFriendsOpen} onFiles={() => onFilesOpen()} />
+
 
       <Modal visible={showShortcutModal} transparent animationType="fade" onRequestClose={() => setShowShortcutModal(false)}>
         <KeyboardAvoidingView style={styles.modalKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -745,6 +878,39 @@ export function HomeScreen({
 
               <TouchableOpacity style={styles.modalSaveBtn} onPress={saveShortcut}>
                 <Text style={styles.modalSaveBtnText}>Add Shortcut</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal visible={showJoinClassModal} transparent animationType="fade" onRequestClose={() => setShowJoinClassModal(false)}>
+        <KeyboardAvoidingView style={styles.modalKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Join Existing Class</Text>
+                <TouchableOpacity onPress={() => setShowJoinClassModal(false)}>
+                  <Ionicons name="close" size={22} color={colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.modalLabel}>Class Code</Text>
+              <TextInput
+                style={styles.modalInput}
+                value={joinClassCode}
+                onChangeText={(text) => {
+                  setJoinClassCode(text);
+                  if (joinClassStatus) setJoinClassStatus('');
+                }}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                placeholder="Ex: HUG-4B9P"
+                placeholderTextColor={colors.textTertiary}
+              />
+              <Text style={styles.joinHint}>Use the exact class code shared by your teacher/classmate.</Text>
+              {joinClassStatus.length > 0 && <Text style={styles.joinStatus}>{joinClassStatus}</Text>}
+              <TouchableOpacity style={styles.modalSaveBtn} onPress={joinExistingClass}>
+                <Text style={styles.modalSaveBtnText}>Join Class</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -834,81 +1000,28 @@ export function HomeScreen({
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bgSecondary },
+  container: { flex: 1, backgroundColor: '#FFF8F2' },
   scroll: { flex: 1 },
   scrollContent: { paddingTop: 56, paddingHorizontal: 24, paddingBottom: 120 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  greeting: { fontSize: 28, fontWeight: '700', color: colors.textPrimary },
-  subtitle: { fontSize: 14, color: colors.textSecondary, marginTop: 4 },
+  greeting: { fontSize: 30, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.5 },
+  subtitle: { fontSize: 14, color: colors.textSecondary, marginTop: 4, fontFamily: fonts.regular },
   avatarWrap: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: colors.bgSecondary,
+    width: 52,
+    height: 52,
+    borderRadius: 20,
+    backgroundColor: 'white',
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
-    borderColor: '#e7e3e3',
+    borderColor: '#F0E0D0',
   },
   avatar: { width: '100%', height: '100%' },
-  heroCard: {
-    marginTop: 18,
-    backgroundColor: '#fff9f6',
-    borderRadius: 24,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#f0dfd9',
-    overflow: 'hidden',
-  },
-  heroOrbA: {
-    position: 'absolute',
-    top: -24,
-    right: -12,
-    width: 98,
-    height: 98,
-    borderRadius: 49,
-    backgroundColor: 'rgba(127,29,29,0.12)',
-  },
-  heroOrbB: {
-    position: 'absolute',
-    bottom: -26,
-    left: -14,
-    width: 86,
-    height: 86,
-    borderRadius: 43,
-    backgroundColor: 'rgba(37,99,235,0.12)',
-  },
-  heroRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  heroBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(127,29,29,0.1)',
-    borderRadius: 14,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  heroBadgeText: { fontSize: 11, color: colors.maroon, fontWeight: '700' },
-  heroDate: { fontSize: 11, color: colors.textSecondary, fontWeight: '700' },
-  heroTitle: { marginTop: 10, fontSize: 24, fontWeight: '800', color: colors.textPrimary },
-  heroSubtitle: { marginTop: 4, fontSize: 13, color: colors.textSecondary, lineHeight: 19 },
-  heroMiniStats: { flexDirection: 'row', gap: 8, marginTop: 14 },
-  heroMiniCard: {
-    flex: 1,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.8)',
-    borderWidth: 1,
-    borderColor: '#ede2df',
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  heroMiniValue: { fontSize: 16, fontWeight: '800', color: colors.textPrimary },
-  heroMiniLabel: { fontSize: 10, color: colors.textSecondary, marginTop: 2, fontWeight: '700' },
-  searchRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 24 },
-  searchBox: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 16, paddingHorizontal: 20, height: 52, gap: 12 },
-  searchInput: { flex: 1, fontSize: 14, color: colors.textPrimary, paddingVertical: 0 },
-  filterBtn: { width: 52, height: 52, borderRadius: 26, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
+  searchRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 14 },
+  searchBox: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 20, paddingHorizontal: 20, height: 54, gap: 12, borderWidth: 2, borderColor: '#F0E0D0' },
+  searchInput: { flex: 1, fontSize: 14, color: colors.textPrimary, paddingVertical: 0, fontFamily: fonts.medium },
+  filterBtn: { width: 54, height: 54, borderRadius: 20, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
   filterBtnActive: { backgroundColor: '#7f1d1d' },
   filterMenu: {
     marginTop: 10,
@@ -916,99 +1029,130 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
     backgroundColor: 'white',
-    borderRadius: 16,
-    padding: 12,
+    borderRadius: 20,
+    padding: 14,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
   },
-  filterChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, backgroundColor: '#f3f3f3' },
+  filterChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 14, backgroundColor: '#FFF5ED' },
   filterChipActive: { backgroundColor: colors.maroon },
-  filterChipText: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
+  filterChipText: { fontSize: 12, color: colors.textSecondary, fontFamily: fonts.semiBold },
   filterChipTextActive: { color: 'white' },
   searchResultsBox: {
     marginTop: 10,
     backgroundColor: 'white',
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#ece8e8',
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
     overflow: 'hidden',
   },
   searchResultRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#f3f1f1',
+    borderBottomColor: '#FFF5ED',
   },
-  searchResultIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#f7f3f3', alignItems: 'center', justifyContent: 'center' },
+  searchResultIcon: { width: 34, height: 34, borderRadius: 12, backgroundColor: '#FFF5ED', alignItems: 'center', justifyContent: 'center' },
   searchResultInfo: { flex: 1 },
-  searchResultTitle: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
-  searchResultSub: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
-  searchEmpty: { padding: 14, textAlign: 'center', color: colors.textSecondary },
-  sectionTitle: { fontSize: 18, fontWeight: '700', color: colors.textPrimary, marginTop: 28 },
-  shortcuts: { marginTop: 12 },
+  searchResultTitle: { fontSize: 14, fontFamily: fonts.bold, color: colors.textPrimary },
+  searchResultSub: { fontSize: 11, color: colors.textSecondary, marginTop: 2, fontFamily: fonts.regular },
+  searchEmpty: { padding: 14, textAlign: 'center', color: colors.textSecondary, fontFamily: fonts.medium },
+  sectionTitle: { fontSize: 24, fontFamily: fonts.bold, color: colors.textPrimary, marginTop: 22, letterSpacing: -0.3 },
+  shortcuts: { marginTop: 10 },
   shortcutsContent: { paddingRight: 24, gap: 12, flexDirection: 'row', alignItems: 'center' },
-  shortcutAdd: { width: 56, height: 56, borderRadius: 16, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
-  shortcut: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'white', paddingHorizontal: 20, paddingVertical: 14, borderRadius: 24 },
-  shortcutLabel: { fontSize: 14, fontWeight: '500', color: colors.textPrimary, maxWidth: 130 },
-  carouselHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 28 },
-  counter: { fontSize: 12, color: colors.textTertiary },
-  carouselContent: { paddingRight: 24, gap: CARD_GAP, marginTop: 16 },
-  classCard: { height: 370, borderRadius: 28, overflow: 'hidden' },
-  addCard: { backgroundColor: '#fff', borderWidth: 2, borderColor: `${colors.maroon}35`, borderStyle: 'dashed' },
+  shortcutAdd: { width: 56, height: 56, borderRadius: 18, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
+  shortcut: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'white', paddingHorizontal: 20, paddingVertical: 14, borderRadius: 20, borderWidth: 2, borderColor: '#F0E0D0' },
+  shortcutLabel: { fontSize: 14, fontFamily: fonts.medium, color: colors.textPrimary, maxWidth: 130 },
+  carouselHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 },
+  carouselHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  joinClassBtn: {
+    height: 36,
+    borderRadius: 14,
+    backgroundColor: colors.maroon,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  joinClassBtnText: { fontSize: 11, fontFamily: fonts.bold, color: 'white' },
+  counter: { fontSize: 12, color: colors.textTertiary, fontFamily: fonts.medium },
+  carouselContent: { paddingRight: 24, gap: CARD_GAP, marginTop: 12 },
+  classCard: {
+    height: 404,
+    borderRadius: 32,
+    overflow: 'hidden',
+    shadowOpacity: 0.3,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
+  },
+  addCard: { backgroundColor: 'white', borderWidth: 2, borderColor: '#F0E0D0', borderStyle: 'dashed' },
   addCardInner: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14, paddingHorizontal: 24 },
-  addCardIcon: { width: 64, height: 64, borderRadius: 20, backgroundColor: `${colors.maroon}15`, alignItems: 'center', justifyContent: 'center' },
-  addCardTitle: { fontSize: 20, fontWeight: '800', color: colors.textPrimary },
-  addCardSub: { fontSize: 13, color: colors.textSecondary, textAlign: 'center' },
+  addCardIcon: { width: 68, height: 68, borderRadius: 22, backgroundColor: `${colors.maroon}14`, alignItems: 'center', justifyContent: 'center' },
+  addCardTitle: { fontSize: 22, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.3 },
+  addCardSub: { fontSize: 13, color: colors.textSecondary, textAlign: 'center', fontFamily: fonts.regular },
   addCardPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' },
-  addCardPill: { backgroundColor: '#f3f0f0', borderRadius: 14, paddingHorizontal: 10, paddingVertical: 6 },
-  addCardPillText: { fontSize: 11, color: colors.textSecondary, fontWeight: '600' },
+  addCardPill: { backgroundColor: '#FFF5ED', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 7, borderWidth: 2, borderColor: '#F0E0D0' },
+  addCardPillText: { fontSize: 11, color: colors.textSecondary, fontFamily: fonts.semiBold },
   classImage: { ...StyleSheet.absoluteFillObject },
-  classOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)' },
-  heartBtn: { position: 'absolute', top: 20, right: 20, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center', zIndex: 10 },
-  trashBtn: { position: 'absolute', top: 20, left: 20, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center', zIndex: 10 },
+  classOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.46)' },
+  heartBtn: { position: 'absolute', top: 20, right: 20, width: 38, height: 38, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.22)', alignItems: 'center', justifyContent: 'center', zIndex: 10 },
+  trashBtn: { position: 'absolute', top: 20, left: 20, width: 38, height: 38, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.22)', alignItems: 'center', justifyContent: 'center', zIndex: 10 },
   classFooter: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 24 },
-  classBlock: { fontSize: 12, fontWeight: '500', color: 'rgba(255,255,255,0.8)', letterSpacing: 1 },
-  classTitle: { fontSize: 24, fontWeight: '700', color: 'white', marginTop: 4 },
-  classDesc: { fontSize: 12, color: 'rgba(255,255,255,0.6)', marginTop: 6 },
+  classBlock: { fontSize: 12, fontFamily: fonts.semiBold, color: 'rgba(255,255,255,0.8)', letterSpacing: 1.5 },
+  classTitle: { fontSize: 28, fontFamily: fonts.bold, color: 'white', marginTop: 4, letterSpacing: -0.5 },
+  classDesc: { fontSize: 12, color: 'rgba(255,255,255,0.6)', marginTop: 6, fontFamily: fonts.regular },
   classMeta: { flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: 12, flexWrap: 'wrap' },
   classMetaItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  classMetaText: { fontSize: 12, color: 'rgba(255,255,255,0.8)' },
-  keepLearning: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 24, paddingHorizontal: 20, paddingVertical: 14, marginTop: 16 },
-  keepLearningText: { fontSize: 14, fontWeight: '600', color: 'white' },
-  keepLearningIcon: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center' },
+  classMetaText: { fontSize: 12, color: 'rgba(255,255,255,0.82)', fontFamily: fonts.medium },
+  classHighlights: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 },
+  classHighlightPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    height: 30,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  classHighlightText: { fontSize: 10, fontFamily: fonts.bold, color: 'white' },
   dots: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginTop: 20 },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#d1d5db' },
-  dotActive: { width: 24, backgroundColor: colors.maroon },
+  dot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#E8D8C8' },
+  dotActive: { width: 28, backgroundColor: colors.maroon, borderRadius: 5 },
   statsRow: { flexDirection: 'row', gap: 12, marginTop: 12 },
-  statCard: { flex: 1, backgroundColor: 'white', borderRadius: 24, padding: 16, alignItems: 'center' },
-  statIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: `${colors.maroon}18`, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
-  statValue: { fontSize: 20, fontWeight: '700', color: colors.textPrimary },
-  statLabel: { fontSize: 11, color: colors.textTertiary, marginTop: 2 },
+  statCard: { flex: 1, backgroundColor: 'white', borderRadius: 24, padding: 16, alignItems: 'center', borderWidth: 2, borderColor: '#F0E0D0' },
+  statIcon: { width: 44, height: 44, borderRadius: 14, backgroundColor: `${colors.maroon}14`, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+  statValue: { fontSize: 22, fontFamily: fonts.bold, color: colors.textPrimary },
+  statLabel: { fontSize: 11, color: colors.textTertiary, marginTop: 2, fontFamily: fonts.medium },
   modalKeyboard: { flex: 1 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
-  modalCard: { backgroundColor: 'white', borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 20, paddingBottom: 30 },
-  modalCardLarge: { backgroundColor: 'white', borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 20, paddingBottom: 34, maxHeight: '86%' },
+  modalCard: { backgroundColor: '#FFF8F2', borderTopLeftRadius: 32, borderTopRightRadius: 32, padding: 22, paddingBottom: 34 },
+  modalCardLarge: { backgroundColor: '#FFF8F2', borderTopLeftRadius: 32, borderTopRightRadius: 32, padding: 22, paddingBottom: 38, maxHeight: '86%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  modalTitle: { fontSize: 20, fontWeight: '800', color: colors.textPrimary },
-  modalLabel: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, marginBottom: 6, marginTop: 8 },
-  modalInput: { height: 50, borderRadius: 14, borderWidth: 1, borderColor: '#ece8e8', backgroundColor: '#faf8f8', paddingHorizontal: 14, fontSize: 14, color: colors.textPrimary },
-  modalSaveBtn: { marginTop: 16, height: 50, borderRadius: 25, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
-  modalSaveBtnText: { color: 'white', fontSize: 15, fontWeight: '700' },
+  modalTitle: { fontSize: 22, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.3 },
+  modalLabel: { fontSize: 12, fontFamily: fonts.bold, color: colors.textSecondary, marginBottom: 6, marginTop: 8 },
+  modalInput: { height: 52, borderRadius: 18, borderWidth: 2, borderColor: '#F0E0D0', backgroundColor: 'white', paddingHorizontal: 16, fontSize: 14, color: colors.textPrimary, fontFamily: fonts.medium },
+  modalSaveBtn: { marginTop: 16, height: 54, borderRadius: 20, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
+  modalSaveBtnText: { color: 'white', fontSize: 15, fontFamily: fonts.bold },
+  joinHint: { marginTop: 8, fontSize: 12, color: colors.textSecondary, lineHeight: 18, fontFamily: fonts.regular },
+  joinStatus: { marginTop: 8, fontSize: 12, fontFamily: fonts.bold, color: '#b91c1c' },
   optionRow: { flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 4 },
-  optionChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, backgroundColor: '#f3f1f1' },
-  optionChipActive: { backgroundColor: colors.maroon },
-  optionChipText: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
+  optionChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 14, backgroundColor: '#FFF5ED', borderWidth: 2, borderColor: '#F0E0D0' },
+  optionChipActive: { backgroundColor: colors.maroon, borderColor: colors.maroon },
+  optionChipText: { fontSize: 12, color: colors.textSecondary, fontFamily: fonts.semiBold },
   optionChipTextActive: { color: 'white' },
-  pickChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, borderWidth: 1, borderColor: '#e5e1e1', backgroundColor: 'white' },
+  pickChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 14, borderWidth: 2, borderColor: '#F0E0D0', backgroundColor: 'white' },
   pickChipActive: { borderColor: colors.maroon, backgroundColor: `${colors.maroon}12` },
-  pickChipText: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
+  pickChipText: { fontSize: 12, color: colors.textSecondary, fontFamily: fonts.semiBold },
   pickChipTextActive: { color: colors.maroon },
   imagePickerBtn: {
     marginTop: 4,
-    height: 42,
-    borderRadius: 12,
-    borderWidth: 1,
+    height: 46,
+    borderRadius: 16,
+    borderWidth: 2,
     borderColor: `${colors.maroon}40`,
     backgroundColor: `${colors.maroon}10`,
     flexDirection: 'row',
@@ -1016,15 +1160,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 7,
   },
-  imagePickerBtnText: { fontSize: 13, color: colors.maroon, fontWeight: '700' },
+  imagePickerBtnText: { fontSize: 13, color: colors.maroon, fontFamily: fonts.bold },
   newClassImagePreview: {
     marginTop: 8,
     width: '100%',
     height: 110,
-    borderRadius: 14,
-    backgroundColor: '#f0ecec',
+    borderRadius: 18,
+    backgroundColor: '#FFF5ED',
   },
   colorRow: { flexDirection: 'row', gap: 12, marginTop: 8 },
-  colorDot: { width: 28, height: 28, borderRadius: 14, borderWidth: 2, borderColor: 'transparent' },
+  colorDot: { width: 30, height: 30, borderRadius: 12, borderWidth: 3, borderColor: 'transparent' },
   colorDotActive: { borderColor: '#111' },
 });

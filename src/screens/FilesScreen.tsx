@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BottomNav } from '../components/BottomNav';
-import { colors } from '../theme';
+import { colors, fonts } from '../theme';
 import type { ClassData, FileData, UnitData } from '../types';
 
 interface Props {
@@ -60,6 +60,7 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
   const [actionStatus, setActionStatus] = useState('');
 
   const currentClass = classes[activeTab] || classes[0];
+  const classAccent = currentClass?.color || colors.maroon;
   const files = currentClass?.files || [];
 
   const filteredFiles = useMemo(() => {
@@ -113,26 +114,26 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
       units: cls.units.map((unit) =>
         unit.id === moveUnitId
           ? {
-              ...unit,
-              subUnits: unit.subUnits.map((sub) =>
-                sub.id === moveSubUnitId
-                  ? {
-                      ...sub,
-                      notes: [
-                        ...sub.notes,
-                        {
-                          id: Date.now(),
-                          title: `From File: ${selectedFile.name}`,
-                          author: 'You',
-                          date: new Date().toLocaleDateString('en-US'),
-                          pages: Math.max(1, selectedFile.pages),
-                          content: selectedFile.previewText,
-                        },
-                      ],
-                    }
-                  : sub
-              ),
-            }
+            ...unit,
+            subUnits: unit.subUnits.map((sub) =>
+              sub.id === moveSubUnitId
+                ? {
+                  ...sub,
+                  notes: [
+                    ...sub.notes,
+                    {
+                      id: Date.now(),
+                      title: `From File: ${selectedFile.name}`,
+                      author: 'You',
+                      date: new Date().toLocaleDateString('en-US'),
+                      pages: Math.max(1, selectedFile.pages),
+                      content: selectedFile.previewText,
+                    },
+                  ],
+                }
+                : sub
+            ),
+          }
           : unit
       ),
     }));
@@ -165,26 +166,26 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
       units: cls.units.map((unit) =>
         unit.id === mergeUnitId
           ? {
-              ...unit,
-              subUnits: unit.subUnits.map((sub) =>
-                sub.id === mergeSubUnitId
-                  ? {
-                      ...sub,
-                      notes: [
-                        ...sub.notes,
-                        {
-                          id: Date.now(),
-                          title: `Merged: ${selectedFile.name}`,
-                          author: 'Citadel Merge',
-                          date: new Date().toLocaleDateString('en-US'),
-                          pages: 1,
-                          content: `Merged with file context: ${mergedText}`.slice(0, 700),
-                        },
-                      ],
-                    }
-                  : sub
-              ),
-            }
+            ...unit,
+            subUnits: unit.subUnits.map((sub) =>
+              sub.id === mergeSubUnitId
+                ? {
+                  ...sub,
+                  notes: [
+                    ...sub.notes,
+                    {
+                      id: Date.now(),
+                      title: `Merged: ${selectedFile.name}`,
+                      author: 'Citadel Merge',
+                      date: new Date().toLocaleDateString('en-US'),
+                      pages: 1,
+                      content: `Merged with file context: ${mergedText}`.slice(0, 700),
+                    },
+                  ],
+                }
+                : sub
+            ),
+          }
           : unit
       ),
     }));
@@ -294,7 +295,7 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
           </View>
 
           <View style={styles.chips}>
-            <View style={styles.chip}><Ionicons name="document-text" size={12} color={colors.maroon} /><Text style={styles.chipText}>{selectedFile.pages} Pages</Text></View>
+            <View style={styles.chip}><Ionicons name="document-text" size={12} color={classAccent} /><Text style={styles.chipText}>{selectedFile.pages} Pages</Text></View>
             <View style={styles.chip}><Ionicons name="hardware-chip-outline" size={12} color="#2563eb" /><Text style={styles.chipText}>{selectedFile.size}</Text></View>
             <View style={styles.chip}><Ionicons name="time-outline" size={12} color="#059669" /><Text style={styles.chipText}>{selectedFile.readTime}</Text></View>
           </View>
@@ -303,7 +304,7 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
             {(['overview', 'summary', 'activity'] as DetailTab[]).map((tab) => (
               <TouchableOpacity
                 key={tab}
-                style={[styles.detailTab, detailTab === tab && styles.detailTabActive]}
+                style={[styles.detailTab, detailTab === tab && [styles.detailTabActive, { backgroundColor: classAccent }]]}
                 onPress={() => setDetailTab(tab)}
               >
                 <Text style={[styles.detailTabText, detailTab === tab && styles.detailTabTextActive]}>
@@ -320,12 +321,12 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
 
               <View style={styles.quickActionsRow}>
                 <TouchableOpacity style={styles.quickActionBtn} onPress={openMoveToUnit}>
-                  <Ionicons name="albums" size={16} color={colors.maroon} />
-                  <Text style={styles.quickActionText}>Move to Unit</Text>
+                  <Ionicons name="albums" size={16} color={classAccent} />
+                  <Text style={[styles.quickActionText, { color: classAccent }]}>Move to Unit</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.quickActionBtn} onPress={openMergeModal}>
-                  <Ionicons name="git-merge" size={16} color={colors.maroon} />
-                  <Text style={styles.quickActionText}>Merge</Text>
+                  <Ionicons name="git-merge" size={16} color={classAccent} />
+                  <Text style={[styles.quickActionText, { color: classAccent }]}>Merge</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -336,7 +337,7 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
               <Text style={styles.detailSectionTitle}>Key Summary</Text>
               {summaryBullets.map((bullet, idx) => (
                 <View key={idx} style={styles.summaryRow}>
-                  <Ionicons name="sparkles" size={14} color={colors.maroon} />
+                  <Ionicons name="sparkles" size={14} color={classAccent} />
                   <Text style={styles.summaryText}>{bullet}</Text>
                 </View>
               ))}
@@ -381,7 +382,7 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
                   {(currentClass?.units || []).map((unit) => (
                     <TouchableOpacity
                       key={unit.id}
-                      style={[styles.modalChip, moveUnitId === unit.id && styles.modalChipActive]}
+                      style={[styles.modalChip, moveUnitId === unit.id && [styles.modalChipActive, { backgroundColor: classAccent }]]}
                       onPress={() => {
                         setMoveUnitId(unit.id);
                         setMoveSubUnitId(unit.subUnits[0]?.id || null);
@@ -397,7 +398,7 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
                   {(currentClass?.units.find((unit) => unit.id === moveUnitId)?.subUnits || []).map((sub) => (
                     <TouchableOpacity
                       key={sub.id}
-                      style={[styles.modalChip, moveSubUnitId === sub.id && styles.modalChipActive]}
+                      style={[styles.modalChip, moveSubUnitId === sub.id && [styles.modalChipActive, { backgroundColor: classAccent }]]}
                       onPress={() => setMoveSubUnitId(sub.id)}
                     >
                       <Text style={[styles.modalChipText, moveSubUnitId === sub.id && styles.modalChipTextActive]}>{sub.title}</Text>
@@ -405,7 +406,7 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
                   ))}
                 </ScrollView>
 
-                <TouchableOpacity style={styles.modalSaveBtn} onPress={executeMoveToUnit}>
+                <TouchableOpacity style={[styles.modalSaveBtn, { backgroundColor: classAccent }]} onPress={executeMoveToUnit}>
                   <Text style={styles.modalSaveBtnText}>Move File Context</Text>
                 </TouchableOpacity>
               </View>
@@ -427,7 +428,7 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
                   {(currentClass?.units || []).map((unit) => (
                     <TouchableOpacity
                       key={unit.id}
-                      style={[styles.modalChip, mergeUnitId === unit.id && styles.modalChipActive]}
+                      style={[styles.modalChip, mergeUnitId === unit.id && [styles.modalChipActive, { backgroundColor: classAccent }]]}
                       onPress={() => {
                         setMergeUnitId(unit.id);
                         setMergeSubUnitId(unit.subUnits[0]?.id || null);
@@ -445,7 +446,7 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
                     .map((item) => (
                       <TouchableOpacity
                         key={`${item.unit.id}-${item.sub.id}`}
-                        style={[styles.modalChip, mergeSubUnitId === item.sub.id && styles.modalChipActive]}
+                        style={[styles.modalChip, mergeSubUnitId === item.sub.id && [styles.modalChipActive, { backgroundColor: classAccent }]]}
                         onPress={() => setMergeSubUnitId(item.sub.id)}
                       >
                         <Text style={[styles.modalChipText, mergeSubUnitId === item.sub.id && styles.modalChipTextActive]}>
@@ -461,7 +462,7 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
                     const selected = selectedMergeNotes.includes(note.key);
                     return (
                       <TouchableOpacity key={note.key} style={styles.mergeRow} onPress={() => toggleMergeNote(note.key)}>
-                        <View style={[styles.mergeCheck, selected && styles.mergeCheckActive]}>
+                        <View style={[styles.mergeCheck, selected && [styles.mergeCheckActive, { borderColor: classAccent, backgroundColor: classAccent }]]}>
                           {selected && <Ionicons name="checkmark" size={14} color="white" />}
                         </View>
                         <View style={styles.mergeInfo}>
@@ -474,7 +475,7 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
                 </ScrollView>
 
                 <TouchableOpacity
-                  style={[styles.modalSaveBtn, selectedMergeNotes.length < 2 && styles.modalSaveBtnDisabled]}
+                  style={[styles.modalSaveBtn, { backgroundColor: classAccent }, selectedMergeNotes.length < 2 && styles.modalSaveBtnDisabled]}
                   onPress={executeMerge}
                   disabled={selectedMergeNotes.length < 2}
                 >
@@ -497,7 +498,7 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
                 <Text style={styles.modalLabel}>Rename</Text>
                 <TextInput style={styles.modalInput} value={renameDraft} onChangeText={setRenameDraft} />
 
-                <TouchableOpacity style={styles.modalSaveBtn} onPress={renameSelectedFile}>
+                <TouchableOpacity style={[styles.modalSaveBtn, { backgroundColor: classAccent }]} onPress={renameSelectedFile}>
                   <Text style={styles.modalSaveBtnText}>Save Name</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.menuActionBtn} onPress={duplicateSelectedFile}>
@@ -511,7 +512,7 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
           </Modal>
         </ScrollView>
 
-        <BottomNav active="files" onHome={onHome} onScan={onScan} onFriends={onFriends} onFiles={() => {}} />
+        <BottomNav active="files" onHome={onHome} onScan={onScan} onFriends={onFriends} onFiles={() => { }} />
       </View>
     );
   }
@@ -534,7 +535,7 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs}>
           {classes.map((cls, i) => (
-            <TouchableOpacity key={cls.id} style={[styles.tab, activeTab === i && styles.tabActive]} onPress={() => setActiveTab(i)}>
+            <TouchableOpacity key={cls.id} style={[styles.tab, activeTab === i && [styles.tabActive, { backgroundColor: cls.color || classAccent }]]} onPress={() => setActiveTab(i)}>
               <Text style={[styles.tabText, activeTab === i && styles.tabTextActive]} numberOfLines={1}>
                 {cls.title.length > 14 ? `${cls.title.slice(0, 14)}...` : cls.title}
               </Text>
@@ -559,7 +560,7 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
           {(['all', 'camera', 'library', 'document'] as FileFilter[]).map((filter) => (
             <TouchableOpacity
               key={filter}
-              style={[styles.filterChip, fileFilter === filter && styles.filterChipActive]}
+              style={[styles.filterChip, fileFilter === filter && [styles.filterChipActive, { backgroundColor: classAccent }]]}
               onPress={() => setFileFilter(filter)}
             >
               <Text style={[styles.filterChipText, fileFilter === filter && styles.filterChipTextActive]}>
@@ -593,7 +594,7 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
             <Ionicons name="folder-open" size={28} color={colors.textTertiary} />
             <Text style={styles.emptyTitle}>No Files Match</Text>
             <Text style={styles.emptyText}>Try changing filters or scan a new file for {currentClass?.title || 'this class'}.</Text>
-            <TouchableOpacity style={styles.uploadBtn} onPress={onScan}>
+            <TouchableOpacity style={[styles.uploadBtn, { backgroundColor: classAccent }]} onPress={onScan}>
               <Text style={styles.uploadBtnText}>Open Scan</Text>
             </TouchableOpacity>
           </View>
@@ -605,91 +606,91 @@ export function FilesScreen({ classes, initialClassId, onBack, onHome, onScan, o
             <Text style={styles.storageValue}>{files.reduce((a, f) => a + parseFloat(f.size), 0).toFixed(1)} MB / 1 GB</Text>
           </View>
           <View style={styles.storageBar}>
-            <View style={[styles.storageFill, { width: `${Math.min(files.length * 5, 100)}%` }]} />
+            <View style={[styles.storageFill, { width: `${Math.min(files.length * 5, 100)}%`, backgroundColor: classAccent }]} />
           </View>
         </View>
       </ScrollView>
 
-      <BottomNav active="files" onHome={onHome} onScan={onScan} onFriends={onFriends} onFiles={() => {}} />
+      <BottomNav active="files" onHome={onHome} onScan={onScan} onFriends={onFriends} onFiles={() => { }} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bgSecondary },
+  container: { flex: 1, backgroundColor: '#FFF8F2' },
   scroll: { flex: 1 },
   scrollContent: { paddingTop: 56, paddingHorizontal: 24, paddingBottom: 120 },
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center' },
+  backBtn: { width: 42, height: 42, borderRadius: 16, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#F0E0D0' },
   titleCenter: { alignItems: 'center' },
-  pageTitle: { fontSize: 18, fontWeight: '700', color: colors.textPrimary },
-  pageSub: { fontSize: 11, color: colors.textTertiary, marginTop: 2 },
+  pageTitle: { fontSize: 20, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.3 },
+  pageSub: { fontSize: 11, color: colors.textTertiary, marginTop: 2, fontFamily: fonts.regular },
   tabs: { flexDirection: 'row', gap: 8, marginTop: 16 },
-  tab: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20, backgroundColor: 'white' },
-  tabActive: { backgroundColor: colors.maroon },
-  tabText: { fontSize: 14, fontWeight: '500', color: colors.textSecondary },
+  tab: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 16, backgroundColor: 'white', borderWidth: 2, borderColor: '#F0E0D0' },
+  tabActive: { backgroundColor: colors.maroon, borderColor: colors.maroon },
+  tabText: { fontSize: 14, fontFamily: fonts.medium, color: colors.textSecondary },
   tabTextActive: { color: 'white' },
   searchRow: { marginTop: 12 },
-  searchBox: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'white', borderRadius: 14, paddingHorizontal: 14, height: 46 },
-  searchInput: { flex: 1, fontSize: 13, color: colors.textPrimary, paddingVertical: 0 },
+  searchBox: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'white', borderRadius: 18, paddingHorizontal: 14, height: 50, borderWidth: 2, borderColor: '#F0E0D0' },
+  searchInput: { flex: 1, fontSize: 13, color: colors.textPrimary, paddingVertical: 0, fontFamily: fonts.medium },
   filters: { flexDirection: 'row', gap: 8, marginTop: 10 },
-  filterChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, backgroundColor: 'white' },
-  filterChipActive: { backgroundColor: colors.maroon },
-  filterChipText: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
+  filterChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 14, backgroundColor: 'white', borderWidth: 2, borderColor: '#F0E0D0' },
+  filterChipActive: { backgroundColor: colors.maroon, borderColor: colors.maroon },
+  filterChipText: { fontSize: 12, color: colors.textSecondary, fontFamily: fonts.semiBold },
   filterChipTextActive: { color: 'white' },
 
-  sectionTitle: { fontSize: 20, fontWeight: '700', color: colors.textPrimary, marginTop: 20 },
-  sectionSub: { fontSize: 12, color: colors.textSecondary, marginTop: 4 },
+  sectionTitle: { fontSize: 22, fontFamily: fonts.bold, color: colors.textPrimary, marginTop: 20, letterSpacing: -0.3 },
+  sectionSub: { fontSize: 12, color: colors.textSecondary, marginTop: 4, fontFamily: fonts.regular },
   fileList: { marginTop: 16, gap: 12 },
-  fileRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 18, padding: 12, gap: 10 },
-  fileRowThumb: { width: 60, height: 48, borderRadius: 12, backgroundColor: colors.bgSecondary },
+  fileRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 22, padding: 14, gap: 12, borderWidth: 2, borderColor: '#F0E0D0' },
+  fileRowThumb: { width: 60, height: 48, borderRadius: 14, backgroundColor: '#FFF5ED' },
   fileRowInfo: { flex: 1 },
-  fileRowDate: { fontSize: 11, color: colors.textTertiary },
-  fileRowName: { fontSize: 14, fontWeight: '700', color: colors.textPrimary, marginTop: 2 },
-  fileRowMeta: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
+  fileRowDate: { fontSize: 11, color: colors.textTertiary, fontFamily: fonts.regular },
+  fileRowName: { fontSize: 14, fontFamily: fonts.bold, color: colors.textPrimary, marginTop: 2 },
+  fileRowMeta: { fontSize: 11, color: colors.textSecondary, marginTop: 2, fontFamily: fonts.regular },
 
-  empty: { backgroundColor: 'white', borderRadius: 24, padding: 32, alignItems: 'center', marginTop: 24 },
-  emptyTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary, marginTop: 16 },
-  emptyText: { fontSize: 14, color: colors.textSecondary, textAlign: 'center', marginTop: 8 },
-  uploadBtn: { marginTop: 16, height: 40, paddingHorizontal: 20, backgroundColor: colors.maroon, borderRadius: 20, justifyContent: 'center' },
-  uploadBtnText: { fontSize: 14, fontWeight: '600', color: 'white' },
+  empty: { backgroundColor: 'white', borderRadius: 28, padding: 32, alignItems: 'center', marginTop: 24, borderWidth: 2, borderColor: '#F0E0D0' },
+  emptyTitle: { fontSize: 16, fontFamily: fonts.bold, color: colors.textPrimary, marginTop: 16 },
+  emptyText: { fontSize: 14, color: colors.textSecondary, textAlign: 'center', marginTop: 8, fontFamily: fonts.regular },
+  uploadBtn: { marginTop: 16, height: 44, paddingHorizontal: 20, backgroundColor: colors.maroon, borderRadius: 18, justifyContent: 'center' },
+  uploadBtnText: { fontSize: 14, fontFamily: fonts.bold, color: 'white' },
 
-  storage: { backgroundColor: 'white', borderRadius: 24, padding: 20, marginTop: 24 },
+  storage: { backgroundColor: 'white', borderRadius: 24, padding: 20, marginTop: 24, borderWidth: 2, borderColor: '#F0E0D0' },
   storageRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-  storageLabel: { fontSize: 14, fontWeight: '500', color: colors.textPrimary },
-  storageValue: { fontSize: 12, color: colors.textTertiary },
-  storageBar: { height: 6, backgroundColor: colors.bgSecondary, borderRadius: 3, overflow: 'hidden' },
-  storageFill: { height: '100%', backgroundColor: colors.maroon, borderRadius: 3 },
+  storageLabel: { fontSize: 14, fontFamily: fonts.medium, color: colors.textPrimary },
+  storageValue: { fontSize: 12, color: colors.textTertiary, fontFamily: fonts.regular },
+  storageBar: { height: 7, backgroundColor: '#F0E0D0', borderRadius: 4, overflow: 'hidden' },
+  storageFill: { height: '100%', backgroundColor: colors.maroon, borderRadius: 4 },
 
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
   headerRight: { flexDirection: 'row', gap: 8 },
-  iconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center' },
-  actionStatus: { marginBottom: 8, color: '#047857', fontWeight: '600', fontSize: 12 },
-  fileInfoCard: { flexDirection: 'row', gap: 16, marginBottom: 16, backgroundColor: 'white', borderRadius: 20, padding: 14 },
-  fileThumb: { width: 72, height: 72, borderRadius: 14, backgroundColor: colors.bgSecondary },
+  iconBtn: { width: 42, height: 42, borderRadius: 16, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#F0E0D0' },
+  actionStatus: { marginBottom: 8, color: '#047857', fontFamily: fonts.bold, fontSize: 12 },
+  fileInfoCard: { flexDirection: 'row', gap: 16, marginBottom: 16, backgroundColor: 'white', borderRadius: 24, padding: 16, borderWidth: 2, borderColor: '#F0E0D0' },
+  fileThumb: { width: 72, height: 72, borderRadius: 16, backgroundColor: '#FFF5ED' },
   fileMeta: { flex: 1 },
-  fileName: { fontSize: 18, fontWeight: '700', color: colors.textPrimary },
-  fileClass: { fontSize: 12, color: colors.textSecondary, marginTop: 4 },
-  fileDate: { fontSize: 11, color: colors.textTertiary, marginTop: 2 },
+  fileName: { fontSize: 18, fontFamily: fonts.bold, color: colors.textPrimary },
+  fileClass: { fontSize: 12, color: colors.textSecondary, marginTop: 4, fontFamily: fonts.regular },
+  fileDate: { fontSize: 11, color: colors.textTertiary, marginTop: 2, fontFamily: fonts.regular },
   chips: { flexDirection: 'row', gap: 8, marginBottom: 16, flexWrap: 'wrap' },
-  chip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'white', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 16 },
-  chipText: { fontSize: 11, fontWeight: '600', color: colors.textPrimary },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'white', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 14, borderWidth: 2, borderColor: '#F0E0D0' },
+  chipText: { fontSize: 11, fontFamily: fonts.semiBold, color: colors.textPrimary },
   detailTabs: { flexDirection: 'row', gap: 8, marginBottom: 14 },
-  detailTab: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 16, backgroundColor: 'white' },
-  detailTabActive: { backgroundColor: colors.maroon },
-  detailTabText: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
+  detailTab: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 14, backgroundColor: 'white', borderWidth: 2, borderColor: '#F0E0D0' },
+  detailTabActive: { backgroundColor: colors.maroon, borderColor: colors.maroon },
+  detailTabText: { fontSize: 12, color: colors.textSecondary, fontFamily: fonts.semiBold },
   detailTabTextActive: { color: 'white' },
-  detailSection: { backgroundColor: 'white', borderRadius: 20, padding: 16 },
-  detailSectionTitle: { fontSize: 16, fontWeight: '700', color: colors.textPrimary, marginBottom: 10 },
-  previewHeading: { fontSize: 16, fontWeight: '700', color: colors.textPrimary },
-  previewBody: { fontSize: 14, color: colors.textSecondary, lineHeight: 22, marginTop: 8 },
+  detailSection: { backgroundColor: 'white', borderRadius: 24, padding: 18, borderWidth: 2, borderColor: '#F0E0D0' },
+  detailSectionTitle: { fontSize: 16, fontFamily: fonts.bold, color: colors.textPrimary, marginBottom: 10 },
+  previewHeading: { fontSize: 16, fontFamily: fonts.bold, color: colors.textPrimary },
+  previewBody: { fontSize: 14, color: colors.textSecondary, lineHeight: 22, marginTop: 8, fontFamily: fonts.regular },
   quickActionsRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
   quickActionBtn: {
     flex: 1,
-    minHeight: 44,
-    borderWidth: 1,
-    borderColor: '#ece8e8',
-    borderRadius: 12,
+    minHeight: 46,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+    borderRadius: 16,
     paddingHorizontal: 10,
     paddingVertical: 10,
     alignItems: 'center',
@@ -697,37 +698,37 @@ const styles = StyleSheet.create({
     gap: 6,
     flexDirection: 'row',
   },
-  quickActionText: { fontSize: 12, color: colors.maroon, fontWeight: '700', flexShrink: 1, textAlign: 'center' },
+  quickActionText: { fontSize: 12, color: colors.maroon, fontFamily: fonts.bold, flexShrink: 1, textAlign: 'center' },
   summaryRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 10 },
-  summaryText: { flex: 1, fontSize: 13, color: colors.textSecondary, lineHeight: 19 },
-  activityItem: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f2efef' },
-  activityText: { flex: 1, fontSize: 13, color: colors.textPrimary },
-  activityTime: { fontSize: 11, color: colors.textTertiary },
+  summaryText: { flex: 1, fontSize: 13, color: colors.textSecondary, lineHeight: 19, fontFamily: fonts.regular },
+  activityItem: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F0E0D0' },
+  activityText: { flex: 1, fontSize: 13, color: colors.textPrimary, fontFamily: fonts.medium },
+  activityTime: { fontSize: 11, color: colors.textTertiary, fontFamily: fonts.regular },
 
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', alignItems: 'center', justifyContent: 'center', padding: 18 },
-  modalCard: { width: '100%', backgroundColor: 'white', borderRadius: 20, padding: 18 },
-  modalCardLarge: { width: '100%', backgroundColor: 'white', borderRadius: 20, padding: 18, maxHeight: '88%' },
+  modalCard: { width: '100%', backgroundColor: '#FFF8F2', borderRadius: 28, padding: 22 },
+  modalCardLarge: { width: '100%', backgroundColor: '#FFF8F2', borderRadius: 28, padding: 22, maxHeight: '88%' },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
-  modalTitle: { fontSize: 18, fontWeight: '800', color: colors.textPrimary },
-  modalLabel: { fontSize: 12, color: colors.textSecondary, fontWeight: '700', marginBottom: 6, marginTop: 8 },
+  modalTitle: { fontSize: 20, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.3 },
+  modalLabel: { fontSize: 12, color: colors.textSecondary, fontFamily: fonts.bold, marginBottom: 6, marginTop: 8 },
   modalRow: { flexDirection: 'row', gap: 8, marginBottom: 4 },
-  modalChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, backgroundColor: '#f3f1f1' },
-  modalChipActive: { backgroundColor: colors.maroon },
-  modalChipText: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
+  modalChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 14, backgroundColor: '#FFF5ED', borderWidth: 2, borderColor: '#F0E0D0' },
+  modalChipActive: { backgroundColor: colors.maroon, borderColor: colors.maroon },
+  modalChipText: { fontSize: 12, color: colors.textSecondary, fontFamily: fonts.semiBold },
   modalChipTextActive: { color: 'white' },
-  modalInput: { height: 44, borderRadius: 12, borderWidth: 1, borderColor: '#ece8e8', backgroundColor: '#faf8f8', paddingHorizontal: 12, fontSize: 14, color: colors.textPrimary },
-  modalSaveBtn: { marginTop: 14, height: 46, borderRadius: 23, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
-  modalSaveBtnDisabled: { backgroundColor: '#c4b3b4' },
-  modalSaveBtnText: { fontSize: 14, color: 'white', fontWeight: '700' },
+  modalInput: { height: 48, borderRadius: 18, borderWidth: 2, borderColor: '#F0E0D0', backgroundColor: 'white', paddingHorizontal: 14, fontSize: 14, color: colors.textPrimary, fontFamily: fonts.medium },
+  modalSaveBtn: { marginTop: 14, height: 50, borderRadius: 20, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
+  modalSaveBtnDisabled: { backgroundColor: '#D8C8B8' },
+  modalSaveBtnText: { fontSize: 14, color: 'white', fontFamily: fonts.bold },
   mergeList: { maxHeight: 190 },
-  mergeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f2eeee' },
-  mergeCheck: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: '#d5cfcf', alignItems: 'center', justifyContent: 'center' },
+  mergeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F0E0D0' },
+  mergeCheck: { width: 22, height: 22, borderRadius: 10, borderWidth: 2, borderColor: '#E0D0C0', alignItems: 'center', justifyContent: 'center' },
   mergeCheckActive: { borderColor: colors.maroon, backgroundColor: colors.maroon },
   mergeInfo: { flex: 1 },
-  mergeTitle: { fontSize: 13, color: colors.textPrimary, fontWeight: '700' },
-  mergeMeta: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
-  menuActionBtn: { marginTop: 10, height: 42, borderRadius: 12, backgroundColor: '#f3f1f1', alignItems: 'center', justifyContent: 'center' },
-  menuActionText: { fontSize: 13, color: colors.textPrimary, fontWeight: '700' },
-  menuActionDanger: { backgroundColor: '#fef2f2' },
-  menuActionDangerText: { fontSize: 13, color: '#dc2626', fontWeight: '700' },
+  mergeTitle: { fontSize: 13, color: colors.textPrimary, fontFamily: fonts.bold },
+  mergeMeta: { fontSize: 11, color: colors.textSecondary, marginTop: 2, fontFamily: fonts.regular },
+  menuActionBtn: { marginTop: 10, height: 44, borderRadius: 16, backgroundColor: '#FFF5ED', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#F0E0D0' },
+  menuActionText: { fontSize: 13, color: colors.textPrimary, fontFamily: fonts.bold },
+  menuActionDanger: { backgroundColor: '#fef2f2', borderColor: '#fecaca' },
+  menuActionDangerText: { fontSize: 13, color: '#dc2626', fontFamily: fonts.bold },
 });

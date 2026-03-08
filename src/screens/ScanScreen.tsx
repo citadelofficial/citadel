@@ -11,7 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { BottomNav } from '../components/BottomNav';
-import { colors } from '../theme';
+import { colors, fonts } from '../theme';
 import type { ClassData, FileData } from '../types';
 
 interface Props {
@@ -275,7 +275,7 @@ export function ScanScreen({ onHome, onFiles, onFriends, classes, onSaveScan }: 
         </View>
       </ScrollView>
 
-      <BottomNav active="scan" onHome={onHome} onFiles={onFiles} onScan={() => {}} onFriends={onFriends} />
+      <BottomNav active="scan" onHome={onHome} onFiles={onFiles} onScan={() => { }} onFriends={onFriends} />
     </View>
   );
 }
@@ -285,50 +285,50 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   content: { paddingHorizontal: 20, paddingBottom: 120 },
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14 },
-  topBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center' },
+  topBtn: { width: 42, height: 42, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center' },
   flashOn: { backgroundColor: '#facc15' },
-  topTitle: { fontSize: 20, fontWeight: '800', color: 'white' },
+  topTitle: { fontSize: 22, fontFamily: fonts.bold, color: 'white', letterSpacing: -0.3 },
   modeRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
-  modeBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.08)' },
+  modeBtn: { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.08)' },
   modeBtnActive: { backgroundColor: colors.maroon },
-  modeText: { fontSize: 12, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
+  modeText: { fontSize: 12, color: 'rgba(255,255,255,0.7)', fontFamily: fonts.semiBold },
   modeTextActive: { color: 'white' },
 
-  capturePanel: { marginTop: 16, backgroundColor: 'white', borderRadius: 22, padding: 18 },
-  captureTitle: { fontSize: 20, fontWeight: '800', color: colors.textPrimary },
-  captureSub: { fontSize: 13, color: colors.textSecondary, marginTop: 4 },
+  capturePanel: { marginTop: 16, backgroundColor: 'white', borderRadius: 28, padding: 20 },
+  captureTitle: { fontSize: 22, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.3 },
+  captureSub: { fontSize: 13, color: colors.textSecondary, marginTop: 4, fontFamily: fonts.regular },
   captureActions: { gap: 10, marginTop: 14 },
-  captureCard: { backgroundColor: '#faf8f8', borderRadius: 16, padding: 14, borderWidth: 1, borderColor: '#efebeb' },
-  captureIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: `${colors.maroon}14`, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
-  captureCardTitle: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
-  captureCardSub: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+  captureCard: { backgroundColor: '#FFF5ED', borderRadius: 20, padding: 16, borderWidth: 2, borderColor: '#F0E0D0' },
+  captureIcon: { width: 42, height: 42, borderRadius: 16, backgroundColor: `${colors.maroon}14`, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+  captureCardTitle: { fontSize: 15, fontFamily: fonts.bold, color: colors.textPrimary },
+  captureCardSub: { fontSize: 12, color: colors.textSecondary, marginTop: 2, fontFamily: fonts.regular },
 
-  pendingPanel: { marginTop: 16, backgroundColor: 'white', borderRadius: 22, padding: 18 },
+  pendingPanel: { marginTop: 16, backgroundColor: 'white', borderRadius: 28, padding: 20 },
   pendingHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  pendingTitle: { fontSize: 18, fontWeight: '800', color: colors.textPrimary },
-  pendingFileName: { fontSize: 15, fontWeight: '700', color: colors.textPrimary, marginTop: 10 },
-  pendingMeta: { fontSize: 12, color: colors.textSecondary, marginTop: 3 },
-  destinationTitle: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, marginTop: 16, marginBottom: 8 },
+  pendingTitle: { fontSize: 20, fontFamily: fonts.bold, color: colors.textPrimary },
+  pendingFileName: { fontSize: 15, fontFamily: fonts.bold, color: colors.textPrimary, marginTop: 10 },
+  pendingMeta: { fontSize: 12, color: colors.textSecondary, marginTop: 3, fontFamily: fonts.regular },
+  destinationTitle: { fontSize: 12, fontFamily: fonts.bold, color: colors.textSecondary, marginTop: 16, marginBottom: 8 },
   destinationRow: { gap: 8 },
-  destinationChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 16, borderWidth: 1, borderColor: '#ebe6e6', backgroundColor: 'white' },
+  destinationChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 14, borderWidth: 2, borderColor: '#F0E0D0', backgroundColor: 'white' },
   destinationChipActive: { borderColor: colors.maroon, backgroundColor: `${colors.maroon}10` },
-  destinationChipText: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
+  destinationChipText: { fontSize: 12, color: colors.textSecondary, fontFamily: fonts.semiBold },
   destinationChipTextActive: { color: colors.maroon },
   pendingActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
-  secondaryBtn: { flex: 1, height: 44, borderRadius: 22, backgroundColor: '#f2f0f0', alignItems: 'center', justifyContent: 'center' },
-  secondaryBtnText: { fontSize: 13, fontWeight: '700', color: colors.textSecondary },
-  primaryBtn: { flex: 1, height: 44, borderRadius: 22, backgroundColor: colors.maroon, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-  primaryBtnText: { fontSize: 13, fontWeight: '700', color: 'white' },
+  secondaryBtn: { flex: 1, height: 48, borderRadius: 18, backgroundColor: '#FFF5ED', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#F0E0D0' },
+  secondaryBtnText: { fontSize: 13, fontFamily: fonts.bold, color: colors.textSecondary },
+  primaryBtn: { flex: 1, height: 48, borderRadius: 18, backgroundColor: colors.maroon, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  primaryBtnText: { fontSize: 13, fontFamily: fonts.bold, color: 'white' },
 
-  recentPanel: { marginTop: 18, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 20, padding: 14 },
+  recentPanel: { marginTop: 18, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 24, padding: 16 },
   recentHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  recentTitle: { fontSize: 15, fontWeight: '700', color: 'white' },
-  recentLink: { fontSize: 12, color: 'rgba(255,255,255,0.7)' },
-  recentEmpty: { marginTop: 10, fontSize: 12, color: 'rgba(255,255,255,0.6)' },
-  recentItem: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 14, padding: 10 },
-  recentIcon: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center' },
+  recentTitle: { fontSize: 16, fontFamily: fonts.bold, color: 'white' },
+  recentLink: { fontSize: 12, color: 'rgba(255,255,255,0.7)', fontFamily: fonts.medium },
+  recentEmpty: { marginTop: 10, fontSize: 12, color: 'rgba(255,255,255,0.6)', fontFamily: fonts.regular },
+  recentItem: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 18, padding: 12 },
+  recentIcon: { width: 34, height: 34, borderRadius: 14, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center' },
   recentInfo: { flex: 1 },
-  recentName: { fontSize: 13, color: 'white', fontWeight: '600' },
-  recentMeta: { fontSize: 11, color: 'rgba(255,255,255,0.6)', marginTop: 2 },
-  recentCourse: { fontSize: 10, color: 'rgba(255,255,255,0.7)', maxWidth: 92, textAlign: 'right' },
+  recentName: { fontSize: 13, color: 'white', fontFamily: fonts.semiBold },
+  recentMeta: { fontSize: 11, color: 'rgba(255,255,255,0.6)', marginTop: 2, fontFamily: fonts.regular },
+  recentCourse: { fontSize: 10, color: 'rgba(255,255,255,0.7)', maxWidth: 92, textAlign: 'right', fontFamily: fonts.medium },
 });

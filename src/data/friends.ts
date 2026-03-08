@@ -8,6 +8,8 @@ export const friendsDirectory: FriendData[] = [
     status: 'online',
     course: 'AP Human Geo',
     lastMessage: 'I can share my Unit 6 review sheet.',
+    grade: '11th Grade',
+    school: 'Loudoun Valley High School',
   },
   {
     id: 'anya',
@@ -16,6 +18,8 @@ export const friendsDirectory: FriendData[] = [
     status: 'online',
     course: 'AP Human Geo',
     lastMessage: 'Want to review urban models tonight?',
+    grade: '11th Grade',
+    school: 'Loudoun Valley High School',
   },
   {
     id: 'andrew',
@@ -24,6 +28,8 @@ export const friendsDirectory: FriendData[] = [
     status: 'online',
     course: 'AP Biology',
     lastMessage: 'I just uploaded my chapter summary.',
+    grade: '11th Grade',
+    school: 'Loudoun Valley High School',
   },
   {
     id: 'annika',
@@ -32,6 +38,8 @@ export const friendsDirectory: FriendData[] = [
     status: 'studying',
     course: 'AP Biology',
     lastMessage: 'Uploading my cell signaling notes.',
+    grade: '10th Grade',
+    school: 'Loudoun Valley High School',
   },
   {
     id: 'jack',
@@ -40,6 +48,8 @@ export const friendsDirectory: FriendData[] = [
     status: 'online',
     course: 'DE English',
     lastMessage: 'Can we workshop the essay thesis?',
+    grade: '11th Grade',
+    school: 'Loudoun Valley High School',
   },
   {
     id: 'will',
@@ -48,6 +58,8 @@ export const friendsDirectory: FriendData[] = [
     status: 'studying',
     course: 'AP Calculus',
     lastMessage: 'I found a better derivative shortcut.',
+    grade: '11th Grade',
+    school: 'Rock Ridge High School',
   },
   {
     id: 'nick',
@@ -56,5 +68,7 @@ export const friendsDirectory: FriendData[] = [
     status: 'offline',
     course: 'AP Biology',
     lastMessage: 'Ping me when you start the practice quiz.',
+    grade: '11th Grade',
+    school: 'Loudoun Valley High School',
   },
 ];

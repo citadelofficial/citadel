@@ -1,64 +1,149 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Animated, Easing } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors } from '../theme';
+import { colors, fonts } from '../theme';
 
 export function SplashScreen() {
-  const logoScale = useRef(new Animated.Value(0.9)).current;
-  const logoOpacity = useRef(new Animated.Value(0.5)).current;
+  // Shield drop-in with spring overshoot
+  const shieldY = useRef(new Animated.Value(-60)).current;
+  const shieldScale = useRef(new Animated.Value(0.3)).current;
+  const shieldOpacity = useRef(new Animated.Value(0)).current;
+
+  // Title & tagline
+  const titleOpacity = useRef(new Animated.Value(0)).current;
+  const titleY = useRef(new Animated.Value(20)).current;
+  const lineWidth = useRef(new Animated.Value(0)).current;
+  const taglineOpacity = useRef(new Animated.Value(0)).current;
+  const taglineY = useRef(new Animated.Value(14)).current;
+
+  // Glow pulse
   const glowPulse = useRef(new Animated.Value(0)).current;
 
+  // Dots bounce
+  const dot1 = useRef(new Animated.Value(0)).current;
+  const dot2 = useRef(new Animated.Value(0)).current;
+  const dot3 = useRef(new Animated.Value(0)).current;
+
   useEffect(() => {
-    const intro = Animated.parallel([
-      Animated.timing(logoScale, {
-        toValue: 1,
-        duration: 650,
-        easing: Easing.out(Easing.cubic),
+    // === Phase 1: Shield drops in with spring ===
+    const shieldEntrance = Animated.parallel([
+      Animated.spring(shieldY, {
+        toValue: 0,
         useNativeDriver: true,
+        speed: 8,
+        bounciness: 18,
       }),
-      Animated.timing(logoOpacity, {
+      Animated.spring(shieldScale, {
         toValue: 1,
-        duration: 650,
-        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+        speed: 8,
+        bounciness: 14,
+      }),
+      Animated.timing(shieldOpacity, {
+        toValue: 1,
+        duration: 300,
         useNativeDriver: true,
       }),
     ]);
 
+    // === Phase 2: Title slides up ===
+    const titleEntrance = Animated.parallel([
+      Animated.timing(titleOpacity, {
+        toValue: 1,
+        duration: 400,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.spring(titleY, {
+        toValue: 0,
+        useNativeDriver: true,
+        speed: 12,
+        bounciness: 10,
+      }),
+    ]);
+
+    // === Phase 3: Line expands ===
+    const lineExpand = Animated.spring(lineWidth, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 14,
+      bounciness: 8,
+    });
+
+    // === Phase 4: Tagline slides up ===
+    const taglineEntrance = Animated.parallel([
+      Animated.timing(taglineOpacity, {
+        toValue: 1,
+        duration: 350,
+        useNativeDriver: true,
+      }),
+      Animated.spring(taglineY, {
+        toValue: 0,
+        useNativeDriver: true,
+        speed: 14,
+        bounciness: 8,
+      }),
+    ]);
+
+    // === Phase 5: Dots bounce in staggered ===
+    const dotsEntrance = Animated.stagger(120, [
+      Animated.spring(dot1, { toValue: 1, useNativeDriver: true, speed: 10, bounciness: 18 }),
+      Animated.spring(dot2, { toValue: 1, useNativeDriver: true, speed: 10, bounciness: 18 }),
+      Animated.spring(dot3, { toValue: 1, useNativeDriver: true, speed: 10, bounciness: 18 }),
+    ]);
+
+    // Glow breathing loop
     const pulse = Animated.loop(
       Animated.sequence([
         Animated.timing(glowPulse, {
           toValue: 1,
-          duration: 1200,
+          duration: 1400,
           easing: Easing.inOut(Easing.quad),
           useNativeDriver: true,
         }),
         Animated.timing(glowPulse, {
           toValue: 0,
-          duration: 1200,
+          duration: 1400,
           easing: Easing.inOut(Easing.quad),
           useNativeDriver: true,
         }),
       ])
     );
 
-    intro.start();
-    pulse.start();
+    // Run sequence
+    Animated.sequence([
+      shieldEntrance,
+      Animated.delay(100),
+      titleEntrance,
+      lineExpand,
+      Animated.delay(50),
+      taglineEntrance,
+      Animated.delay(150),
+      dotsEntrance,
+    ]).start();
 
+    pulse.start();
     return () => pulse.stop();
-  }, [glowPulse, logoOpacity, logoScale]);
+  }, [shieldY, shieldScale, shieldOpacity, titleOpacity, titleY, lineWidth, taglineOpacity, taglineY, glowPulse, dot1, dot2, dot3]);
 
   const glowScale = glowPulse.interpolate({
     inputRange: [0, 1],
-    outputRange: [1, 1.18],
+    outputRange: [1, 1.22],
   });
-
   const glowOpacity = glowPulse.interpolate({
     inputRange: [0, 1],
-    outputRange: [0.14, 0.05],
+    outputRange: [0.14, 0.04],
+  });
+
+  // Dots animate scale from 0 to 1 with spring
+  const dotScale = (val: Animated.Value) => val.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 1],
   });
 
   return (
     <View style={styles.container}>
+      {/* Breathing glow */}
       <Animated.View
         style={[
           styles.glow,
@@ -69,27 +154,73 @@ export function SplashScreen() {
         ]}
       />
 
+      {/* Shield icon - springs down from above */}
       <Animated.View
         style={[
-          styles.content,
+          styles.iconWrap,
           {
-            opacity: logoOpacity,
-            transform: [{ scale: logoScale }],
+            opacity: shieldOpacity,
+            transform: [
+              { translateY: shieldY },
+              { scale: shieldScale },
+            ],
           },
         ]}
       >
-        <View style={styles.iconWrap}>
-          <Ionicons name="shield-checkmark" size={88} color="white" />
-        </View>
-        <Text style={styles.title}>Citadel</Text>
-        <View style={styles.line} />
-        <Text style={styles.tagline}>THE FORTRESS FOR YOUR LEARNING</Text>
+        <Ionicons name="shield-checkmark" size={88} color="white" />
       </Animated.View>
 
+      {/* Title slides up */}
+      <Animated.Text
+        style={[
+          styles.title,
+          {
+            opacity: titleOpacity,
+            transform: [{ translateY: titleY }],
+          },
+        ]}
+      >
+        Citadel
+      </Animated.Text>
+
+      {/* Decorative line expands */}
+      <Animated.View
+        style={[
+          styles.line,
+          {
+            transform: [{ scaleX: lineWidth }],
+          },
+        ]}
+      />
+
+      {/* Tagline slides up */}
+      <Animated.Text
+        style={[
+          styles.tagline,
+          {
+            opacity: taglineOpacity,
+            transform: [{ translateY: taglineY }],
+          },
+        ]}
+      >
+        THE FORTRESS FOR YOUR LEARNING
+      </Animated.Text>
+
+      {/* Dots pop in one by one */}
       <View style={styles.dots}>
-        <Animated.View style={[styles.dot, styles.dotActive, { opacity: logoOpacity }]} />
-        <Animated.View style={[styles.dot, { opacity: glowOpacity }]} />
-        <Animated.View style={[styles.dot, { opacity: logoOpacity }]} />
+        {[dot1, dot2, dot3].map((dot, i) => (
+          <Animated.View
+            key={i}
+            style={[
+              styles.dot,
+              i === 1 && styles.dotActive,
+              {
+                transform: [{ scale: dotScale(dot) }],
+                opacity: dot,
+              },
+            ]}
+          />
+        ))}
       </View>
     </View>
   );
@@ -104,51 +235,48 @@ const styles = StyleSheet.create({
   },
   glow: {
     position: 'absolute',
-    width: 300,
-    height: 300,
-    borderRadius: 150,
+    width: 320,
+    height: 320,
+    borderRadius: 160,
     backgroundColor: 'white',
   },
-  content: {
-    alignItems: 'center',
-    zIndex: 10,
-  },
   iconWrap: {
-    width: 112,
-    height: 112,
+    width: 120,
+    height: 120,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 20,
   },
   title: {
-    fontSize: 48,
-    fontWeight: '700',
+    fontSize: 54,
+    fontFamily: fonts.bold,
     color: 'white',
-    letterSpacing: 1,
+    letterSpacing: -1,
   },
   line: {
     width: 60,
-    height: 1,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    marginTop: 12,
+    height: 2,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+    marginTop: 14,
+    borderRadius: 1,
   },
   tagline: {
-    marginTop: 16,
+    marginTop: 18,
     fontSize: 13,
     color: 'rgba(255,255,255,0.74)',
-    letterSpacing: 2,
-    fontWeight: '300',
+    letterSpacing: 3,
+    fontFamily: fonts.medium,
   },
   dots: {
     position: 'absolute',
     bottom: 64,
     flexDirection: 'row',
-    gap: 6,
+    gap: 10,
   },
   dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     backgroundColor: 'rgba(255,255,255,0.5)',
   },
   dotActive: {

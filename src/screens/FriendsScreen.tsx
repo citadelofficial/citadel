@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -13,11 +13,14 @@ import {
   Animated,
   LayoutAnimation,
   UIManager,
+  Easing,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BottomNav } from '../components/BottomNav';
-import { colors } from '../theme';
+import { AnimatedPressable } from '../components/AnimatedPressable';
+import { colors, fonts } from '../theme';
 import { friendsDirectory } from '../data/friends';
+import type { FriendData } from '../types';
 
 interface Props {
   onHome: () => void;
@@ -25,6 +28,7 @@ interface Props {
   onFiles: () => void;
   profilePicture: string | null;
   userName: string;
+  onPersonOpen?: (person: FriendData) => void;
 }
 
 type Tab = 'friends' | 'requests' | 'sessions' | 'discover';
@@ -65,7 +69,7 @@ function formatDuration(seconds: number) {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
-export function FriendsScreen({ onHome, onScan, onFiles, profilePicture, userName }: Props) {
+export function FriendsScreen({ onHome, onScan, onFiles, profilePicture, userName, onPersonOpen }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>('friends');
   const [searchQuery, setSearchQuery] = useState('');
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
@@ -80,13 +84,30 @@ export function FriendsScreen({ onHome, onScan, onFiles, profilePicture, userNam
 
   const [requests, setRequests] = useState([
     { id: 'saraa', name: 'Saraa Rana', school: 'Loudoun Valley High School' },
-    { id: 'risha', name: 'Risha Guru', school: 'Rock Ridge High School' },
+    { id: 'risha', name: 'Risha Guru', school: 'John Champe High School' },
   ]);
   const [sentDiscoverInvites, setSentDiscoverInvites] = useState<Set<string>>(new Set());
   const [requestFeedback, setRequestFeedback] = useState<{ text: string; color: string } | null>(null);
   const requestFeedbackOpacity = useState(new Animated.Value(0))[0];
   const requestFeedbackTranslate = useState(new Animated.Value(-8))[0];
   const requestReveal = useState(new Animated.Value(0))[0];
+
+  // Message send swoosh animation
+  const messageSwoosh = useRef(new Animated.Value(0)).current;
+  const messageSwooshOpacity = useRef(new Animated.Value(0)).current;
+
+  // Online status pulse
+  const onlinePulse = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(onlinePulse, { toValue: 1.15, duration: 1800, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        Animated.timing(onlinePulse, { toValue: 1, duration: 1800, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      ])
+    );
+    pulse.start();
+    return () => pulse.stop();
+  }, [onlinePulse]);
 
   const [upcomingSessions, setUpcomingSessions] = useState<StudySession[]>([
     {
@@ -214,6 +235,14 @@ export function FriendsScreen({ onHome, onScan, onFiles, profilePicture, userNam
     const text = draftMessage.trim();
     if (!text || !activeChatId) return;
 
+    // Swoosh animation
+    messageSwoosh.setValue(40);
+    messageSwooshOpacity.setValue(0);
+    Animated.parallel([
+      Animated.spring(messageSwoosh, { toValue: 0, useNativeDriver: true, speed: 18, bounciness: 8 }),
+      Animated.timing(messageSwooshOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+    ]).start();
+
     setMessagesByFriend((prev) => ({
       ...prev,
       [activeChatId]: [...(prev[activeChatId] || []), { id: Date.now(), from: 'me', text, time: currentTimeLabel() }],
@@ -324,11 +353,11 @@ export function FriendsScreen({ onHome, onScan, onFiles, profilePicture, userNam
         prev.map((session) =>
           session.id === sessionEditor.id
             ? {
-                ...session,
-                title,
-                course,
-                time,
-              }
+              ...session,
+              title,
+              course,
+              time,
+            }
             : session
         )
       );
@@ -523,14 +552,24 @@ export function FriendsScreen({ onHome, onScan, onFiles, profilePicture, userNam
         </View>
 
         <ScrollView style={styles.chatScroll} contentContainerStyle={styles.chatContent} keyboardShouldPersistTaps="handled">
-          {messages.map((message) => (
-            <View key={message.id} style={[styles.messageRow, message.from === 'me' && styles.messageRowMe]}>
+          {messages.map((message, idx) => {
+            const isLatestMe = message.from === 'me' && idx === messages.length - 1;
+            const bubble = (
               <View style={[styles.messageBubble, message.from === 'me' && styles.messageBubbleMe]}>
                 <Text style={[styles.messageText, message.from === 'me' && styles.messageTextMe]}>{message.text}</Text>
                 <Text style={[styles.messageTime, message.from === 'me' && styles.messageTimeMe]}>{message.time}</Text>
               </View>
-            </View>
-          ))}
+            );
+            return (
+              <View key={message.id} style={[styles.messageRow, message.from === 'me' && styles.messageRowMe]}>
+                {isLatestMe ? (
+                  <Animated.View style={{ opacity: messageSwooshOpacity, transform: [{ translateX: messageSwoosh }] }}>
+                    {bubble}
+                  </Animated.View>
+                ) : bubble}
+              </View>
+            );
+          })}
         </ScrollView>
 
         <View style={styles.chatComposer}>
@@ -541,9 +580,9 @@ export function FriendsScreen({ onHome, onScan, onFiles, profilePicture, userNam
             placeholder="Message"
             placeholderTextColor={colors.textTertiary}
           />
-          <TouchableOpacity style={styles.sendBtn} onPress={sendMessage}>
+          <AnimatedPressable style={styles.sendBtn} onPress={sendMessage} scaleDown={0.85}>
             <Ionicons name="send" size={16} color="white" />
-          </TouchableOpacity>
+          </AnimatedPressable>
         </View>
       </KeyboardAvoidingView>
     );
@@ -633,15 +672,16 @@ export function FriendsScreen({ onHome, onScan, onFiles, profilePicture, userNam
 
             <Text style={[styles.sectionLabel, { marginTop: 20 }]}>All Friends</Text>
             {filteredFriends.map((friend) => (
-              <View key={friend.id} style={styles.friendRow}>
+              <TouchableOpacity key={friend.id} style={styles.friendRow} onPress={() => onPersonOpen?.(friend)} activeOpacity={0.7}>
                 <View style={[styles.friendAvatar, { backgroundColor: friend.color }]}>
                   <Ionicons name="person" size={20} color="#6366f1" />
                 </View>
-                <View
+                <Animated.View
                   style={[
                     styles.statusDotSmall,
                     friend.status === 'online' && styles.statusOnline,
                     friend.status === 'studying' && styles.statusStudying,
+                    (friend.status === 'online' || friend.status === 'studying') && { transform: [{ scale: onlinePulse }] },
                   ]}
                 />
                 <View style={styles.friendInfo}>
@@ -661,7 +701,7 @@ export function FriendsScreen({ onHome, onScan, onFiles, profilePicture, userNam
                     <Ionicons name="videocam-outline" size={18} color={colors.maroon} />
                   </TouchableOpacity>
                 </View>
-              </View>
+              </TouchableOpacity>
             ))}
           </View>
         )}
@@ -694,17 +734,25 @@ export function FriendsScreen({ onHome, onScan, onFiles, profilePicture, userNam
                   ]}
                 >
                   <View style={styles.requestCard}>
-                    <Text style={styles.requestName}>{request.name}</Text>
+                    <TouchableOpacity onPress={() => onPersonOpen?.({
+                      id: request.id,
+                      name: request.name,
+                      color: '#E0E7FF',
+                      status: 'offline',
+                      school: request.school,
+                    })} activeOpacity={0.7}>
+                      <Text style={styles.requestName}>{request.name}</Text>
+                    </TouchableOpacity>
                     <Text style={styles.requestMeta}>{request.school}</Text>
                     <View style={styles.requestActions}>
-                      <TouchableOpacity style={styles.requestDecline} onPress={() => toggleRequest(request.id, false)}>
+                      <AnimatedPressable style={styles.requestDecline} onPress={() => toggleRequest(request.id, false)} scaleDown={0.92}>
                         <Ionicons name="close" size={14} color={colors.textSecondary} />
                         <Text style={styles.requestDeclineText}>Decline</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.requestAccept} onPress={() => toggleRequest(request.id, true)}>
+                      </AnimatedPressable>
+                      <AnimatedPressable style={styles.requestAccept} onPress={() => toggleRequest(request.id, true)} scaleDown={0.92}>
                         <Ionicons name="checkmark" size={14} color="white" />
                         <Text style={styles.requestAcceptText}>Accept</Text>
-                      </TouchableOpacity>
+                      </AnimatedPressable>
                     </View>
                   </View>
                 </Animated.View>
@@ -802,22 +850,22 @@ export function FriendsScreen({ onHome, onScan, onFiles, profilePicture, userNam
         )}
       </ScrollView>
 
-      <BottomNav active="people" onHome={onHome} onScan={onScan} onFriends={() => {}} onFiles={onFiles} />
+      <BottomNav active="people" onHome={onHome} onScan={onScan} onFriends={() => { }} onFiles={onFiles} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bgSecondary },
+  container: { flex: 1, backgroundColor: '#FFF8F2' },
   scroll: { flex: 1 },
   scrollContent: { paddingTop: 56, paddingHorizontal: 24, paddingBottom: 120 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  title: { fontSize: 28, fontWeight: '700', color: colors.textPrimary },
-  subtitle: { fontSize: 14, color: colors.textSecondary, marginTop: 4 },
+  title: { fontSize: 30, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.5 },
+  subtitle: { fontSize: 14, color: colors.textSecondary, marginTop: 4, fontFamily: fonts.regular },
   avatarWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 48,
+    height: 48,
+    borderRadius: 18,
     backgroundColor: `${colors.maroon}18`,
     overflow: 'hidden',
     alignItems: 'center',
@@ -829,13 +877,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'white',
-    borderRadius: 16,
+    borderRadius: 20,
     paddingHorizontal: 20,
-    height: 48,
+    height: 52,
     gap: 12,
     marginTop: 20,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
   },
-  searchInput: { flex: 1, fontSize: 14, color: colors.textPrimary, paddingVertical: 0 },
+  searchInput: { flex: 1, fontSize: 14, color: colors.textPrimary, paddingVertical: 0, fontFamily: fonts.medium },
 
   tabs: { flexDirection: 'row', gap: 8, marginTop: 20 },
   tab: {
@@ -844,33 +894,35 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 16,
     paddingVertical: 10,
-    borderRadius: 20,
+    borderRadius: 16,
     backgroundColor: 'white',
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
   },
-  tabActive: { backgroundColor: colors.maroon },
-  tabText: { fontSize: 14, fontWeight: '500', color: colors.textSecondary },
+  tabActive: { backgroundColor: colors.maroon, borderColor: colors.maroon },
+  tabText: { fontSize: 14, fontFamily: fonts.medium, color: colors.textSecondary },
   tabTextActive: { color: 'white' },
   tabBadge: { backgroundColor: `${colors.maroon}18`, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10 },
   tabBadgeActive: { backgroundColor: 'rgba(255,255,255,0.2)' },
-  tabBadgeText: { fontSize: 10, fontWeight: '700', color: colors.maroon },
+  tabBadgeText: { fontSize: 10, fontFamily: fonts.bold, color: colors.maroon },
   tabBadgeTextActive: { color: 'white' },
   feedbackBanner: {
     marginTop: 10,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     alignSelf: 'flex-start',
   },
-  feedbackText: { color: 'white', fontSize: 12, fontWeight: '700' },
+  feedbackText: { color: 'white', fontSize: 12, fontFamily: fonts.bold },
 
   section: { marginTop: 24 },
-  sectionLabel: { fontSize: 12, fontWeight: '600', color: colors.textSecondary, marginBottom: 12, letterSpacing: 0.5 },
+  sectionLabel: { fontSize: 12, fontFamily: fonts.semiBold, color: colors.textSecondary, marginBottom: 12, letterSpacing: 0.5 },
   horizontalList: { gap: 12, paddingBottom: 8 },
   friendChip: { alignItems: 'center', width: 72 },
-  friendChipAvatar: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center' },
+  friendChipAvatar: { width: 64, height: 64, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
   statusDot: {
     position: 'absolute',
     bottom: 18,
@@ -895,73 +947,77 @@ const styles = StyleSheet.create({
   },
   statusOnline: { backgroundColor: '#22c55e' },
   statusStudying: { backgroundColor: '#f59e0b' },
-  friendChipName: { fontSize: 11, fontWeight: '500', color: colors.textPrimary, marginTop: 6, maxWidth: 72 },
+  friendChipName: { fontSize: 11, fontFamily: fonts.medium, color: colors.textPrimary, marginTop: 6, maxWidth: 72 },
   friendRow: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'white',
-    borderRadius: 16,
+    borderRadius: 20,
     padding: 14,
     marginBottom: 8,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
   },
-  friendAvatar: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
+  friendAvatar: { width: 48, height: 48, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   friendInfo: { flex: 1, marginLeft: 12 },
-  friendName: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
-  friendStatus: { fontSize: 11, color: '#22c55e' },
+  friendName: { fontSize: 14, fontFamily: fonts.semiBold, color: colors.textPrimary },
+  friendStatus: { fontSize: 11, color: '#22c55e', fontFamily: fonts.medium },
   friendStatusStudying: { color: '#f59e0b' },
   friendActions: { flexDirection: 'row', gap: 4 },
   actionBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 38,
+    height: 38,
+    borderRadius: 14,
     backgroundColor: `${colors.maroon}12`,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
   requestCardWrap: { marginBottom: 10 },
-  requestCard: { backgroundColor: 'white', borderRadius: 16, padding: 16 },
-  requestName: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
-  requestMeta: { fontSize: 12, color: colors.textSecondary, marginTop: 4 },
+  requestCard: { backgroundColor: 'white', borderRadius: 20, padding: 16, borderWidth: 2, borderColor: '#F0E0D0' },
+  requestName: { fontSize: 15, fontFamily: fonts.bold, color: colors.textPrimary },
+  requestMeta: { fontSize: 12, color: colors.textSecondary, marginTop: 4, fontFamily: fonts.regular },
   requestActions: { flexDirection: 'row', gap: 8, marginTop: 12 },
   requestDecline: {
     flex: 1,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#f3f1f1',
+    height: 42,
+    borderRadius: 18,
+    backgroundColor: '#FFF5ED',
     flexDirection: 'row',
     gap: 4,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
   },
-  requestDeclineText: { fontSize: 13, color: colors.textSecondary, fontWeight: '700' },
+  requestDeclineText: { fontSize: 13, color: colors.textSecondary, fontFamily: fonts.bold },
   requestAccept: {
     flex: 1,
-    height: 40,
-    borderRadius: 20,
+    height: 42,
+    borderRadius: 18,
     backgroundColor: colors.maroon,
     flexDirection: 'row',
     gap: 4,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  requestAcceptText: { fontSize: 13, color: 'white', fontWeight: '700' },
-  emptyState: { backgroundColor: 'white', borderRadius: 16, padding: 22, alignItems: 'center' },
-  emptyTitle: { marginTop: 8, fontWeight: '700', color: colors.textPrimary },
+  requestAcceptText: { fontSize: 13, color: 'white', fontFamily: fonts.bold },
+  emptyState: { backgroundColor: 'white', borderRadius: 20, padding: 22, alignItems: 'center', borderWidth: 2, borderColor: '#F0E0D0' },
+  emptyTitle: { marginTop: 8, fontFamily: fonts.bold, color: colors.textPrimary },
 
-  sessionCardLive: { backgroundColor: 'white', borderRadius: 16, padding: 16 },
+  sessionCardLive: { backgroundColor: 'white', borderRadius: 20, padding: 16, borderWidth: 2, borderColor: '#F0E0D0' },
   sessionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 16 },
   createSessionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     backgroundColor: colors.maroon,
-    borderRadius: 16,
-    height: 30,
-    paddingHorizontal: 10,
+    borderRadius: 14,
+    height: 32,
+    paddingHorizontal: 12,
   },
-  createSessionText: { color: 'white', fontSize: 11, fontWeight: '700' },
-  sessionCard: { backgroundColor: 'white', borderRadius: 16, padding: 14, marginBottom: 8 },
+  createSessionText: { color: 'white', fontSize: 11, fontFamily: fonts.bold },
+  sessionCard: { backgroundColor: 'white', borderRadius: 20, padding: 16, marginBottom: 8, borderWidth: 2, borderColor: '#F0E0D0' },
   sessionBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -970,92 +1026,96 @@ const styles = StyleSheet.create({
     backgroundColor: '#fef2f2',
     paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 12,
+    borderRadius: 10,
   },
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#ef4444' },
-  liveText: { fontSize: 10, fontWeight: '700', color: '#ef4444' },
-  sessionCourse: { fontSize: 10, color: colors.textTertiary, marginTop: 8 },
-  sessionTitle: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
-  sessionSub: { fontSize: 12, color: colors.textSecondary, marginTop: 4 },
-  sessionMeta: { fontSize: 11, color: colors.textSecondary, marginTop: 6 },
-  sessionParticipants: { fontSize: 11, color: colors.textSecondary, marginTop: 4 },
+  liveText: { fontSize: 10, fontFamily: fonts.bold, color: '#ef4444' },
+  sessionCourse: { fontSize: 10, color: colors.textTertiary, marginTop: 8, fontFamily: fonts.regular },
+  sessionTitle: { fontSize: 14, fontFamily: fonts.bold, color: colors.textPrimary },
+  sessionSub: { fontSize: 12, color: colors.textSecondary, marginTop: 4, fontFamily: fonts.regular },
+  sessionMeta: { fontSize: 11, color: colors.textSecondary, marginTop: 6, fontFamily: fonts.medium },
+  sessionParticipants: { fontSize: 11, color: colors.textSecondary, marginTop: 4, fontFamily: fonts.regular },
   joinBtn: {
     marginTop: 10,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    height: 36,
+    height: 38,
     alignSelf: 'flex-start',
-    paddingHorizontal: 16,
+    paddingHorizontal: 18,
     backgroundColor: colors.maroon,
-    borderRadius: 18,
+    borderRadius: 16,
   },
-  joinBtnText: { fontSize: 12, fontWeight: '600', color: 'white' },
+  joinBtnText: { fontSize: 12, fontFamily: fonts.bold, color: 'white' },
   sessionActionsRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
   rsvpBtn: {
     flex: 1,
-    height: 34,
-    borderRadius: 17,
-    borderWidth: 1,
-    borderColor: '#e5e1e1',
+    height: 36,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
     alignItems: 'center',
     justifyContent: 'center',
   },
   rsvpBtnActive: { backgroundColor: `${colors.maroon}12`, borderColor: `${colors.maroon}40` },
-  rsvpText: { color: colors.textSecondary, fontSize: 12, fontWeight: '700' },
+  rsvpText: { color: colors.textSecondary, fontSize: 12, fontFamily: fonts.bold },
   rsvpTextActive: { color: colors.maroon },
   openSessionBtn: {
     flex: 1,
-    height: 34,
-    borderRadius: 17,
+    height: 36,
+    borderRadius: 14,
     backgroundColor: colors.maroon,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  openSessionBtnText: { color: 'white', fontSize: 12, fontWeight: '700' },
+  openSessionBtnText: { color: 'white', fontSize: 12, fontFamily: fonts.bold },
   ownerActions: { flexDirection: 'row', gap: 10, marginTop: 10 },
   ownerActionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 12,
-    backgroundColor: '#f7f4f4',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 14,
+    backgroundColor: '#FFF5ED',
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
   },
-  ownerActionText: { fontSize: 12, fontWeight: '700', color: colors.maroon },
-  ownerActionDangerText: { fontSize: 12, fontWeight: '700', color: '#b91c1c' },
+  ownerActionText: { fontSize: 12, fontFamily: fonts.bold, color: colors.maroon },
+  ownerActionDangerText: { fontSize: 12, fontFamily: fonts.bold, color: '#b91c1c' },
 
   discoverCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     backgroundColor: 'white',
-    borderRadius: 14,
-    padding: 12,
+    borderRadius: 20,
+    padding: 14,
     marginBottom: 8,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
   },
   discoverAvatar: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 42,
+    height: 42,
+    borderRadius: 16,
     backgroundColor: `${colors.maroon}15`,
     alignItems: 'center',
     justifyContent: 'center',
   },
   discoverInfo: { flex: 1 },
-  discoverName: { fontSize: 14, color: colors.textPrimary, fontWeight: '700' },
-  discoverSchool: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
+  discoverName: { fontSize: 14, color: colors.textPrimary, fontFamily: fonts.bold },
+  discoverSchool: { fontSize: 11, color: colors.textSecondary, marginTop: 2, fontFamily: fonts.regular },
   discoverAddBtn: {
-    height: 30,
-    borderRadius: 15,
+    height: 32,
+    borderRadius: 14,
     backgroundColor: colors.maroon,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
   discoverAddBtnSent: { backgroundColor: '#166534' },
-  discoverAddText: { color: 'white', fontSize: 11, fontWeight: '700' },
+  discoverAddText: { color: 'white', fontSize: 11, fontFamily: fonts.bold },
 
   chatHeader: {
     paddingTop: 56,
@@ -1067,20 +1127,22 @@ const styles = StyleSheet.create({
     backgroundColor: 'white',
   },
   backBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#f2efef',
+    width: 42,
+    height: 42,
+    borderRadius: 16,
+    backgroundColor: '#FFF5ED',
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
   },
   chatHeaderInfo: { flex: 1 },
-  chatFriendName: { fontSize: 16, fontWeight: '700', color: colors.textPrimary },
-  chatFriendStatus: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+  chatFriendName: { fontSize: 16, fontFamily: fonts.bold, color: colors.textPrimary },
+  chatFriendStatus: { fontSize: 12, color: colors.textSecondary, marginTop: 2, fontFamily: fonts.regular },
   chatTopAction: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 36,
+    height: 36,
+    borderRadius: 14,
     backgroundColor: `${colors.maroon}12`,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1089,11 +1151,11 @@ const styles = StyleSheet.create({
   chatContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 16 },
   messageRow: { marginBottom: 10, alignItems: 'flex-start' },
   messageRowMe: { alignItems: 'flex-end' },
-  messageBubble: { maxWidth: '78%', backgroundColor: 'white', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10 },
-  messageBubbleMe: { backgroundColor: colors.maroon },
-  messageText: { fontSize: 13, color: colors.textPrimary, lineHeight: 18 },
+  messageBubble: { maxWidth: '78%', backgroundColor: 'white', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 11, borderWidth: 2, borderColor: '#F0E0D0' },
+  messageBubbleMe: { backgroundColor: colors.maroon, borderColor: colors.maroon },
+  messageText: { fontSize: 13, color: colors.textPrimary, lineHeight: 18, fontFamily: fonts.regular },
   messageTextMe: { color: 'white' },
-  messageTime: { fontSize: 10, color: colors.textTertiary, marginTop: 4 },
+  messageTime: { fontSize: 10, color: colors.textTertiary, marginTop: 4, fontFamily: fonts.regular },
   messageTimeMe: { color: 'rgba(255,255,255,0.8)' },
   chatComposer: {
     flexDirection: 'row',
@@ -1105,17 +1167,20 @@ const styles = StyleSheet.create({
   },
   chatInput: {
     flex: 1,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#f3f1f1',
+    height: 44,
+    borderRadius: 18,
+    backgroundColor: '#FFF5ED',
     paddingHorizontal: 14,
     fontSize: 13,
     color: colors.textPrimary,
+    fontFamily: fonts.medium,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
   },
   sendBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 44,
+    height: 44,
+    borderRadius: 18,
     backgroundColor: colors.maroon,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1142,18 +1207,18 @@ const styles = StyleSheet.create({
   },
   callTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   callTopBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 42,
+    height: 42,
+    borderRadius: 16,
     backgroundColor: 'rgba(255,255,255,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  callTopBtnPlaceholder: { width: 40, height: 40 },
+  callTopBtnPlaceholder: { width: 42, height: 42 },
   callTitleWrap: { alignItems: 'center', flex: 1, paddingHorizontal: 12 },
-  callTypeLabel: { fontSize: 10, letterSpacing: 1, color: 'rgba(255,255,255,0.7)', fontWeight: '700' },
-  callTitleText: { fontSize: 18, color: 'white', fontWeight: '800', marginTop: 4 },
-  callClock: { fontSize: 12, color: 'rgba(255,255,255,0.75)', marginTop: 3 },
+  callTypeLabel: { fontSize: 10, letterSpacing: 1, color: 'rgba(255,255,255,0.7)', fontFamily: fonts.bold },
+  callTitleText: { fontSize: 18, color: 'white', fontFamily: fonts.bold, marginTop: 4 },
+  callClock: { fontSize: 12, color: 'rgba(255,255,255,0.75)', marginTop: 3, fontFamily: fonts.medium },
   callStatusRow: { flexDirection: 'row', gap: 8, marginTop: 14, flexWrap: 'wrap' },
   callStatusPill: {
     flexDirection: 'row',
@@ -1165,35 +1230,35 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   callStatusPillMuted: { backgroundColor: 'rgba(220,38,38,0.18)' },
-  callStatusText: { color: 'white', fontSize: 11, fontWeight: '700' },
+  callStatusText: { color: 'white', fontSize: 11, fontFamily: fonts.bold },
 
   videoStage: { flex: 1, marginTop: 16 },
   videoFocusTile: {
     flex: 1,
-    borderRadius: 24,
+    borderRadius: 28,
     backgroundColor: 'rgba(255,255,255,0.14)',
-    borderWidth: 1,
+    borderWidth: 2,
     borderColor: 'rgba(255,255,255,0.2)',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
     minHeight: 280,
   },
-  videoFocusName: { color: 'white', fontSize: 20, fontWeight: '800' },
-  videoFocusHint: { color: 'rgba(255,255,255,0.8)', fontSize: 12 },
+  videoFocusName: { color: 'white', fontSize: 20, fontFamily: fonts.bold },
+  videoFocusHint: { color: 'rgba(255,255,255,0.8)', fontSize: 12, fontFamily: fonts.regular },
   videoThumbRow: { flexDirection: 'row', gap: 8, marginTop: 10, paddingBottom: 8 },
   videoThumb: {
     width: 104,
     height: 78,
-    borderRadius: 16,
+    borderRadius: 18,
     backgroundColor: 'rgba(255,255,255,0.16)',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 4,
-    borderWidth: 1,
+    borderWidth: 2,
     borderColor: 'rgba(255,255,255,0.22)',
   },
-  videoThumbText: { color: 'white', fontSize: 11, fontWeight: '700' },
+  videoThumbText: { color: 'white', fontSize: 11, fontFamily: fonts.bold },
 
   voiceStage: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
   voiceAvatarOuter: {
@@ -1212,8 +1277,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: `${colors.maroon}95`,
   },
-  voiceName: { color: 'white', fontSize: 24, fontWeight: '800' },
-  voiceHint: { color: 'rgba(255,255,255,0.78)', fontSize: 12 },
+  voiceName: { color: 'white', fontSize: 24, fontFamily: fonts.bold },
+  voiceHint: { color: 'rgba(255,255,255,0.78)', fontSize: 12, fontFamily: fonts.regular },
 
   callControlsDock: {
     marginTop: 12,
@@ -1224,9 +1289,9 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
   },
   callControlBtn: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
+    width: 56,
+    height: 56,
+    borderRadius: 22,
     backgroundColor: 'white',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1243,30 +1308,31 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   editorTitleWrap: { flex: 1 },
-  editorTitle: { fontSize: 22, fontWeight: '800', color: colors.textPrimary },
-  editorSubtitle: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+  editorTitle: { fontSize: 22, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.3 },
+  editorSubtitle: { fontSize: 12, color: colors.textSecondary, marginTop: 2, fontFamily: fonts.regular },
   editorScroll: { flex: 1 },
   editorContent: { paddingHorizontal: 20, paddingBottom: 40 },
-  editorCard: { marginTop: 12, backgroundColor: 'white', borderRadius: 18, padding: 16 },
+  editorCard: { marginTop: 12, backgroundColor: 'white', borderRadius: 24, padding: 18, borderWidth: 2, borderColor: '#F0E0D0' },
   editorSaveBtn: {
     marginTop: 18,
-    height: 46,
-    borderRadius: 23,
+    height: 50,
+    borderRadius: 20,
     backgroundColor: colors.maroon,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  editorSaveText: { color: 'white', fontSize: 14, fontWeight: '700' },
+  editorSaveText: { color: 'white', fontSize: 14, fontFamily: fonts.bold },
 
-  modalLabel: { fontSize: 12, color: colors.textSecondary, fontWeight: '700', marginTop: 8, marginBottom: 6 },
+  modalLabel: { fontSize: 12, color: colors.textSecondary, fontFamily: fonts.bold, marginTop: 8, marginBottom: 6 },
   modalInput: {
-    height: 46,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#ece8e8',
-    backgroundColor: '#faf8f8',
-    paddingHorizontal: 12,
+    height: 50,
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+    backgroundColor: 'white',
+    paddingHorizontal: 14,
     fontSize: 14,
     color: colors.textPrimary,
+    fontFamily: fonts.medium,
   },
 });
