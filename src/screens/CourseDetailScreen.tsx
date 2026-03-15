@@ -31,6 +31,8 @@ interface Props {
   onFriends?: () => void;
   onUpdateClass: (updatedClass: ClassData) => void;
   onPersonOpen?: (name: string) => void;
+  unitProgress: Record<string, boolean>;
+  onUpdateProgress: (progress: Record<string, boolean>) => void;
 }
 
 function makeCustomCode(title: string) {
@@ -110,7 +112,7 @@ function buildClassmateList(total: number, preset: string[] | undefined, seed: s
   return result.slice(0, total);
 }
 
-export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onFriends, onUpdateClass, onPersonOpen }: Props) {
+export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onFriends, onUpdateClass, onPersonOpen, unitProgress, onUpdateProgress }: Props) {
   const classAccent = classData.color || colors.maroon;
   const themeColorChoices = [colors.maroon, '#0f766e', '#1d4ed8', '#7c3aed', '#b45309'];
 
@@ -118,7 +120,10 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
   const [showEditModal, setShowEditModal] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [showClassmatesModal, setShowClassmatesModal] = useState(false);
+  const [showBlockEditModal, setShowBlockEditModal] = useState(false);
+  const [showCodeEditModal, setShowCodeEditModal] = useState(false);
   const [copyStatus, setCopyStatus] = useState('');
+  const [invitedFriends, setInvitedFriends] = useState<string[]>([]);
 
   const [draftTitle, setDraftTitle] = useState(classData.title);
   const [draftBlock, setDraftBlock] = useState(classData.block);
@@ -146,7 +151,13 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
   const [activeNote, setActiveNote] = useState<{ note: SubUnitNote; sectionTitle: string } | null>(null);
   const [noteActionStatus, setNoteActionStatus] = useState('');
 
-  const [unitProgress, setUnitProgress] = useState<Record<string, boolean>>({});
+  const setUnitProgress = (updater: Record<string, boolean> | ((prev: Record<string, boolean>) => Record<string, boolean>)) => {
+    if (typeof updater === 'function') {
+      onUpdateProgress(updater(unitProgress));
+    } else {
+      onUpdateProgress(updater);
+    }
+  };
 
   // === Study Sheet & SOS ===
   const [showStudySheet, setShowStudySheet] = useState(false);
@@ -229,7 +240,7 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
   const checkRippleOpacity = useRef(new Animated.Value(0)).current;
   const [checkRippleKey, setCheckRippleKey] = useState<string | null>(null);
 
-  const isNewClass = classData.classmates === 0 && classData.documents === 0;
+  const isNewClass = classData.classmates === 0;
   const classmatesList = useMemo(
     () => buildClassmateList(classData.classmates, classData.classmateNames, classData.classCode),
     [classData.classCode, classData.classmateNames, classData.classmates]
@@ -284,6 +295,32 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
       color: draftColor || classData.color,
     });
     setShowEditModal(false);
+  };
+
+  const openBlockEditModal = () => {
+    setDraftBlock(classData.block);
+    setShowBlockEditModal(true);
+  };
+
+  const saveBlockEdit = () => {
+    onUpdateClass({
+      ...classData,
+      block: draftBlock.trim() || classData.block,
+    });
+    setShowBlockEditModal(false);
+  };
+
+  const openCodeEditModal = () => {
+    setDraftCode(classData.classCode);
+    setShowCodeEditModal(true);
+  };
+
+  const saveCodeEdit = () => {
+    onUpdateClass({
+      ...classData,
+      classCode: draftCode.trim().toUpperCase() || classData.classCode,
+    });
+    setShowCodeEditModal(false);
   };
 
   const copyClassCode = async () => {
@@ -629,16 +666,11 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
           </View>
 
           <View style={styles.sectionHeaderStack}>
-            <Text style={styles.sectionTitle}>✈️ Sections</Text>
+            <Text style={styles.sectionTitle}>Sections</Text>
             <Text style={styles.sectionSub}>Track completion and upload notes from files or scans.</Text>
           </View>
 
-          {/* Plane fly animation overlay */}
-          {showPlane && (
-            <Animated.View style={{ position: 'absolute', top: 340, left: 0, zIndex: 100, opacity: planeOpacity, transform: [{ translateX: planeX }, { translateY: planeY }] }}>
-              <Text style={{ fontSize: 24 }}>✈️</Text>
-            </Animated.View>
-          )}
+
 
           <View style={styles.flightPath}>
             {selectedUnit.subUnits.map((subUnit, idx) => {
@@ -710,11 +742,11 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
                         <Text style={[styles.subUnitActionText, { color: classAccent }, subUnit.notes.length < 2 && styles.subUnitActionTextDisabled]}>Merge</Text>
                       </TouchableOpacity>
                       <TouchableOpacity
-                        style={[styles.subUnitAction, { backgroundColor: '#EDE9FE' }]}
+                        style={[styles.subUnitAction, { backgroundColor: `${classAccent}12` }]}
                         onPress={() => { setActiveSubUnitId(subUnit.id); setQuizTitle(''); setShowAddQuiz(true); }}
                       >
-                        <Ionicons name="school" size={14} color="#7c3aed" />
-                        <Text style={[styles.subUnitActionText, { color: '#7c3aed' }]}>Quiz</Text>
+                        <Ionicons name="school" size={14} color={classAccent} />
+                        <Text style={[styles.subUnitActionText, { color: classAccent }]}>Quiz</Text>
                       </TouchableOpacity>
                     </View>
 
@@ -739,7 +771,7 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
                       <View style={{ marginTop: 8 }}>
                         {quizzes.map((quiz) => (
                           <View key={quiz.id} style={styles.quizRow}>
-                            <Ionicons name="school" size={14} color="#7c3aed" />
+                            <Ionicons name="school" size={14} color={classAccent} />
                             <View style={{ flex: 1 }}>
                               <Text style={styles.quizTitle}>{quiz.title}</Text>
                               <Text style={styles.quizMeta}>{quiz.questions} questions • {quiz.date}</Text>
@@ -941,7 +973,7 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
                 keyboardType="numeric"
               />
               <TouchableOpacity
-                style={[styles.modalSaveBtn, { backgroundColor: '#7c3aed', marginTop: 14 }, !quizTitle.trim() && styles.modalSaveBtnDisabled]}
+                style={[styles.modalSaveBtn, { backgroundColor: classAccent, marginTop: 14 }, !quizTitle.trim() && styles.modalSaveBtnDisabled]}
                 onPress={addQuiz}
                 disabled={!quizTitle.trim()}
               >
@@ -1182,9 +1214,6 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
               <TouchableOpacity style={styles.heroBtn} onPress={openEditModal}>
                 <Ionicons name="pencil" size={18} color={colors.textPrimary} />
               </TouchableOpacity>
-              <TouchableOpacity style={styles.heroBtn} onPress={() => setShowInviteModal(true)}>
-                <Ionicons name="people" size={18} color={colors.textPrimary} />
-              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -1192,13 +1221,19 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
         <View style={styles.sheet}>
           <Text style={styles.courseTitle}>{classData.title}</Text>
           <View style={styles.badgeRow}>
-            <View style={styles.badge}>
+            <TouchableOpacity style={styles.badge} onPress={openBlockEditModal} activeOpacity={0.7}>
               <Text style={styles.badgeText}>{classData.block}</Text>
-            </View>
-            <View style={[styles.codePill, { backgroundColor: `${classAccent}10` }]}>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.codePill, { backgroundColor: `${classAccent}10` }]} onPress={openCodeEditModal} activeOpacity={0.7}>
               <Ionicons name="key" size={13} color={classAccent} />
               <Text style={[styles.codeText, { color: classAccent }]}>{classData.classCode}</Text>
-            </View>
+            </TouchableOpacity>
+            {!isNewClass && (
+              <TouchableOpacity style={[styles.codePill, { backgroundColor: `${classAccent}10`, paddingHorizontal: 10 }]} onPress={() => setShowInviteModal(true)} activeOpacity={0.7}>
+                <Ionicons name="person-add" size={13} color={classAccent} />
+                <Text style={[styles.codeText, { color: classAccent }]}>Invite</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           {!isNewClass && (
@@ -1235,7 +1270,7 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
           )}
 
           <View style={styles.sectionHeader}>
-            <Text style={[styles.sectionTitle, { marginBottom: 4 }]}>✈️ Path</Text>
+            <Text style={[styles.sectionTitle, { marginBottom: 4 }]}>Path</Text>
             <TouchableOpacity style={[styles.addUnitBtn, { backgroundColor: classAccent }]} onPress={addUnit}>
               <Ionicons name="add" size={16} color="white" />
               <Text style={[styles.addUnitBtnText, { lineHeight: 16 }]}>New Unit</Text>
@@ -1337,8 +1372,8 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
                   <Ionicons name="flag" size={18} color="white" />
                 </View>
                 <View style={styles.flightInfo}>
-                  <Text style={[styles.flightInfoTitle, { color: classAccent }]}>End of Course 🏆</Text>
-                  <Text style={styles.flightInfoMeta}>Complete all units to ace it!</Text>
+                  <Text style={[styles.flightInfoTitle, { color: classAccent }]}>End of Course</Text>
+                  <Text style={styles.flightInfoMeta}>You're done! Congrats.</Text>
                 </View>
               </View>
             </View>
@@ -1438,6 +1473,57 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
         </View>
       </Modal>
 
+      <Modal visible={showBlockEditModal} transparent animationType="fade" onRequestClose={() => setShowBlockEditModal(false)}>
+        <View style={styles.modalBackdropCentered}>
+          <View style={styles.noteModalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Change Block</Text>
+              <TouchableOpacity onPress={() => setShowBlockEditModal(false)}>
+                <Ionicons name="close" size={22} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.modalLabel}>Select Block</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filePickRow}>
+              {['Block 1', 'Block 2', 'Block 3', 'Block 4', 'Block 5', 'Block 6', 'Block 7', 'Block 8'].map((block) => (
+                <TouchableOpacity
+                  key={block}
+                  style={[styles.filePickChip, draftBlock === block && styles.filePickChipActive]}
+                  onPress={() => setDraftBlock(block)}
+                >
+                  <Text style={[styles.filePickChipText, draftBlock === block && styles.filePickChipTextActive]}>{block}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={[styles.modalSaveBtn, { backgroundColor: classAccent }]} onPress={saveBlockEdit}>
+              <Text style={styles.modalSaveBtnText}>Save Block</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showCodeEditModal} transparent animationType="fade" onRequestClose={() => setShowCodeEditModal(false)}>
+        <View style={styles.modalBackdropCentered}>
+          <View style={styles.noteModalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Change Class Code</Text>
+              <TouchableOpacity onPress={() => setShowCodeEditModal(false)}>
+                <Ionicons name="close" size={22} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.modalLabel}>New Code</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={draftCode}
+              onChangeText={(text) => setDraftCode(text.toUpperCase())}
+              autoCapitalize="characters"
+            />
+            <TouchableOpacity style={[styles.modalSaveBtn, { backgroundColor: classAccent }]} onPress={saveCodeEdit}>
+              <Text style={styles.modalSaveBtnText}>Save Code</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={showInviteModal} transparent animationType="fade" onRequestClose={() => setShowInviteModal(false)}>
         <View style={styles.modalBackdropCentered}>
           <View style={styles.inviteCard}>
@@ -1465,11 +1551,45 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
                   {copyIconDone ? 'Copied!' : 'Copy Code'}
                 </Text>
               </AnimatedPressable>
-              <TouchableOpacity style={styles.inviteActionBtn} onPress={regenerateCode}>
-                <Ionicons name="refresh" size={16} color={classAccent} />
-                <Text style={[styles.inviteActionText, { color: classAccent }]}>Regenerate</Text>
+              <TouchableOpacity style={styles.inviteActionBtn} onPress={async () => {
+                await Share.share({
+                  message: `Join my class "${classData.title}" on Citadel! Use code: ${classData.classCode}`,
+                });
+              }}>
+                <Ionicons name="share-outline" size={16} color={classAccent} />
+                <Text style={[styles.inviteActionText, { color: classAccent }]}>Share</Text>
               </TouchableOpacity>
             </View>
+
+            {friendsDirectory.length > 0 && (
+              <View style={styles.friendsSection}>
+                <Text style={styles.sosSectionLabel}>Or invite a friend:</Text>
+                <ScrollView style={styles.friendsScroll} showsVerticalScrollIndicator={false}>
+                  {friendsDirectory.map((friend) => {
+                    const isSent = invitedFriends.includes(friend.id);
+                    return (
+                      <View key={friend.id} style={styles.friendRow}>
+                        <View style={[styles.friendAvatar, { backgroundColor: friend.color + '20' }]}>
+                          <Text style={[styles.friendInitial, { color: friend.color }]}>{friend.name.charAt(0)}</Text>
+                        </View>
+                        <Text style={styles.friendName}>{friend.name}</Text>
+                        <TouchableOpacity
+                          style={[styles.friendInviteBtn, isSent && styles.friendInviteBtnSent]}
+                          onPress={() => {
+                            if (!isSent) setInvitedFriends((prev) => [...prev, friend.id]);
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={[styles.friendInviteText, isSent && styles.friendInviteTextSent]}>
+                            {isSent ? 'Sent' : 'Invite'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            )}
           </View>
         </View>
       </Modal>
@@ -1964,8 +2084,26 @@ const styles = StyleSheet.create({
   },
   inviteActionText: { fontSize: 13, color: colors.maroon, fontFamily: fonts.bold },
 
+  friendsSection: { marginTop: 20, borderTopWidth: 2, borderTopColor: '#F0E0D0', paddingTop: 16 },
+  friendsScroll: { maxHeight: 180, marginTop: 8 },
+  friendRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
+  friendAvatar: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  friendInitial: { fontSize: 14, fontFamily: fonts.bold },
+  friendName: { flex: 1, fontSize: 14, color: colors.textPrimary, fontFamily: fonts.semiBold },
+  friendInviteBtn: {
+    height: 32,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: `${colors.maroon}15`,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  friendInviteBtnSent: { backgroundColor: '#FFF5ED', borderWidth: 1, borderColor: '#F0E0D0' },
+  friendInviteText: { fontSize: 12, color: colors.maroon, fontFamily: fonts.bold },
+  friendInviteTextSent: { color: colors.textTertiary },
+
   // === Flight Path ===
-  flightPath: { paddingLeft: 20, paddingRight: 20, paddingBottom: 8 },
+  flightPath: { paddingLeft: 20, paddingRight: 20, paddingBottom: 8, paddingTop: 12 },
   flightNode: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 4 },
   flightLineContainer: {
     position: 'absolute',
@@ -2136,7 +2274,7 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingVertical: 8,
     paddingHorizontal: 10,
-    backgroundColor: '#F5F3FF',
+    backgroundColor: `${colors.maroon}12`,
     borderRadius: 14,
     marginBottom: 6,
   },
@@ -2148,7 +2286,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 10,
-    backgroundColor: '#7c3aed',
+    backgroundColor: colors.maroon,
   },
   quizTakeBtnText: { fontSize: 12, fontFamily: fonts.bold, color: 'white' },
 

@@ -11,31 +11,53 @@ import {
     Animated,
     Easing,
     Switch,
+    ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { colors, fonts } from '../theme';
 import { AnimatedPressable } from '../components/AnimatedPressable';
 import { friendsDirectory } from '../data/friends';
+import { supabase } from '../lib/supabase';
+import { uploadAvatar } from '../lib/storage';
 import type { UserData, ClassData, FriendData } from '../types';
+import { Session } from '@supabase/supabase-js';
 
 interface Props {
     userData: UserData;
-    onUpdateProfile: (updates: Partial<UserData>) => void;
+    onUpdateProfile: (updates: Partial<UserData>) => Promise<void>;
     onBack: () => void;
     onLogout: () => void;
     classes: ClassData[];
+    session: Session | null;
     onPersonOpen?: (person: FriendData) => void;
     onInfoPage?: (page: 'help' | 'terms' | 'privacy') => void;
     onRateApp?: () => void;
     onShareApp?: () => void;
 }
 
-export function ProfileScreen({ userData, onUpdateProfile, onBack, onLogout, classes, onPersonOpen, onInfoPage, onRateApp, onShareApp }: Props) {
+export function ProfileScreen({
+    userData,
+    onUpdateProfile,
+    onBack,
+    onLogout,
+    classes,
+    session,
+    onPersonOpen,
+    onInfoPage,
+    onRateApp,
+    onShareApp
+}: Props) {
     const [editName, setEditName] = useState(userData.name || '');
+    const [editUsername, setEditUsername] = useState(userData.username || '');
+    const [editEmail, setEditEmail] = useState(userData.email || '');
     const [editGrade, setEditGrade] = useState(userData.grade || '');
     const [editSchool, setEditSchool] = useState(userData.school || '');
     const [editingField, setEditingField] = useState<string | null>(null);
+
+    const [uploadingAvatar, setUploadingAvatar] = useState(false);
+    const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
+    const usernameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Settings
     const [darkMode, setDarkMode] = useState(false);
@@ -61,6 +83,50 @@ export function ProfileScreen({ userData, onUpdateProfile, onBack, onLogout, cla
         ]).start();
     }, [headerFade, headerSlide, contentFade, contentSlide]);
 
+    // Check username uniqueness
+    useEffect(() => {
+        if (editingField !== 'username') {
+            setUsernameStatus('idle');
+            return;
+        }
+
+        if (usernameTimerRef.current) clearTimeout(usernameTimerRef.current);
+
+        const trimmed = editUsername.trim().toLowerCase();
+        if (trimmed.length < 3) {
+            setUsernameStatus('idle');
+            return;
+        }
+
+        if (trimmed === userData.username) {
+            setUsernameStatus('available');
+            return;
+        }
+
+        setUsernameStatus('checking');
+        usernameTimerRef.current = setTimeout(async () => {
+            try {
+                const { data, error } = await supabase
+                    .from('profiles')
+                    .select('username')
+                    .eq('username', trimmed)
+                    .maybeSingle();
+
+                if (error) {
+                    setUsernameStatus('idle');
+                    return;
+                }
+                setUsernameStatus(data ? 'taken' : 'available');
+            } catch {
+                setUsernameStatus('idle');
+            }
+        }, 500);
+
+        return () => {
+            if (usernameTimerRef.current) clearTimeout(usernameTimerRef.current);
+        };
+    }, [editUsername, editingField, userData.username]);
+
     const pickProfilePicture = async () => {
         const result = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ['images'],
@@ -69,7 +135,20 @@ export function ProfileScreen({ userData, onUpdateProfile, onBack, onLogout, cla
             quality: 0.8,
         });
         if (!result.canceled && result.assets[0]?.uri) {
-            onUpdateProfile({ profilePicture: result.assets[0].uri });
+            if (session?.user?.id) {
+                setUploadingAvatar(true);
+                const publicUrl = await uploadAvatar(session.user.id, result.assets[0].uri);
+                setUploadingAvatar(false);
+
+                if (publicUrl) {
+                    onUpdateProfile({ profilePicture: publicUrl });
+                } else {
+                    Alert.alert('Upload Failed', 'There was an error uploading your profile picture.');
+                }
+            } else {
+                // Fallback if not logged into Supabase (demo purposes)
+                onUpdateProfile({ profilePicture: result.assets[0].uri });
+            }
         }
     };
 
@@ -80,11 +159,22 @@ export function ProfileScreen({ userData, onUpdateProfile, onBack, onLogout, cla
     const bannerSlide = useRef(new Animated.Value(-50)).current;
     const bannerOpacity = useRef(new Animated.Value(0)).current;
 
-    const saveField = useCallback((field: string) => {
-        if (field === 'name') onUpdateProfile({ name: editName.trim() });
-        if (field === 'grade') onUpdateProfile({ grade: editGrade.trim() });
-        if (field === 'school') onUpdateProfile({ school: editSchool.trim() });
+    const saveField = useCallback(async (field: string) => {
+        if (field === 'username') {
+            if (editUsername.trim().length < 3 || usernameStatus === 'taken' || usernameStatus === 'checking') {
+                return; // Block saving
+            }
+        }
+
+        const updates: Partial<UserData> = {};
+        if (field === 'name') updates.name = editName.trim();
+        if (field === 'username') updates.username = editUsername.trim().toLowerCase();
+        if (field === 'email') updates.email = editEmail.trim().toLowerCase();
+        if (field === 'grade') updates.grade = editGrade.trim();
+        if (field === 'school') updates.school = editSchool.trim();
+
         setEditingField(null);
+        await onUpdateProfile(updates);
 
         // Save button fold-in: scale pop + rotation
         saveScale.setValue(0.3);
@@ -108,7 +198,7 @@ export function ProfileScreen({ userData, onUpdateProfile, onBack, onLogout, cla
                 Animated.timing(bannerSlide, { toValue: -30, duration: 250, useNativeDriver: true }),
             ]).start(() => setSavedBanner(false));
         }, 1600);
-    }, [editName, editGrade, editSchool, onUpdateProfile, saveScale, saveRotation, bannerSlide, bannerOpacity]);
+    }, [editName, editUsername, editEmail, editGrade, editSchool, usernameStatus, onUpdateProfile, saveScale, saveRotation, bannerSlide, bannerOpacity]);
 
     const saveSpinInterp = saveRotation.interpolate({
         inputRange: [0, 1],
@@ -144,7 +234,7 @@ export function ProfileScreen({ userData, onUpdateProfile, onBack, onLogout, cla
 
                     {/* Avatar & Basic Info */}
                     <View style={styles.avatarSection}>
-                        <TouchableOpacity style={styles.avatarWrap} onPress={pickProfilePicture}>
+                        <TouchableOpacity style={styles.avatarWrap} onPress={pickProfilePicture} disabled={uploadingAvatar}>
                             {userData.profilePicture ? (
                                 <Image source={{ uri: userData.profilePicture }} style={styles.avatar} />
                             ) : (
@@ -152,13 +242,19 @@ export function ProfileScreen({ userData, onUpdateProfile, onBack, onLogout, cla
                                     <Ionicons name="person" size={44} color="white" />
                                 </View>
                             )}
-                            <View style={styles.cameraBadge}>
-                                <Ionicons name="camera" size={14} color="white" />
-                            </View>
+                            {uploadingAvatar ? (
+                                <View style={styles.avatarLoadingOverlay}>
+                                    <ActivityIndicator size="small" color="white" />
+                                </View>
+                            ) : (
+                                <View style={styles.cameraBadge}>
+                                    <Ionicons name="camera" size={14} color="white" />
+                                </View>
+                            )}
                         </TouchableOpacity>
                         <Text style={styles.displayName}>{userData.name || 'Student'}</Text>
                         <Text style={styles.displaySub}>
-                            {userData.grade ? `${userData.grade} • ` : ''}{userData.school || 'Add your school'}
+                            {userData.username ? `${userData.username} • ` : ''}{userData.school || 'Add your school'}
                         </Text>
                     </View>
 
@@ -192,6 +288,7 @@ export function ProfileScreen({ userData, onUpdateProfile, onBack, onLogout, cla
                     {/* Profile Info Section */}
                     <Text style={styles.sectionTitle}>Personal Info</Text>
                     <View style={styles.card}>
+
                         {/* Name */}
                         <TouchableOpacity style={styles.infoRow} onPress={() => setEditingField('name')}>
                             <View style={styles.infoIcon}><Ionicons name="person-outline" size={18} color={colors.maroon} /></View>
@@ -211,6 +308,72 @@ export function ProfileScreen({ userData, onUpdateProfile, onBack, onLogout, cla
                                 )}
                             </View>
                             {editingField !== 'name' && <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />}
+                        </TouchableOpacity>
+
+                        <View style={styles.separator} />
+
+                        {/* Username */}
+                        <TouchableOpacity style={styles.infoRow} onPress={() => setEditingField('username')}>
+                            <View style={styles.infoIcon}><Ionicons name="at-outline" size={18} color={colors.maroon} /></View>
+                            <View style={styles.infoContent}>
+                                <Text style={styles.infoLabel}>Username</Text>
+                                {editingField === 'username' ? (
+                                    <View style={styles.editRowContainer}>
+                                        <View style={styles.editRow}>
+                                            <TextInput
+                                                style={styles.editInput}
+                                                value={editUsername}
+                                                onChangeText={(t) => setEditUsername(t.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase())}
+                                                autoCapitalize="none"
+                                                autoCorrect={false}
+                                                autoFocus
+                                            />
+                                            {usernameStatus === 'checking' && (
+                                                <ActivityIndicator size="small" color={colors.maroon} style={{ marginRight: 8 }} />
+                                            )}
+                                            {usernameStatus === 'taken' && (
+                                                <Ionicons name="close-circle" size={20} color="#dc2626" style={{ marginRight: 8 }} />
+                                            )}
+                                            <AnimatedPressable
+                                                onPress={() => saveField('username')}
+                                                style={[styles.saveSmall, (usernameStatus === 'taken' || usernameStatus === 'checking' || editUsername.trim().length < 3) && { backgroundColor: '#ccc' }]}
+                                                scaleDown={0.75}
+                                            >
+                                                <Animated.View style={{ transform: [{ rotate: saveSpinInterp }, { scale: saveScale }] }}>
+                                                    <Ionicons name="checkmark" size={16} color="white" />
+                                                </Animated.View>
+                                            </AnimatedPressable>
+                                        </View>
+                                        {usernameStatus === 'taken' && <Text style={styles.editErrorHint}>Username is taken.</Text>}
+                                    </View>
+                                ) : (
+                                    <Text style={styles.infoValue}>{userData.username ? `@${userData.username}` : 'Not set'}</Text>
+                                )}
+                            </View>
+                            {editingField !== 'username' && <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />}
+                        </TouchableOpacity>
+
+                        <View style={styles.separator} />
+
+                        {/* Email */}
+                        <TouchableOpacity style={styles.infoRow} onPress={() => setEditingField('email')}>
+                            <View style={styles.infoIcon}><Ionicons name="mail-outline" size={18} color={colors.maroon} /></View>
+                            <View style={styles.infoContent}>
+                                <Text style={styles.infoLabel}>Email</Text>
+                                {editingField === 'email' ? (
+                                    <View style={styles.editRow}>
+                                        <TextInput style={styles.editInput} value={editEmail} onChangeText={setEditEmail} autoCapitalize="none" keyboardType="email-address" autoFocus />
+                                        <AnimatedPressable onPress={() => saveField('email')} style={styles.saveSmall} scaleDown={0.75}>
+                                            <Animated.View style={{ transform: [{ rotate: saveSpinInterp }, { scale: saveScale }] }}>
+                                                <Ionicons name="checkmark" size={16} color="white" />
+                                            </Animated.View>
+                                        </AnimatedPressable>
+                                    </View>
+                                ) : (
+                                    <Text style={styles.infoValue}>{userData.email || 'Not set'}</Text>
+                                )}
+                            </View>
+                            {editingField !== 'email' && <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />}
                         </TouchableOpacity>
 
                         <View style={styles.separator} />
@@ -450,7 +613,7 @@ const styles = StyleSheet.create({
     },
     pageTitle: { fontSize: 20, fontFamily: fonts.bold, color: colors.textPrimary },
 
-    avatarSection: { alignItems: 'center', marginBottom: 24 },
+    avatarSection: { alignItems: 'center', marginBottom: 12 },
     avatarWrap: { width: 96, height: 96, borderRadius: 36, marginBottom: 14 },
     avatar: { width: 96, height: 96, borderRadius: 36 },
     avatarPlaceholder: {
@@ -458,6 +621,17 @@ const styles = StyleSheet.create({
         height: 96,
         borderRadius: 36,
         backgroundColor: colors.maroon,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    avatarLoadingOverlay: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        borderRadius: 36,
+        backgroundColor: 'rgba(0,0,0,0.5)',
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -532,6 +706,9 @@ const styles = StyleSheet.create({
     infoLabel: { fontSize: 11, fontFamily: fonts.medium, color: colors.textTertiary },
     infoValue: { fontSize: 15, fontFamily: fonts.semiBold, color: colors.textPrimary, marginTop: 2 },
 
+    editRowContainer: {
+        flexDirection: 'column',
+    },
     editRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
     editInput: {
         flex: 1,
@@ -544,6 +721,11 @@ const styles = StyleSheet.create({
         color: colors.textPrimary,
         borderWidth: 2,
         borderColor: '#F0E0D0',
+    },
+    editErrorHint: {
+        fontSize: 11,
+        color: '#dc2626',
+        marginTop: 4,
     },
     saveSmall: {
         width: 32,

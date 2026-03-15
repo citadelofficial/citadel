@@ -11,6 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { BottomNav } from '../components/BottomNav';
+import { AnimatedPressable } from '../components/AnimatedPressable';
 import { colors, fonts } from '../theme';
 import type { ClassData, FileData } from '../types';
 
@@ -45,7 +46,6 @@ function formatSize(sizeBytes?: number) {
 export function ScanScreen({ onHome, onFiles, onFriends, classes, onSaveScan }: Props) {
   const insets = useSafeAreaInsets();
   const [scanMode, setScanMode] = useState<ScanMode>('notes');
-  const [flashOn, setFlashOn] = useState(false);
   const [saving, setSaving] = useState(false);
   const [pending, setPending] = useState<PendingScan | null>(null);
   const [destinationClassId, setDestinationClassId] = useState(classes[0]?.id || '');
@@ -158,19 +158,25 @@ export function ScanScreen({ onHome, onFiles, onFriends, classes, onSaveScan }: 
     setPending(null);
   };
 
+  const modeIcon = (mode: ScanMode): keyof typeof Ionicons.glyphMap => {
+    if (mode === 'notes') return 'document-text-outline';
+    if (mode === 'document') return 'folder-outline';
+    return 'easel-outline';
+  };
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {/* Header */}
         <View style={styles.topBar}>
-          <TouchableOpacity onPress={onHome} style={styles.topBtn}>
-            <Ionicons name="arrow-back" size={22} color="white" />
-          </TouchableOpacity>
+          <AnimatedPressable onPress={onHome} style={styles.backBtn} scaleDown={0.88}>
+            <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
+          </AnimatedPressable>
           <Text style={styles.topTitle}>Smart Scan</Text>
-          <TouchableOpacity style={[styles.topBtn, flashOn && styles.flashOn]} onPress={() => setFlashOn(!flashOn)}>
-            <Ionicons name="flash" size={20} color={flashOn ? '#111' : 'white'} />
-          </TouchableOpacity>
+          <View style={{ width: 42 }} />
         </View>
 
+        {/* Mode selector */}
         <View style={styles.modeRow}>
           {(['notes', 'document', 'whiteboard'] as ScanMode[]).map((mode) => (
             <TouchableOpacity
@@ -178,6 +184,7 @@ export function ScanScreen({ onHome, onFiles, onFriends, classes, onSaveScan }: 
               style={[styles.modeBtn, scanMode === mode && styles.modeBtnActive]}
               onPress={() => setScanMode(mode)}
             >
+              <Ionicons name={modeIcon(mode)} size={16} color={scanMode === mode ? 'white' : colors.textSecondary} />
               <Text style={[styles.modeText, scanMode === mode && styles.modeTextActive]}>
                 {mode[0].toUpperCase() + mode.slice(1)}
               </Text>
@@ -191,29 +198,40 @@ export function ScanScreen({ onHome, onFiles, onFriends, classes, onSaveScan }: 
             <Text style={styles.captureSub}>Use your camera or bring files from your device.</Text>
 
             <View style={styles.captureActions}>
-              <TouchableOpacity style={styles.captureCard} onPress={handleCameraCapture}>
+              <AnimatedPressable style={styles.captureCard} onPress={handleCameraCapture} scaleDown={0.96}>
                 <View style={styles.captureIcon}><Ionicons name="camera" size={22} color={colors.maroon} /></View>
-                <Text style={styles.captureCardTitle}>Camera</Text>
-                <Text style={styles.captureCardSub}>Scan notes instantly</Text>
-              </TouchableOpacity>
+                <View>
+                  <Text style={styles.captureCardTitle}>Camera</Text>
+                  <Text style={styles.captureCardSub}>Scan notes instantly</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} style={{ marginLeft: 'auto' }} />
+              </AnimatedPressable>
 
-              <TouchableOpacity style={styles.captureCard} onPress={handlePickFromLibrary}>
+              <AnimatedPressable style={styles.captureCard} onPress={handlePickFromLibrary} scaleDown={0.96}>
                 <View style={styles.captureIcon}><Ionicons name="images" size={22} color={colors.maroon} /></View>
-                <Text style={styles.captureCardTitle}>Photos</Text>
-                <Text style={styles.captureCardSub}>Import from gallery</Text>
-              </TouchableOpacity>
+                <View>
+                  <Text style={styles.captureCardTitle}>Photos</Text>
+                  <Text style={styles.captureCardSub}>Import from gallery</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} style={{ marginLeft: 'auto' }} />
+              </AnimatedPressable>
 
-              <TouchableOpacity style={styles.captureCard} onPress={handlePickDocument}>
+              <AnimatedPressable style={styles.captureCard} onPress={handlePickDocument} scaleDown={0.96}>
                 <View style={styles.captureIcon}><Ionicons name="folder-open" size={22} color={colors.maroon} /></View>
-                <Text style={styles.captureCardTitle}>Files</Text>
-                <Text style={styles.captureCardSub}>PDF, image, text</Text>
-              </TouchableOpacity>
+                <View>
+                  <Text style={styles.captureCardTitle}>Files</Text>
+                  <Text style={styles.captureCardSub}>PDF, image, text</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} style={{ marginLeft: 'auto' }} />
+              </AnimatedPressable>
             </View>
           </View>
         ) : (
           <View style={styles.pendingPanel}>
             <View style={styles.pendingHeader}>
-              <Ionicons name="checkmark-circle" size={24} color="#10b981" />
+              <View style={styles.pendingCheckIcon}>
+                <Ionicons name="checkmark-circle" size={20} color="#059669" />
+              </View>
               <Text style={styles.pendingTitle}>Ready to Save</Text>
             </View>
             <Text style={styles.pendingFileName}>{pending.name}</Text>
@@ -222,19 +240,23 @@ export function ScanScreen({ onHome, onFiles, onFriends, classes, onSaveScan }: 
             </Text>
 
             <Text style={styles.destinationTitle}>Choose Destination Class</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.destinationRow}>
-              {classes.map((cls) => (
-                <TouchableOpacity
-                  key={cls.id}
-                  style={[styles.destinationChip, destinationClassId === cls.id && styles.destinationChipActive]}
-                  onPress={() => setDestinationClassId(cls.id)}
-                >
-                  <Text style={[styles.destinationChipText, destinationClassId === cls.id && styles.destinationChipTextActive]}>
-                    {cls.title}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+            {classes.length > 0 ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.destinationRow}>
+                {classes.map((cls) => (
+                  <TouchableOpacity
+                    key={cls.id}
+                    style={[styles.destinationChip, destinationClassId === cls.id && styles.destinationChipActive]}
+                    onPress={() => setDestinationClassId(cls.id)}
+                  >
+                    <Text style={[styles.destinationChipText, destinationClassId === cls.id && styles.destinationChipTextActive]}>
+                      {cls.title}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            ) : (
+              <Text style={styles.noClassesHint}>Create a class first to save scans.</Text>
+            )}
 
             <View style={styles.pendingActions}>
               <TouchableOpacity style={styles.secondaryBtn} onPress={() => setPending(null)}>
@@ -248,16 +270,17 @@ export function ScanScreen({ onHome, onFiles, onFriends, classes, onSaveScan }: 
           </View>
         )}
 
+        {/* Recent Scans */}
+        <Text style={styles.recentSectionTitle}>Recent Scans</Text>
         <View style={styles.recentPanel}>
-          <View style={styles.recentHeader}>
-            <Text style={styles.recentTitle}>Recent Scans</Text>
-            <TouchableOpacity onPress={onFiles}>
-              <Text style={styles.recentLink}>Open Files</Text>
-            </TouchableOpacity>
-          </View>
-
           {recentScans.length === 0 ? (
-            <Text style={styles.recentEmpty}>No scans yet. Capture your first file above.</Text>
+            <View style={styles.emptyState}>
+              <View style={styles.emptyIcon}>
+                <Ionicons name="scan-outline" size={28} color={colors.textTertiary} />
+              </View>
+              <Text style={styles.emptyTitle}>No scans yet</Text>
+              <Text style={styles.emptySub}>Capture your first file above to get started.</Text>
+            </View>
           ) : (
             recentScans.map((scan) => (
               <View key={scan.id} style={styles.recentItem}>
@@ -281,54 +304,189 @@ export function ScanScreen({ onHome, onFiles, onFriends, classes, onSaveScan }: 
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#120a0b' },
+  container: { flex: 1, backgroundColor: '#FFF8F2' },
   scroll: { flex: 1 },
   content: { paddingHorizontal: 20, paddingBottom: 120 },
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14 },
-  topBtn: { width: 42, height: 42, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center' },
-  flashOn: { backgroundColor: '#facc15' },
-  topTitle: { fontSize: 22, fontFamily: fonts.bold, color: 'white', letterSpacing: -0.3 },
-  modeRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
-  modeBtn: { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.08)' },
-  modeBtnActive: { backgroundColor: colors.maroon },
-  modeText: { fontSize: 12, color: 'rgba(255,255,255,0.7)', fontFamily: fonts.semiBold },
+
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    marginBottom: 4,
+  },
+  backBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 16,
+    backgroundColor: 'white',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+  },
+  topTitle: {
+    fontSize: 20,
+    fontFamily: fonts.bold,
+    color: colors.textPrimary,
+  },
+
+  modeRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
+  modeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    borderRadius: 16,
+    backgroundColor: 'white',
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+  },
+  modeBtnActive: { backgroundColor: colors.maroon, borderColor: colors.maroon },
+  modeText: { fontSize: 12, color: colors.textSecondary, fontFamily: fonts.semiBold },
   modeTextActive: { color: 'white' },
 
-  capturePanel: { marginTop: 16, backgroundColor: 'white', borderRadius: 28, padding: 20 },
-  captureTitle: { fontSize: 22, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.3 },
+  capturePanel: {
+    backgroundColor: 'white',
+    borderRadius: 24,
+    padding: 20,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+  },
+  captureTitle: { fontSize: 20, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.3 },
   captureSub: { fontSize: 13, color: colors.textSecondary, marginTop: 4, fontFamily: fonts.regular },
-  captureActions: { gap: 10, marginTop: 14 },
-  captureCard: { backgroundColor: '#FFF5ED', borderRadius: 20, padding: 16, borderWidth: 2, borderColor: '#F0E0D0' },
-  captureIcon: { width: 42, height: 42, borderRadius: 16, backgroundColor: `${colors.maroon}14`, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+  captureActions: { gap: 10, marginTop: 16 },
+  captureCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    backgroundColor: '#FFF5ED',
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+  },
+  captureIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: `${colors.maroon}12`,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   captureCardTitle: { fontSize: 15, fontFamily: fonts.bold, color: colors.textPrimary },
   captureCardSub: { fontSize: 12, color: colors.textSecondary, marginTop: 2, fontFamily: fonts.regular },
 
-  pendingPanel: { marginTop: 16, backgroundColor: 'white', borderRadius: 28, padding: 20 },
-  pendingHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  pendingTitle: { fontSize: 20, fontFamily: fonts.bold, color: colors.textPrimary },
-  pendingFileName: { fontSize: 15, fontFamily: fonts.bold, color: colors.textPrimary, marginTop: 10 },
+  pendingPanel: {
+    backgroundColor: 'white',
+    borderRadius: 24,
+    padding: 20,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+  },
+  pendingHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  pendingCheckIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: '#D1FAE5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pendingTitle: { fontSize: 18, fontFamily: fonts.bold, color: colors.textPrimary },
+  pendingFileName: { fontSize: 15, fontFamily: fonts.bold, color: colors.textPrimary, marginTop: 12 },
   pendingMeta: { fontSize: 12, color: colors.textSecondary, marginTop: 3, fontFamily: fonts.regular },
-  destinationTitle: { fontSize: 12, fontFamily: fonts.bold, color: colors.textSecondary, marginTop: 16, marginBottom: 8 },
+  destinationTitle: { fontSize: 12, fontFamily: fonts.bold, color: colors.textSecondary, marginTop: 16, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
   destinationRow: { gap: 8 },
-  destinationChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 14, borderWidth: 2, borderColor: '#F0E0D0', backgroundColor: 'white' },
+  destinationChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+    backgroundColor: 'white',
+  },
   destinationChipActive: { borderColor: colors.maroon, backgroundColor: `${colors.maroon}10` },
   destinationChipText: { fontSize: 12, color: colors.textSecondary, fontFamily: fonts.semiBold },
   destinationChipTextActive: { color: colors.maroon },
+  noClassesHint: { fontSize: 12, color: colors.textTertiary, fontFamily: fonts.regular },
   pendingActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
-  secondaryBtn: { flex: 1, height: 48, borderRadius: 18, backgroundColor: '#FFF5ED', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#F0E0D0' },
+  secondaryBtn: {
+    flex: 1,
+    height: 48,
+    borderRadius: 18,
+    backgroundColor: '#FFF5ED',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+  },
   secondaryBtnText: { fontSize: 13, fontFamily: fonts.bold, color: colors.textSecondary },
-  primaryBtn: { flex: 1, height: 48, borderRadius: 18, backgroundColor: colors.maroon, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  primaryBtn: {
+    flex: 1,
+    height: 48,
+    borderRadius: 18,
+    backgroundColor: colors.maroon,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
   primaryBtnText: { fontSize: 13, fontFamily: fonts.bold, color: 'white' },
 
-  recentPanel: { marginTop: 18, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 24, padding: 16 },
-  recentHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  recentTitle: { fontSize: 16, fontFamily: fonts.bold, color: 'white' },
-  recentLink: { fontSize: 12, color: 'rgba(255,255,255,0.7)', fontFamily: fonts.medium },
-  recentEmpty: { marginTop: 10, fontSize: 12, color: 'rgba(255,255,255,0.6)', fontFamily: fonts.regular },
-  recentItem: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 18, padding: 12 },
-  recentIcon: { width: 34, height: 34, borderRadius: 14, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center' },
+  recentSectionTitle: {
+    fontSize: 14,
+    fontFamily: fonts.bold,
+    color: colors.textSecondary,
+    letterSpacing: 0.5,
+    marginTop: 24,
+    marginBottom: 10,
+    textTransform: 'uppercase',
+  },
+  recentPanel: {
+    backgroundColor: 'white',
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+    overflow: 'hidden',
+  },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 28,
+    paddingHorizontal: 20,
+  },
+  emptyIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 20,
+    backgroundColor: '#FFF5ED',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  emptyTitle: { fontSize: 15, fontFamily: fonts.bold, color: colors.textPrimary },
+  emptySub: { fontSize: 12, color: colors.textSecondary, marginTop: 4, fontFamily: fonts.regular, textAlign: 'center' },
+  recentItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#FFF5ED',
+  },
+  recentIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: '#FFF5ED',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   recentInfo: { flex: 1 },
-  recentName: { fontSize: 13, color: 'white', fontFamily: fonts.semiBold },
-  recentMeta: { fontSize: 11, color: 'rgba(255,255,255,0.6)', marginTop: 2, fontFamily: fonts.regular },
-  recentCourse: { fontSize: 10, color: 'rgba(255,255,255,0.7)', maxWidth: 92, textAlign: 'right', fontFamily: fonts.medium },
+  recentName: { fontSize: 13, color: colors.textPrimary, fontFamily: fonts.semiBold },
+  recentMeta: { fontSize: 11, color: colors.textSecondary, marginTop: 2, fontFamily: fonts.regular },
+  recentCourse: { fontSize: 10, color: colors.textTertiary, maxWidth: 92, textAlign: 'right', fontFamily: fonts.medium },
 });

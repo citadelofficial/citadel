@@ -10,12 +10,14 @@ import {
   Platform,
   Animated,
   Easing,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts, spacing } from '../theme';
+import { supabase } from '../lib/supabase';
 
 interface Props {
-  onGetStarted: (userData: { name: string; grade: string; school: string }) => void;
+  onGetStarted: (userData: { name: string; username: string; grade: string; school: string }) => void;
 }
 
 const grades = [
@@ -54,14 +56,20 @@ const loudounSchools = [
   'Academies of Loudoun',
 ];
 
+const TOTAL_STEPS = 4;
+
 export function OnboardingScreen({ onGetStarted }: Props) {
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
+  const [username, setUsername] = useState('');
+  const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
   const [grade, setGrade] = useState('');
   const [school, setSchool] = useState('');
   const [showGradePicker, setShowGradePicker] = useState(false);
   const [customSchools, setCustomSchools] = useState<string[]>([]);
   const [hasTypedSchool, setHasTypedSchool] = useState(false);
+
+  const usernameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const contentOpacity = useRef(new Animated.Value(0)).current;
   const contentTranslate = useRef(new Animated.Value(16)).current;
@@ -88,7 +96,7 @@ export function OnboardingScreen({ onGetStarted }: Props) {
       }),
     ]).start();
 
-    if (step !== 2) {
+    if (step !== 3) {
       setShowGradePicker(false);
     }
   }, [step, contentOpacity, contentTranslate]);
@@ -157,9 +165,44 @@ export function OnboardingScreen({ onGetStarted }: Props) {
     }
 
     return () => pulse.stop();
-    // canProceed depends on local state values and is intentionally re-evaluated per render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, name, grade, school, ctaScale]);
+  }, [step, name, username, usernameStatus, grade, school, ctaScale]);
+
+  // Debounced username uniqueness check
+  useEffect(() => {
+    if (usernameTimerRef.current) clearTimeout(usernameTimerRef.current);
+
+    const trimmed = username.trim().toLowerCase();
+    if (trimmed.length < 3) {
+      setUsernameStatus('idle');
+      return;
+    }
+
+    setUsernameStatus('checking');
+    usernameTimerRef.current = setTimeout(async () => {
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('username')
+          .eq('username', trimmed)
+          .maybeSingle();
+
+        if (error) {
+          console.error('Username check error:', error.message);
+          setUsernameStatus('idle');
+          return;
+        }
+
+        setUsernameStatus(data ? 'taken' : 'available');
+      } catch {
+        setUsernameStatus('idle');
+      }
+    }, 500);
+
+    return () => {
+      if (usernameTimerRef.current) clearTimeout(usernameTimerRef.current);
+    };
+  }, [username]);
 
   const allSchools = useMemo(() => [...loudounSchools, ...customSchools], [customSchools]);
 
@@ -179,8 +222,8 @@ export function OnboardingScreen({ onGetStarted }: Props) {
   const canAddNewSchool = school.trim().length > 1 && !exactSchoolMatch;
 
   const goNext = () => {
-    if (step === 3) {
-      onGetStarted({ name: name.trim(), grade, school: school.trim() });
+    if (step === TOTAL_STEPS) {
+      onGetStarted({ name: name.trim(), username: username.trim().toLowerCase(), grade, school: school.trim() });
     } else {
       setStep((s) => s + 1);
     }
@@ -191,8 +234,9 @@ export function OnboardingScreen({ onGetStarted }: Props) {
   const canProceed = () => {
     if (step === 0) return true;
     if (step === 1) return name.trim().length > 0;
-    if (step === 2) return grade.length > 0;
-    if (step === 3) return school.trim().length > 1;
+    if (step === 2) return username.trim().length >= 3 && usernameStatus === 'available';
+    if (step === 3) return grade.length > 0;
+    if (step === 4) return school.trim().length > 1;
     return false;
   };
 
@@ -235,9 +279,9 @@ export function OnboardingScreen({ onGetStarted }: Props) {
         </View>
 
         <View style={styles.progressWrap}>
-          <Text style={styles.progressText}>{step}/3</Text>
+          <Text style={styles.progressText}>{step}/{TOTAL_STEPS}</Text>
           <View style={styles.progressTrack}>
-            <View style={[styles.progressFill, { width: `${(step / 3) * 100}%` }]} />
+            <View style={[styles.progressFill, { width: `${(step / TOTAL_STEPS) * 100}%` }]} />
           </View>
         </View>
       </View>
@@ -362,6 +406,47 @@ export function OnboardingScreen({ onGetStarted }: Props) {
           {step === 2 && (
             <View style={styles.card}>
               <View style={styles.iconBox}>
+                <Ionicons name="at" size={34} color={colors.maroon} />
+              </View>
+              <Text style={styles.h2}>Choose a username</Text>
+              <Text style={styles.p}>This is how others find and recognize you on Citadel.</Text>
+              <Text style={styles.label}>Username</Text>
+              <View style={styles.usernameInputWrap}>
+                <Text style={styles.usernameAt}>@</Text>
+                <TextInput
+                  style={styles.usernameInput}
+                  placeholder="your_username"
+                  placeholderTextColor={colors.textTertiary}
+                  value={username}
+                  onChangeText={(text) => setUsername(text.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase())}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                {usernameStatus === 'checking' && (
+                  <ActivityIndicator size="small" color={colors.maroon} style={styles.usernameStatusIcon} />
+                )}
+                {usernameStatus === 'available' && (
+                  <Ionicons name="checkmark-circle" size={22} color="#059669" style={styles.usernameStatusIcon} />
+                )}
+                {usernameStatus === 'taken' && (
+                  <Ionicons name="close-circle" size={22} color="#dc2626" style={styles.usernameStatusIcon} />
+                )}
+              </View>
+              {usernameStatus === 'taken' && (
+                <Text style={styles.usernameTakenText}>This username is already taken. Try another!</Text>
+              )}
+              {usernameStatus === 'available' && (
+                <Text style={styles.usernameAvailText}>Username is available!</Text>
+              )}
+              {username.trim().length > 0 && username.trim().length < 3 && (
+                <Text style={styles.usernameHintText}>Username must be at least 3 characters</Text>
+              )}
+            </View>
+          )}
+
+          {step === 3 && (
+            <View style={styles.card}>
+              <View style={styles.iconBox}>
                 <Ionicons name="ribbon" size={30} color={colors.maroon} />
               </View>
               <Text style={styles.h2}>What level are you in{name.trim() ? `, ${name.trim()}` : ''}?</Text>
@@ -393,7 +478,7 @@ export function OnboardingScreen({ onGetStarted }: Props) {
             </View>
           )}
 
-          {step === 3 && (
+          {step === 4 && (
             <View style={styles.card}>
               <View style={styles.iconBox}>
                 <Ionicons name="school" size={30} color={colors.maroon} />
@@ -476,10 +561,10 @@ export function OnboardingScreen({ onGetStarted }: Props) {
             disabled={!canProceed()}
           >
             <Text style={[styles.btnText, canProceed() ? styles.btnTextWhite : styles.btnTextDisabled]}>
-              {step === 3 ? 'Join Citadel' : step === 0 ? 'Begin Setup' : 'Continue'}
+              {step === TOTAL_STEPS ? 'Join Citadel' : step === 0 ? 'Begin Setup' : 'Continue'}
             </Text>
             <Ionicons
-              name={step === 3 ? 'shield-checkmark' : 'arrow-forward'}
+              name={step === TOTAL_STEPS ? 'shield-checkmark' : 'arrow-forward'}
               size={20}
               color={canProceed() ? 'white' : colors.textTertiary}
             />
@@ -621,6 +706,52 @@ const styles = StyleSheet.create({
   inputText: { color: colors.textPrimary, fontFamily: fonts.medium },
   inputPlaceholder: { color: colors.textTertiary },
   checkWrap: { position: 'absolute', right: 24, bottom: 24 },
+
+  // Username step
+  usernameInputWrap: {
+    height: 56,
+    borderRadius: 18,
+    backgroundColor: '#FFF5ED',
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  usernameAt: {
+    fontSize: 18,
+    fontFamily: fonts.bold,
+    color: colors.maroon,
+    marginRight: 4,
+  },
+  usernameInput: {
+    flex: 1,
+    fontSize: 16,
+    fontFamily: fonts.medium,
+    color: colors.textPrimary,
+  },
+  usernameStatusIcon: {
+    marginLeft: 8,
+  },
+  usernameTakenText: {
+    marginTop: 8,
+    fontSize: 13,
+    fontFamily: fonts.semiBold,
+    color: '#dc2626',
+  },
+  usernameAvailText: {
+    marginTop: 8,
+    fontSize: 13,
+    fontFamily: fonts.semiBold,
+    color: '#059669',
+  },
+  usernameHintText: {
+    marginTop: 8,
+    fontSize: 12,
+    fontFamily: fonts.regular,
+    color: colors.textTertiary,
+  },
+
   picker: {
     maxHeight: 235,
     backgroundColor: 'white',

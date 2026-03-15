@@ -1,5 +1,7 @@
 export interface UserData {
   name: string;
+  username: string;
+  email: string;
   grade: string;
   school: string;
   profilePicture: string | null;

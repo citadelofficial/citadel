@@ -1,2 +1,5 @@
-node_modules
+node_modules/
 .expo/
+dist/
+.env
+.DS_Store

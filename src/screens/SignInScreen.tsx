@@ -11,18 +11,23 @@ import {
   Platform,
   Animated,
   Easing,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { colors, fonts } from '../theme';
+import { supabase } from '../lib/supabase';
 
 interface Props {
   onSignIn: (profilePicture: string | null, displayName?: string) => void;
   onBack: () => void;
   userName?: string;
+  userUsername?: string;
+  userGrade?: string;
+  userSchool?: string;
 }
 
-export function SignInScreen({ onSignIn, onBack, userName }: Props) {
+export function SignInScreen({ onSignIn, onBack, userName, userUsername, userGrade, userSchool }: Props) {
   const [mode, setMode] = useState<'signin' | 'signup'>('signup');
   const [profilePicture, setProfilePicture] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
@@ -30,6 +35,8 @@ export function SignInScreen({ onSignIn, onBack, userName }: Props) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const introOpacity = useRef(new Animated.Value(0)).current;
   const introTranslate = useRef(new Animated.Value(18)).current;
@@ -90,6 +97,77 @@ export function SignInScreen({ onSignIn, onBack, userName }: Props) {
     }
   };
 
+  const handleAuth = async () => {
+    setError(null);
+
+    // Validation
+    if (!email.trim()) {
+      setError('Please enter your email address.');
+      return;
+    }
+    if (!password) {
+      setError('Please enter your password.');
+      return;
+    }
+
+    if (mode === 'signup') {
+      if (password.length < 6) {
+        setError('Password must be at least 6 characters.');
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError('Passwords don\'t match.');
+        return;
+      }
+    }
+
+    setLoading(true);
+
+    try {
+      if (mode === 'signup') {
+        const { error: signUpError } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+          options: {
+            data: {
+              display_name: displayName.trim() || userName || '',
+              username: userUsername || '',
+              grade: userGrade || '',
+              school: userSchool || '',
+            },
+          },
+        });
+
+        if (signUpError) {
+          setError(signUpError.message);
+          setLoading(false);
+          return;
+        }
+
+        // Sign-up successful — onAuthStateChange in App.tsx will handle navigation
+        onSignIn(profilePicture, displayName.trim() || undefined);
+      } else {
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
+
+        if (signInError) {
+          setError(signInError.message);
+          setLoading(false);
+          return;
+        }
+
+        // Sign-in successful — onAuthStateChange in App.tsx will handle navigation
+        onSignIn(profilePicture);
+      }
+    } catch (err: any) {
+      setError(err?.message || 'An unexpected error occurred.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const pulseScale = avatarPulse.interpolate({
     inputRange: [0, 1],
     outputRange: [1, 1.16],
@@ -116,10 +194,10 @@ export function SignInScreen({ onSignIn, onBack, userName }: Props) {
         </View>
 
         <View style={styles.toggleRow}>
-          <TouchableOpacity style={[styles.toggleBtn, mode === 'signup' && styles.toggleActive]} onPress={() => setMode('signup')}>
+          <TouchableOpacity style={[styles.toggleBtn, mode === 'signup' && styles.toggleActive]} onPress={() => { setMode('signup'); setError(null); }}>
             <Text style={[styles.toggleText, mode === 'signup' && styles.toggleTextActive]}>Sign Up</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.toggleBtn, mode === 'signin' && styles.toggleActive]} onPress={() => setMode('signin')}>
+          <TouchableOpacity style={[styles.toggleBtn, mode === 'signin' && styles.toggleActive]} onPress={() => { setMode('signin'); setError(null); }}>
             <Text style={[styles.toggleText, mode === 'signin' && styles.toggleTextActive]}>Sign In</Text>
           </TouchableOpacity>
         </View>
@@ -200,7 +278,7 @@ export function SignInScreen({ onSignIn, onBack, userName }: Props) {
               placeholder="School Email"
               placeholderTextColor={colors.textTertiary}
               value={email}
-              onChangeText={setEmail}
+              onChangeText={(t) => { setEmail(t); setError(null); }}
               keyboardType="email-address"
               autoCapitalize="none"
             />
@@ -214,7 +292,7 @@ export function SignInScreen({ onSignIn, onBack, userName }: Props) {
                 placeholder="Password"
                 placeholderTextColor={colors.textTertiary}
                 value={password}
-                onChangeText={setPassword}
+                onChangeText={(t) => { setPassword(t); setError(null); }}
                 secureTextEntry={!showPassword}
               />
               <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeBtn}>
@@ -231,34 +309,33 @@ export function SignInScreen({ onSignIn, onBack, userName }: Props) {
                 placeholder="Confirm Password"
                 placeholderTextColor={colors.textTertiary}
                 value={confirmPassword}
-                onChangeText={setConfirmPassword}
+                onChangeText={(t) => { setConfirmPassword(t); setError(null); }}
                 secureTextEntry
               />
             </View>
           )}
 
+          {error && (
+            <View style={styles.errorBox}>
+              <Ionicons name="alert-circle" size={16} color="#dc2626" />
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          )}
+
           <TouchableOpacity
-            style={styles.submitBtn}
-            onPress={() => onSignIn(profilePicture, mode === 'signup' ? displayName.trim() : undefined)}
+            style={[styles.submitBtn, loading && styles.submitBtnLoading]}
+            onPress={handleAuth}
             activeOpacity={0.88}
+            disabled={loading}
           >
-            <Text style={styles.submitText}>{mode === 'signup' ? 'Create Account' : 'Sign In'}</Text>
-            <Ionicons name="arrow-forward" size={18} color="white" />
-          </TouchableOpacity>
-
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>or</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          <TouchableOpacity style={styles.socialBtn}>
-            <Ionicons name="logo-apple" size={20} color="white" />
-            <Text style={styles.socialBtnText}>Continue with Apple</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.socialBtn, styles.socialBtnOutline]}>
-            <Ionicons name="logo-google" size={20} color={colors.textPrimary} />
-            <Text style={[styles.socialBtnText, styles.socialBtnTextDark]}>Continue with Google</Text>
+            {loading ? (
+              <ActivityIndicator size="small" color="white" />
+            ) : (
+              <>
+                <Text style={styles.submitText}>{mode === 'signup' ? 'Create Account' : 'Sign In'}</Text>
+                <Ionicons name="arrow-forward" size={18} color="white" />
+              </>
+            )}
           </TouchableOpacity>
         </Animated.View>
       </ScrollView>
@@ -388,6 +465,19 @@ const styles = StyleSheet.create({
   passwordWrap: { position: 'relative' },
   inputPassword: { paddingRight: 46 },
   eyeBtn: { position: 'absolute', right: 14, top: 16 },
+  errorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#fef2f2',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  errorText: { flex: 1, fontSize: 13, fontFamily: fonts.medium, color: '#dc2626' },
   submitBtn: {
     height: 58,
     backgroundColor: colors.maroon,
@@ -402,21 +492,8 @@ const styles = StyleSheet.create({
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 8 },
   },
-  submitText: { fontSize: 16, fontFamily: fonts.bold, color: 'white' },
-  divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 18, gap: 12 },
-  dividerLine: { flex: 1, height: 1, backgroundColor: '#F0E0D0' },
-  dividerText: { fontSize: 12, color: colors.textTertiary, fontFamily: fonts.medium },
-  socialBtn: {
-    height: 54,
-    backgroundColor: colors.textPrimary,
-    borderRadius: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    marginBottom: 10,
+  submitBtnLoading: {
+    opacity: 0.8,
   },
-  socialBtnOutline: { backgroundColor: 'white', borderWidth: 2, borderColor: '#F0E0D0' },
-  socialBtnText: { fontSize: 14, fontFamily: fonts.bold, color: 'white' },
-  socialBtnTextDark: { color: colors.textPrimary },
+  submitText: { fontSize: 16, fontFamily: fonts.bold, color: 'white' },
 });

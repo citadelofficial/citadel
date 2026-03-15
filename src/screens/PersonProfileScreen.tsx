@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useMemo } from 'react';
+import React, { useRef, useEffect, useMemo, useState } from 'react';
 import {
     View,
     Text,
@@ -17,13 +17,17 @@ interface Props {
     onBack: () => void;
     onChat: () => void;
     classes: ClassData[];
+    isFriend: boolean;
+    onAddFriend: (personId: string) => void;
+    onRemoveFriend: (personId: string) => void;
 }
 
-export function PersonProfileScreen({ person, onBack, onChat, classes }: Props) {
+export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend, onAddFriend, onRemoveFriend }: Props) {
     const headerFade = useRef(new Animated.Value(0)).current;
     const headerSlide = useRef(new Animated.Value(-30)).current;
     const contentFade = useRef(new Animated.Value(0)).current;
     const contentSlide = useRef(new Animated.Value(20)).current;
+    const [friendActionLoading, setFriendActionLoading] = useState(false);
 
     useEffect(() => {
         Animated.sequence([
@@ -38,7 +42,7 @@ export function PersonProfileScreen({ person, onBack, onChat, classes }: Props) 
         ]).start();
     }, [headerFade, headerSlide, contentFade, contentSlide]);
 
-    const statusLabel = person.status === 'online' ? '🟢 Online now' : person.status === 'studying' ? '🟡 Studying' : '⚫ Offline';
+    const statusLabel = person.status === 'online' ? 'Online now' : person.status === 'studying' ? 'Studying' : 'Offline';
     const statusColor = person.status === 'online' ? '#059669' : person.status === 'studying' ? '#d97706' : '#6b7280';
 
     // Find shared classes by checking if person.name is in classmateNames
@@ -83,9 +87,18 @@ export function PersonProfileScreen({ person, onBack, onChat, classes }: Props) 
                             <Ionicons name="chatbubble" size={18} color="white" />
                             <Text style={styles.actionBtnText}>Message</Text>
                         </AnimatedPressable>
-                        <AnimatedPressable style={[styles.actionBtn, styles.actionBtnOutline]} onPress={() => { }} scaleDown={0.92}>
-                            <Ionicons name="person-add" size={18} color={colors.maroon} />
-                            <Text style={[styles.actionBtnText, { color: colors.maroon }]}>Add Friend</Text>
+                        <AnimatedPressable style={[styles.actionBtn, styles.actionBtnOutline, isFriend && styles.actionBtnDanger]} onPress={() => {
+                            if (friendActionLoading) return;
+                            setFriendActionLoading(true);
+                            if (isFriend) {
+                                onRemoveFriend(person.id);
+                            } else {
+                                onAddFriend(person.id);
+                            }
+                            setTimeout(() => setFriendActionLoading(false), 600);
+                        }} scaleDown={0.92}>
+                            <Ionicons name={isFriend ? 'person-remove' : 'person-add'} size={18} color={isFriend ? '#b91c1c' : colors.maroon} />
+                            <Text style={[styles.actionBtnText, { color: isFriend ? '#b91c1c' : colors.maroon }]}>{isFriend ? 'Remove Friend' : 'Add Friend'}</Text>
                         </AnimatedPressable>
                     </View>
                 </Animated.View>
@@ -236,6 +249,9 @@ const styles = StyleSheet.create({
     },
     actionBtnOutline: {
         backgroundColor: 'white', borderWidth: 2, borderColor: colors.maroon,
+    },
+    actionBtnDanger: {
+        borderColor: '#b91c1c',
     },
     actionBtnText: { fontSize: 14, fontFamily: fonts.bold, color: 'white' },
 

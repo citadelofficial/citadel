@@ -58,6 +58,8 @@ interface Props {
   classes: ClassData[];
   onAddClass: (cls: ClassData) => void;
   onRemoveClass: (id: string) => void;
+  shortcuts: ShortcutItem[];
+  onUpdateShortcuts: (shortcuts: ShortcutItem[]) => void;
 }
 
 const blocks = ['Block 1', 'Block 2', 'Block 3', 'Block 4', 'Block 5', 'Block 6', 'Block 7', 'Block 8'];
@@ -117,6 +119,8 @@ export function HomeScreen({
   classes,
   onAddClass,
   onRemoveClass,
+  shortcuts,
+  onUpdateShortcuts,
 }: Props) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFilter, setSearchFilter] = useState<SearchFilter>('all');
@@ -128,11 +132,7 @@ export function HomeScreen({
   const [shortcutType, setShortcutType] = useState<ShortcutType>('class');
   const [shortcutLabel, setShortcutLabel] = useState('');
   const [shortcutRef, setShortcutRef] = useState<string | undefined>(classes[0]?.id);
-  const [shortcuts, setShortcuts] = useState<ShortcutItem[]>([
-    { id: 'shortcut-class', type: 'class', label: 'Unit 4: AP HUG', refId: classes[0]?.id },
-    { id: 'shortcut-friend', type: 'friend', label: 'Laasya', refId: 'laasya' },
-    { id: 'shortcut-scan', type: 'scan', label: 'Quick Scan' },
-  ]);
+  const setShortcuts = onUpdateShortcuts;
 
   const [showClassModal, setShowClassModal] = useState(false);
   const [newClassName, setNewClassName] = useState('');
@@ -144,6 +144,7 @@ export function HomeScreen({
   const [showJoinClassModal, setShowJoinClassModal] = useState(false);
   const [joinClassCode, setJoinClassCode] = useState('');
   const [joinClassStatus, setJoinClassStatus] = useState('');
+  const [showTitleModal, setShowTitleModal] = useState(false);
 
   const flatListRef = useRef<FlatList>(null);
 
@@ -396,7 +397,7 @@ export function HomeScreen({
       refId: shortcutRef,
     };
 
-    setShortcuts((prev) => [item, ...prev]);
+    setShortcuts([item, ...shortcuts]);
     setShowShortcutModal(false);
     setShortcutLabel('');
     setShortcutRef(classes[0]?.id);
@@ -617,7 +618,7 @@ export function HomeScreen({
         )}
 
         <Animated.View style={{ opacity: sectionFade1, transform: [{ translateY: sectionSlide1 }] }}>
-          <Text style={styles.sectionTitle}>Shortcuts</Text>
+          <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Shortcuts</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.shortcuts} contentContainerStyle={styles.shortcutsContent}>
             <AnimatedPressable style={styles.shortcutAdd} onPress={() => setShowShortcutModal(true)} scaleDown={0.88}>
               <Ionicons name="add" size={24} color="white" />
@@ -636,18 +637,18 @@ export function HomeScreen({
 
         <Animated.View style={{ opacity: sectionFade2, transform: [{ translateY: sectionSlide2 }] }}>
           <View style={styles.carouselHeader}>
-            <Text style={styles.sectionTitle}>My Classes</Text>
-            <View style={styles.carouselHeaderRight}>
+            <View style={styles.classesHeaderLeft}>
+              <Text style={styles.sectionTitle}>My Classes</Text>
               <AnimatedPressable style={styles.joinClassBtn} onPress={openJoinClassModal} scaleDown={0.93}>
                 <Ionicons name="log-in-outline" size={15} color="white" />
                 <Text style={styles.joinClassBtnText}>Join Existing Class</Text>
               </AnimatedPressable>
-              {classes.length > 0 && (
-                <Text style={styles.counter}>
-                  {currentCardIndex + 1} / {classes.length + 1}
-                </Text>
-              )}
             </View>
+            {classes.length > 0 && (
+              <Text style={styles.counter}>
+                {currentCardIndex + 1} / {classes.length + 1}
+              </Text>
+            )}
           </View>
 
           <FlatList
@@ -782,39 +783,41 @@ export function HomeScreen({
       </ScrollView>
 
       {/* Success toast */}
-      {successToast && (
-        <Animated.View
-          style={{
-            position: 'absolute',
-            bottom: 120,
-            left: 30,
-            right: 30,
-            alignItems: 'center',
-            zIndex: 1000,
-            opacity: toastOpacity,
-            transform: [{ translateY: toastSlide }, { scale: toastScale }],
-          }}
-        >
-          <View
+      {
+        successToast && (
+          <Animated.View
             style={{
-              flexDirection: 'row',
+              position: 'absolute',
+              bottom: 120,
+              left: 30,
+              right: 30,
               alignItems: 'center',
-              backgroundColor: colors.maroon,
-              paddingHorizontal: 20,
-              paddingVertical: 14,
-              borderRadius: 20,
-              gap: 10,
-              shadowColor: colors.maroon,
-              shadowOpacity: 0.3,
-              shadowRadius: 12,
-              shadowOffset: { width: 0, height: 4 },
+              zIndex: 1000,
+              opacity: toastOpacity,
+              transform: [{ translateY: toastSlide }, { scale: toastScale }],
             }}
           >
-            <Ionicons name="checkmark-circle" size={20} color="white" />
-            <Text style={{ color: 'white', fontFamily: fonts.bold, fontSize: 14 }}>{successToast}</Text>
-          </View>
-        </Animated.View>
-      )}
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: colors.maroon,
+                paddingHorizontal: 20,
+                paddingVertical: 14,
+                borderRadius: 20,
+                gap: 10,
+                shadowColor: colors.maroon,
+                shadowOpacity: 0.3,
+                shadowRadius: 12,
+                shadowOffset: { width: 0, height: 4 },
+              }}
+            >
+              <Ionicons name="checkmark-circle" size={20} color="white" />
+              <Text style={{ color: 'white', fontFamily: fonts.bold, fontSize: 14 }}>{successToast}</Text>
+            </View>
+          </Animated.View>
+        )
+      }
 
       <BottomNav active="home" onHome={() => { }} onScan={onScanOpen} onFriends={onFriendsOpen} onFiles={() => onFilesOpen()} />
 
@@ -920,82 +923,115 @@ export function HomeScreen({
       <Modal visible={showClassModal} transparent animationType="slide" onRequestClose={() => setShowClassModal(false)}>
         <KeyboardAvoidingView style={styles.modalKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={styles.modalBackdrop}>
-            <View style={styles.modalCardLarge}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Create New Class</Text>
-                <TouchableOpacity onPress={() => setShowClassModal(false)}>
-                  <Ionicons name="close" size={22} color={colors.textPrimary} />
+            {showTitleModal ? (
+              <View style={styles.modalCard}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Class Name</Text>
+                  <TouchableOpacity onPress={() => setShowTitleModal(false)}>
+                    <Ionicons name="close" size={22} color={colors.textPrimary} />
+                  </TouchableOpacity>
+                </View>
+                <TextInput
+                  style={styles.modalInput}
+                  value={newClassName}
+                  onChangeText={setNewClassName}
+                  placeholder="Ex: AP Physics"
+                  placeholderTextColor={colors.textTertiary}
+                  autoFocus
+                />
+                <TouchableOpacity style={styles.modalSaveBtn} onPress={() => setShowTitleModal(false)}>
+                  <Text style={styles.modalSaveBtnText}>Save</Text>
                 </TouchableOpacity>
               </View>
-
-              <Text style={styles.modalLabel}>Class Name</Text>
-              <TextInput style={styles.modalInput} value={newClassName} onChangeText={setNewClassName} placeholder="Ex: AP Physics" />
-
-              <Text style={styles.modalLabel}>Class Background Image</Text>
-              <TouchableOpacity style={styles.imagePickerBtn} onPress={pickClassImage}>
-                <Ionicons name="image" size={16} color={colors.maroon} />
-                <Text style={styles.imagePickerBtnText}>Upload Background</Text>
-              </TouchableOpacity>
-              {newClassImage && <Image source={{ uri: newClassImage }} style={styles.newClassImagePreview} />}
-
-              <Text style={styles.modalLabel}>Block</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
-                {blocks.map((block) => (
-                  <TouchableOpacity
-                    key={block}
-                    style={[styles.pickChip, newClassBlock === block && styles.pickChipActive]}
-                    onPress={() => setNewClassBlock(block)}
-                  >
-                    <Text style={[styles.pickChipText, newClassBlock === block && styles.pickChipTextActive]}>{block}</Text>
+            ) : (
+              <View style={styles.modalCardLarge}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Create New Class</Text>
+                  <TouchableOpacity onPress={() => setShowClassModal(false)}>
+                    <Ionicons name="close" size={22} color={colors.textPrimary} />
                   </TouchableOpacity>
-                ))}
-              </ScrollView>
+                </View>
 
-              <Text style={styles.modalLabel}>Template</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
-                {(['Standard', 'AP Exam', 'Lab', 'Seminar'] as ClassTemplate[]).map((template) => (
+                <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+                  <Text style={styles.modalLabel}>Class Name</Text>
                   <TouchableOpacity
-                    key={template}
-                    style={[styles.pickChip, newClassTemplate === template && styles.pickChipActive]}
-                    onPress={() => setNewClassTemplate(template)}
+                    style={[styles.modalInput, { justifyContent: 'center' }]}
+                    activeOpacity={0.7}
+                    onPress={() => setShowTitleModal(true)}
                   >
-                    <Text style={[styles.pickChipText, newClassTemplate === template && styles.pickChipTextActive]}>{template}</Text>
+                    <Text style={{ color: newClassName ? colors.textPrimary : colors.textTertiary, fontSize: 14 }}>
+                      {newClassName || 'Ex: AP Physics'}
+                    </Text>
                   </TouchableOpacity>
-                ))}
-              </ScrollView>
 
-              <Text style={styles.modalLabel}>Primary Focus</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.optionRow}>
-                {classGoals.map((goal) => (
-                  <TouchableOpacity
-                    key={goal}
-                    style={[styles.pickChip, newClassGoal === goal && styles.pickChipActive]}
-                    onPress={() => setNewClassGoal(goal)}
-                  >
-                    <Text style={[styles.pickChipText, newClassGoal === goal && styles.pickChipTextActive]}>{goal}</Text>
+                  <Text style={styles.modalLabel}>Class Background Image</Text>
+                  <TouchableOpacity style={styles.imagePickerBtn} onPress={pickClassImage}>
+                    <Ionicons name="image" size={16} color={colors.maroon} />
+                    <Text style={styles.imagePickerBtnText}>Upload Background</Text>
                   </TouchableOpacity>
-                ))}
-              </ScrollView>
+                  {newClassImage && <Image source={{ uri: newClassImage }} style={styles.newClassImagePreview} />}
 
-              <Text style={styles.modalLabel}>Theme Color</Text>
-              <View style={styles.colorRow}>
-                {['#3D0C11', '#0f766e', '#1d4ed8', '#7c3aed', '#b45309'].map((color) => (
-                  <TouchableOpacity
-                    key={color}
-                    style={[styles.colorDot, { backgroundColor: color }, newClassColor === color && styles.colorDotActive]}
-                    onPress={() => setNewClassColor(color)}
-                  />
-                ))}
+                  <Text style={styles.modalLabel}>Block</Text>
+                  <View style={styles.optionRow}>
+                    {blocks.map((block) => (
+                      <TouchableOpacity
+                        key={block}
+                        style={[styles.pickChip, newClassBlock === block && styles.pickChipActive]}
+                        onPress={() => setNewClassBlock(block)}
+                      >
+                        <Text style={[styles.pickChipText, newClassBlock === block && styles.pickChipTextActive]}>{block}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <Text style={styles.modalLabel}>Template</Text>
+                  <View style={styles.optionRow}>
+                    {(['Standard', 'AP Exam', 'Lab', 'Seminar'] as ClassTemplate[]).map((template) => (
+                      <TouchableOpacity
+                        key={template}
+                        style={[styles.pickChip, newClassTemplate === template && styles.pickChipActive]}
+                        onPress={() => setNewClassTemplate(template)}
+                      >
+                        <Text style={[styles.pickChipText, newClassTemplate === template && styles.pickChipTextActive]}>{template}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <Text style={styles.modalLabel}>Primary Focus</Text>
+                  <View style={styles.optionRow}>
+                    {classGoals.map((goal) => (
+                      <TouchableOpacity
+                        key={goal}
+                        style={[styles.pickChip, newClassGoal === goal && styles.pickChipActive]}
+                        onPress={() => setNewClassGoal(goal)}
+                      >
+                        <Text style={[styles.pickChipText, newClassGoal === goal && styles.pickChipTextActive]}>{goal}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <Text style={styles.modalLabel}>Theme Color</Text>
+                  <View style={styles.colorRow}>
+                    {['#3D0C11', '#0f766e', '#1d4ed8', '#7c3aed', '#b45309'].map((color) => (
+                      <TouchableOpacity
+                        key={color}
+                        style={[styles.colorDot, { backgroundColor: color }, newClassColor === color && styles.colorDotActive]}
+                        onPress={() => setNewClassColor(color)}
+                      />
+                    ))}
+                  </View>
+
+                  <TouchableOpacity style={styles.modalSaveBtn} onPress={saveNewClass}>
+                    <Text style={styles.modalSaveBtnText}>Create Class</Text>
+                  </TouchableOpacity>
+                </ScrollView>
               </View>
-
-              <TouchableOpacity style={styles.modalSaveBtn} onPress={saveNewClass}>
-                <Text style={styles.modalSaveBtnText}>Create Class</Text>
-              </TouchableOpacity>
-            </View>
+            )}
           </View>
         </KeyboardAvoidingView>
       </Modal>
-    </View>
+
+    </View >
   );
 }
 
@@ -1060,13 +1096,14 @@ const styles = StyleSheet.create({
   searchResultTitle: { fontSize: 14, fontFamily: fonts.bold, color: colors.textPrimary },
   searchResultSub: { fontSize: 11, color: colors.textSecondary, marginTop: 2, fontFamily: fonts.regular },
   searchEmpty: { padding: 14, textAlign: 'center', color: colors.textSecondary, fontFamily: fonts.medium },
-  sectionTitle: { fontSize: 24, fontFamily: fonts.bold, color: colors.textPrimary, marginTop: 22, letterSpacing: -0.3 },
+  sectionTitle: { fontSize: 22, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.3 },
   shortcuts: { marginTop: 10 },
   shortcutsContent: { paddingRight: 24, gap: 12, flexDirection: 'row', alignItems: 'center' },
   shortcutAdd: { width: 56, height: 56, borderRadius: 18, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
   shortcut: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'white', paddingHorizontal: 20, paddingVertical: 14, borderRadius: 20, borderWidth: 2, borderColor: '#F0E0D0' },
   shortcutLabel: { fontSize: 14, fontFamily: fonts.medium, color: colors.textPrimary, maxWidth: 130 },
-  carouselHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 },
+  carouselHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 26, paddingHorizontal: 0 },
+  classesHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   carouselHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   joinClassBtn: {
     height: 36,
@@ -1130,21 +1167,22 @@ const styles = StyleSheet.create({
   modalKeyboard: { flex: 1 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
   modalCard: { backgroundColor: '#FFF8F2', borderTopLeftRadius: 32, borderTopRightRadius: 32, padding: 22, paddingBottom: 34 },
-  modalCardLarge: { backgroundColor: '#FFF8F2', borderTopLeftRadius: 32, borderTopRightRadius: 32, padding: 22, paddingBottom: 38, maxHeight: '86%' },
+  modalCardLarge: { flexShrink: 1, backgroundColor: '#FFF8F2', borderTopLeftRadius: 32, borderTopRightRadius: 32, padding: 22, paddingBottom: 38, maxHeight: '86%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
   modalTitle: { fontSize: 22, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.3 },
+  modalScroll: { marginTop: 10, marginBottom: 16, flexShrink: 1 },
   modalLabel: { fontSize: 12, fontFamily: fonts.bold, color: colors.textSecondary, marginBottom: 6, marginTop: 8 },
   modalInput: { height: 52, borderRadius: 18, borderWidth: 2, borderColor: '#F0E0D0', backgroundColor: 'white', paddingHorizontal: 16, fontSize: 14, color: colors.textPrimary, fontFamily: fonts.medium },
   modalSaveBtn: { marginTop: 16, height: 54, borderRadius: 20, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
   modalSaveBtnText: { color: 'white', fontSize: 15, fontFamily: fonts.bold },
   joinHint: { marginTop: 8, fontSize: 12, color: colors.textSecondary, lineHeight: 18, fontFamily: fonts.regular },
   joinStatus: { marginTop: 8, fontSize: 12, fontFamily: fonts.bold, color: '#b91c1c' },
-  optionRow: { flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 4 },
+  optionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8, marginBottom: 4 },
   optionChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 14, backgroundColor: '#FFF5ED', borderWidth: 2, borderColor: '#F0E0D0' },
   optionChipActive: { backgroundColor: colors.maroon, borderColor: colors.maroon },
   optionChipText: { fontSize: 12, color: colors.textSecondary, fontFamily: fonts.semiBold },
   optionChipTextActive: { color: 'white' },
-  pickChip: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 14, borderWidth: 2, borderColor: '#F0E0D0', backgroundColor: 'white' },
+  pickChip: { alignSelf: 'flex-start', paddingHorizontal: 14, paddingVertical: 9, borderRadius: 14, borderWidth: 2, borderColor: '#F0E0D0', backgroundColor: 'white' },
   pickChipActive: { borderColor: colors.maroon, backgroundColor: `${colors.maroon}12` },
   pickChipText: { fontSize: 12, color: colors.textSecondary, fontFamily: fonts.semiBold },
   pickChipTextActive: { color: colors.maroon },
