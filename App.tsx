@@ -14,6 +14,7 @@ import { FriendsScreen } from './src/screens/FriendsScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
 import { PersonProfileScreen } from './src/screens/PersonProfileScreen';
 import { InfoPageScreen } from './src/screens/InfoPageScreen';
+import { SchoolScreen } from './src/screens/SchoolScreen';
 import type { Screen, FriendData } from './src/types';
 import type { UserData, ClassData, FileData } from './src/types';
 import { defaultClasses } from './src/data/defaultClasses';
@@ -60,6 +61,7 @@ export default function App() {
   const [selectedClassId, setSelectedClassId] = useState<string>('1');
   const [selectedPerson, setSelectedPerson] = useState<FriendData | null>(null);
   const [activeInfoPage, setActiveInfoPage] = useState<'help' | 'terms' | 'privacy'>('help');
+  const [selectedSchool, setSelectedSchool] = useState<string>('');
   const [session, setSession] = useState<Session | null>(null);
   const [authInitialized, setAuthInitialized] = useState(false);
 
@@ -96,6 +98,25 @@ export default function App() {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  // ═══════════════════════════════════════════
+  // REAL-TIME FRIEND REQUESTS
+  // ═══════════════════════════════════════════
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    const userId = session.user.id;
+    const channel = supabase.channel('friend-requests-realtime')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'friend_requests',
+        filter: `to_user_id=eq.${userId}`,
+      }, () => {
+        loadFriendRequests(userId);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [session?.user?.id]);
 
   // ═══════════════════════════════════════════
   // FETCH PROFILE + ALL DATA
@@ -614,6 +635,12 @@ export default function App() {
     navigate('info-page');
   };
 
+  const openSchool = (schoolName: string, fromScreen: Screen) => {
+    setSelectedSchool(schoolName);
+    setPreviousScreen(fromScreen);
+    navigate('school');
+  };
+
   const handleRateApp = () => {
     Alert.alert('Rate Citadel ⭐', 'Thanks for using Citadel! Rating will open the App Store.', [
       { text: 'Not Now', style: 'cancel' },
@@ -666,7 +693,7 @@ export default function App() {
       <View style={styles.container}>
         <StatusBar style="light" />
         {currentScreen === 'splash' && <SplashScreen />}
-        {currentScreen === 'onboarding' && <OnboardingScreen onGetStarted={handleOnboardingComplete} />}
+        {currentScreen === 'onboarding' && <OnboardingScreen onGetStarted={handleOnboardingComplete} onSignIn={() => navigate('signin')} />}
         {currentScreen === 'signin' && (
           <SignInScreen
             onSignIn={handleSignIn}
@@ -694,6 +721,7 @@ export default function App() {
             onRemoveClass={handleRemoveClass}
             shortcuts={shortcuts}
             onUpdateShortcuts={handleUpdateShortcuts}
+            onSchoolOpen={(schoolName: string) => openSchool(schoolName, 'home')}
           />
         )}
         {currentScreen === 'profile' && (
@@ -708,6 +736,7 @@ export default function App() {
             onRateApp={handleRateApp}
             onShareApp={handleShareApp}
             session={session}
+            onSchoolOpen={(schoolName: string) => openSchool(schoolName, 'profile')}
           />
         )}
         {currentScreen === 'person-profile' && selectedPerson && (
@@ -719,19 +748,39 @@ export default function App() {
             isFriend={friends.some(f => f.id === selectedPerson.id)}
             onAddFriend={async (personId) => {
               if (!session?.user?.id) return;
-              // Send a friend request (same flow as the Friends tab)
-              await supabase.from('friend_requests').insert({
-                from_user_id: session.user.id,
-                to_user_id: personId,
-              });
+              // Look up the person's username to use the proper send request flow
+              const { data: targetProfile } = await supabase
+                .from('profiles')
+                .select('username, display_name')
+                .eq('id', personId)
+                .single();
+              if (targetProfile?.username) {
+                const result = await handleSendRequest(targetProfile.username);
+                Alert.alert(
+                  result.success ? 'Request Sent!' : 'Could Not Send',
+                  result.message
+                );
+              } else {
+                // Fallback: direct insert
+                const { error } = await supabase.from('friend_requests').insert({
+                  from_user_id: session.user.id,
+                  to_user_id: personId,
+                });
+                if (error) {
+                  Alert.alert('Error', error.code === '23505' ? 'Friend request already sent.' : error.message);
+                } else {
+                  Alert.alert('Request Sent!', 'Your friend request has been sent.');
+                }
+              }
             }}
             onRemoveFriend={async (personId) => {
               if (!session?.user?.id) return;
-              // Delete friendship in both directions
               await supabase.from('friends').delete().eq('user_id', session.user.id).eq('friend_id', personId);
               await supabase.from('friends').delete().eq('user_id', personId).eq('friend_id', session.user.id);
               await loadFriends(session.user.id);
+              Alert.alert('Removed', 'Friend has been removed.');
             }}
+            onSchoolOpen={(schoolName: string) => openSchool(schoolName, 'person-profile')}
           />
         )}
         {currentScreen === 'info-page' && (
@@ -789,6 +838,17 @@ export default function App() {
             onAcceptRequest={handleAcceptRequest}
             onDeclineRequest={handleDeclineRequest}
             classes={classes}
+            userSchool={userData.school}
+            onSchoolOpen={(schoolName: string) => openSchool(schoolName, 'friends')}
+          />
+        )}
+        {currentScreen === 'school' && (
+          <SchoolScreen
+            schoolName={selectedSchool}
+            onBack={() => navigate(previousScreen)}
+            onPersonOpen={(person) => openPersonProfile(person, 'school')}
+            classes={classes}
+            currentUserId={session?.user?.id || null}
           />
         )}
       </View>

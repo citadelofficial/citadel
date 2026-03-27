@@ -11,6 +11,7 @@ import {
   Animated,
   Easing,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts, spacing } from '../theme';
@@ -18,6 +19,7 @@ import { supabase } from '../lib/supabase';
 
 interface Props {
   onGetStarted: (userData: { name: string; username: string; grade: string; school: string }) => void;
+  onSignIn?: () => void;
 }
 
 const grades = [
@@ -35,30 +37,11 @@ const grades = [
   'Graduate Student',
 ];
 
-const loudounSchools = [
-  'Briar Woods High School',
-  'Broad Run High School',
-  'Dominion High School',
-  'Freedom High School',
-  'Heritage High School',
-  'Independence High School',
-  'John Champe High School',
-  'Lightridge High School',
-  'Loudoun County High School',
-  'Loudoun Valley High School',
-  'Park View High School',
-  'Potomac Falls High School',
-  'Riverside High School',
-  'Rock Ridge High School',
-  'Stone Bridge High School',
-  'Tuscarora High School',
-  'Woodgrove High School',
-  'Academies of Loudoun',
-];
+// Schools will be fetched dynamically from Supabase
 
 const TOTAL_STEPS = 4;
 
-export function OnboardingScreen({ onGetStarted }: Props) {
+export function OnboardingScreen({ onGetStarted, onSignIn }: Props) {
   const [step, setStep] = useState(0);
   const [name, setName] = useState('');
   const [username, setUsername] = useState('');
@@ -67,7 +50,28 @@ export function OnboardingScreen({ onGetStarted }: Props) {
   const [school, setSchool] = useState('');
   const [showGradePicker, setShowGradePicker] = useState(false);
   const [customSchools, setCustomSchools] = useState<string[]>([]);
+  const [dbSchools, setDbSchools] = useState<string[]>([]);
   const [hasTypedSchool, setHasTypedSchool] = useState(false);
+  const [inviteCode, setInviteCode] = useState('');
+
+  // Fetch existing schools from Supabase
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from('profiles')
+          .select('school')
+          .not('school', 'is', null)
+          .not('school', 'eq', '');
+        if (data) {
+          const unique = [...new Set(data.map((r: any) => r.school as string).filter(Boolean))];
+          setDbSchools(unique.sort());
+        }
+      } catch (e) {
+        console.log('Error fetching schools:', e);
+      }
+    })();
+  }, []);
 
   const usernameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -204,12 +208,12 @@ export function OnboardingScreen({ onGetStarted }: Props) {
     };
   }, [username]);
 
-  const allSchools = useMemo(() => [...loudounSchools, ...customSchools], [customSchools]);
+  const allSchools = useMemo(() => [...new Set([...dbSchools, ...customSchools])], [dbSchools, customSchools]);
 
   const filteredSchools = useMemo(() => {
     const query = school.trim().toLowerCase();
 
-    if (!query) return loudounSchools.slice(0, 6);
+    if (!query) return allSchools.slice(0, 6);
 
     return allSchools.filter((s) => s.toLowerCase().includes(query)).slice(0, 8);
   }, [school, allSchools]);
@@ -250,6 +254,26 @@ export function OnboardingScreen({ onGetStarted }: Props) {
 
     setSchool(trimmed);
     setHasTypedSchool(true);
+  };
+
+  const applyInviteCode = () => {
+    const code = inviteCode.trim();
+    if (!code) return;
+    try {
+      // Pad base64 if needed
+      const padded = code + '='.repeat((4 - (code.length % 4)) % 4);
+      const decoded = atob(padded);
+      if (decoded && decoded.length > 0) {
+        setSchool(decoded);
+        setHasTypedSchool(true);
+        setInviteCode('');
+        Alert.alert('School Set!', `You've been invited to ${decoded}. Welcome!`);
+      } else {
+        Alert.alert('Invalid Code', 'That invite code doesn\'t seem to be valid. Please check and try again.');
+      }
+    } catch {
+      Alert.alert('Invalid Code', 'That invite code doesn\'t seem to be valid. Please check and try again.');
+    }
   };
 
   const heroPulseScale = heroPulse.interpolate({
@@ -315,18 +339,13 @@ export function OnboardingScreen({ onGetStarted }: Props) {
                 />
 
                 <View style={styles.heroBadge}>
-                  <Ionicons name="sparkles" size={14} color={colors.maroon} />
-                  <Text style={styles.heroBadgeText}>Demo Notice</Text>
+                  <Ionicons name="shield-checkmark" size={14} color={colors.maroon} />
+                  <Text style={styles.heroBadgeText}>Built for Students</Text>
                 </View>
 
-                <Text style={styles.heroNoticeTitle}>Thank you for trying out this demo app!</Text>
+                <Text style={styles.heroNoticeTitle}>Your academic life,{"\n"}all in one place.</Text>
                 <Text style={styles.heroNoticeBody}>
-                  Notice: The app is not done by any means. None of the AI features are integrated yet, and all
-                  classes/notes/units are just examples. Try it out and let us know what you think!
-                </Text>
-                <Text style={styles.heroNoticeBody}>
-                  Throughout the next couple of months we will be improving this app and making it functional and
-                  useful to students! We'd appreciate any ideas, comments or concerns you have - just let us know!
+                  Citadel helps you organize classes, connect with classmates, and stay on top of your studies — all from one app.
                 </Text>
               </View>
 
@@ -548,6 +567,50 @@ export function OnboardingScreen({ onGetStarted }: Props) {
                   <Text style={styles.checkSchoolText}>School saved</Text>
                 </View>
               )}
+
+              {/* Invite Code */}
+              <View style={{
+                marginTop: 20,
+                paddingTop: 18,
+                borderTopWidth: 1,
+                borderTopColor: '#F0E0D0',
+              }}>
+                <Text style={{ fontSize: 13, fontFamily: fonts.bold, color: colors.textSecondary, marginBottom: 8 }}>
+                  Have an invite code?
+                </Text>
+                <View style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 8,
+                }}>
+                  <View style={[styles.searchInputWrap, { flex: 1, marginBottom: 0 }]}>
+                    <Ionicons name="mail-open-outline" size={18} color={colors.textTertiary} />
+                    <TextInput
+                      style={styles.searchInput}
+                      placeholder="Paste invite code"
+                      placeholderTextColor={colors.textTertiary}
+                      value={inviteCode}
+                      onChangeText={setInviteCode}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                    />
+                  </View>
+                  <TouchableOpacity
+                    style={{
+                      height: 48,
+                      paddingHorizontal: 16,
+                      borderRadius: 16,
+                      backgroundColor: inviteCode.trim() ? colors.maroon : '#E8D5C4',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                    onPress={applyInviteCode}
+                    disabled={!inviteCode.trim()}
+                  >
+                    <Text style={{ fontSize: 13, fontFamily: fonts.bold, color: inviteCode.trim() ? 'white' : colors.textTertiary }}>Apply</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
             </View>
           )}
         </Animated.View>
@@ -561,7 +624,7 @@ export function OnboardingScreen({ onGetStarted }: Props) {
             disabled={!canProceed()}
           >
             <Text style={[styles.btnText, canProceed() ? styles.btnTextWhite : styles.btnTextDisabled]}>
-              {step === TOTAL_STEPS ? 'Join Citadel' : step === 0 ? 'Begin Setup' : 'Continue'}
+              {step === TOTAL_STEPS ? 'Join Citadel' : step === 0 ? 'Get Started' : 'Continue'}
             </Text>
             <Ionicons
               name={step === TOTAL_STEPS ? 'shield-checkmark' : 'arrow-forward'}
@@ -570,6 +633,13 @@ export function OnboardingScreen({ onGetStarted }: Props) {
             />
           </TouchableOpacity>
         </Animated.View>
+        {step === 0 && onSignIn && (
+          <TouchableOpacity style={{ alignItems: 'center', marginTop: 14 }} onPress={onSignIn}>
+            <Text style={{ fontSize: 14, fontFamily: fonts.medium, color: colors.textSecondary }}>
+              Already have an account? <Text style={{ fontFamily: fonts.bold, color: colors.maroon }}>Sign In</Text>
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
     </KeyboardAvoidingView>
   );

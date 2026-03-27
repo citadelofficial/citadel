@@ -6,6 +6,9 @@ import {
     ScrollView,
     StyleSheet,
     Animated,
+    Share,
+    Alert,
+    Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts } from '../theme';
@@ -20,14 +23,53 @@ interface Props {
     isFriend: boolean;
     onAddFriend: (personId: string) => void;
     onRemoveFriend: (personId: string) => void;
+    onSchoolOpen?: (schoolName: string) => void;
 }
 
-export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend, onAddFriend, onRemoveFriend }: Props) {
+export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend, onAddFriend, onRemoveFriend, onSchoolOpen }: Props) {
     const headerFade = useRef(new Animated.Value(0)).current;
     const headerSlide = useRef(new Animated.Value(-30)).current;
     const contentFade = useRef(new Animated.Value(0)).current;
     const contentSlide = useRef(new Animated.Value(20)).current;
     const [friendActionLoading, setFriendActionLoading] = useState(false);
+    const [showInviteModal, setShowInviteModal] = useState(false);
+    const [selectedClassIds, setSelectedClassIds] = useState<Set<string>>(new Set());
+
+    const firstName = person.name.split(' ')[0];
+
+    const toggleClass = (id: string) => {
+        setSelectedClassIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    };
+
+    const handleSendInvite = async () => {
+        const selected = classes.filter(c => selectedClassIds.has(c.id));
+        if (selected.length === 0) {
+            Alert.alert('Select Classes', 'Pick at least one class to invite to.');
+            return;
+        }
+        const classList = selected.map(c => `• ${c.title} (${c.block})`).join('\n');
+        setShowInviteModal(false);
+        try {
+            await Share.share({
+                message: `Hey ${firstName}! I'd love for you to join ${selected.length === 1 ? 'my class' : 'my classes'} on Citadel:\n\n${classList}\n\nDownload Citadel to get started!`,
+            });
+        } catch {}
+        setSelectedClassIds(new Set());
+    };
+
+    const openInviteModal = () => {
+        if (classes.length === 0) {
+            Alert.alert('No Classes', 'You don\'t have any classes to invite to yet.');
+            return;
+        }
+        setSelectedClassIds(new Set());
+        setShowInviteModal(true);
+    };
 
     useEffect(() => {
         Animated.sequence([
@@ -52,8 +94,6 @@ export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend,
             (person.course && cls.title.toLowerCase().includes(person.course.toLowerCase().replace('ap ', '')))
         );
     }, [classes, person]);
-
-    const firstName = person.name.split(' ')[0];
 
     return (
         <View style={styles.container}>
@@ -129,13 +169,18 @@ export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend,
 
                         <View style={styles.separator} />
 
-                        <View style={styles.infoRow}>
+                        <TouchableOpacity
+                            style={styles.infoRow}
+                            onPress={() => person.school && onSchoolOpen?.(person.school)}
+                            activeOpacity={person.school ? 0.7 : 1}
+                        >
                             <View style={styles.infoIcon}><Ionicons name="business-outline" size={18} color={colors.maroon} /></View>
                             <View style={styles.infoContent}>
                                 <Text style={styles.infoLabel}>School</Text>
-                                <Text style={styles.infoValue}>{person.school || 'Not shared'}</Text>
+                                <Text style={[styles.infoValue, person.school && { color: colors.maroon }]}>{person.school || 'Not shared'}</Text>
                             </View>
-                        </View>
+                            {person.school ? <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} /> : null}
+                        </TouchableOpacity>
 
                         {person.course ? (
                             <>
@@ -171,7 +216,22 @@ export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend,
                             <View style={styles.emptyRow}>
                                 <Ionicons name="book-outline" size={24} color={colors.textTertiary} />
                                 <Text style={styles.emptyText}>No shared classes yet</Text>
-                                <Text style={styles.emptySub}>Invite {firstName} to join your classes!</Text>
+                                <TouchableOpacity
+                                    style={{
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        gap: 6,
+                                        marginTop: 8,
+                                        backgroundColor: colors.maroon,
+                                        paddingHorizontal: 18,
+                                        paddingVertical: 10,
+                                        borderRadius: 14,
+                                    }}
+                                    onPress={openInviteModal}
+                                >
+                                    <Ionicons name="paper-plane" size={14} color="white" />
+                                    <Text style={{ fontSize: 13, fontFamily: fonts.bold, color: 'white' }}>Invite {firstName} to Your Classes</Text>
+                                </TouchableOpacity>
                             </View>
                         )}
                     </View>
@@ -206,6 +266,92 @@ export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend,
                     <View style={{ height: 40 }} />
                 </Animated.View>
             </ScrollView>
+
+            {/* Invite to Classes Modal */}
+            <Modal visible={showInviteModal} transparent animationType="slide">
+                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+                    <View style={{
+                        backgroundColor: '#FFF8F2',
+                        borderTopLeftRadius: 28,
+                        borderTopRightRadius: 28,
+                        paddingTop: 20,
+                        paddingBottom: 40,
+                        paddingHorizontal: 24,
+                        maxHeight: '70%',
+                    }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                            <Text style={{ fontSize: 20, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.5 }}>
+                                Invite {firstName}
+                            </Text>
+                            <TouchableOpacity onPress={() => setShowInviteModal(false)}>
+                                <Ionicons name="close-circle" size={28} color={colors.textTertiary} />
+                            </TouchableOpacity>
+                        </View>
+                        <Text style={{ fontSize: 14, fontFamily: fonts.regular, color: colors.textSecondary, marginBottom: 16 }}>
+                            Which classes do you want to invite {firstName} to?
+                        </Text>
+                        <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false}>
+                            {classes.map((cls) => {
+                                const isSelected = selectedClassIds.has(cls.id);
+                                return (
+                                    <TouchableOpacity
+                                        key={cls.id}
+                                        style={{
+                                            flexDirection: 'row',
+                                            alignItems: 'center',
+                                            backgroundColor: isSelected ? `${colors.maroon}12` : 'white',
+                                            borderRadius: 18,
+                                            padding: 14,
+                                            marginBottom: 8,
+                                            borderWidth: 2,
+                                            borderColor: isSelected ? colors.maroon : '#F0E0D0',
+                                        }}
+                                        onPress={() => toggleClass(cls.id)}
+                                        activeOpacity={0.7}
+                                    >
+                                        <View style={[styles.classColorDot, { backgroundColor: cls.color, marginRight: 12 }]} />
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={{ fontSize: 15, fontFamily: fonts.semiBold, color: colors.textPrimary }}>{cls.title}</Text>
+                                            <Text style={{ fontSize: 12, fontFamily: fonts.regular, color: colors.textSecondary, marginTop: 2 }}>{cls.block}</Text>
+                                        </View>
+                                        <View style={{
+                                            width: 26,
+                                            height: 26,
+                                            borderRadius: 13,
+                                            borderWidth: 2,
+                                            borderColor: isSelected ? colors.maroon : '#D0C0B0',
+                                            backgroundColor: isSelected ? colors.maroon : 'transparent',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                        }}>
+                                            {isSelected && <Ionicons name="checkmark" size={16} color="white" />}
+                                        </View>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </ScrollView>
+                        <TouchableOpacity
+                            style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: 8,
+                                backgroundColor: selectedClassIds.size > 0 ? colors.maroon : '#D0C0B0',
+                                borderRadius: 18,
+                                paddingVertical: 16,
+                                marginTop: 16,
+                            }}
+                            onPress={handleSendInvite}
+                            disabled={selectedClassIds.size === 0}
+                        >
+                            <Ionicons name="paper-plane" size={16} color="white" />
+                            <Text style={{ fontSize: 15, fontFamily: fonts.bold, color: 'white' }}>
+                                Send Invite{selectedClassIds.size > 0 ? ` (${selectedClassIds.size} ${selectedClassIds.size === 1 ? 'class' : 'classes'})` : ''}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 }

@@ -34,6 +34,103 @@ interface Props {
     onInfoPage?: (page: 'help' | 'terms' | 'privacy') => void;
     onRateApp?: () => void;
     onShareApp?: () => void;
+    onSchoolOpen?: (schoolName: string) => void;
+}
+
+// Autocomplete school editing with Supabase-sourced suggestions
+function SchoolEditField({ value, onChange, onSave, saveScale, saveSpinInterp }: {
+    value: string;
+    onChange: (v: string) => void;
+    onSave: () => void;
+    saveScale: Animated.Value;
+    saveSpinInterp: Animated.AnimatedInterpolation<string>;
+}) {
+    const [suggestions, setSuggestions] = useState<string[]>([]);
+    const [allSchools, setAllSchools] = useState<string[]>([]);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const { data } = await supabase
+                    .from('profiles')
+                    .select('school')
+                    .not('school', 'is', null)
+                    .not('school', 'eq', '');
+                if (data) {
+                    const unique = [...new Set(data.map((r: any) => r.school as string).filter(Boolean))];
+                    setAllSchools(unique.sort());
+                }
+            } catch (e) {
+                console.log('Error fetching schools:', e);
+            }
+        })();
+    }, []);
+
+    useEffect(() => {
+        const q = value.trim().toLowerCase();
+        if (!q) { setSuggestions([]); return; }
+        setSuggestions(allSchools.filter(s => s.toLowerCase().includes(q)).slice(0, 5));
+    }, [value, allSchools]);
+
+    return (
+        <View>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <TextInput
+                    style={{
+                        flex: 1,
+                        fontSize: 15,
+                        fontFamily: fonts.medium,
+                        color: colors.textPrimary,
+                        borderBottomWidth: 1.5,
+                        borderBottomColor: colors.maroon,
+                        paddingVertical: 4,
+                    }}
+                    value={value}
+                    onChangeText={onChange}
+                    autoFocus
+                    placeholder="Type school name..."
+                    placeholderTextColor={colors.textTertiary}
+                />
+                <AnimatedPressable onPress={onSave} style={{
+                    width: 30, height: 30, borderRadius: 10,
+                    backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center', marginLeft: 8,
+                }} scaleDown={0.75}>
+                    <Animated.View style={{ transform: [{ rotate: saveSpinInterp }, { scale: saveScale }] }}>
+                        <Ionicons name="checkmark" size={16} color="white" />
+                    </Animated.View>
+                </AnimatedPressable>
+            </View>
+            {suggestions.length > 0 && (
+                <View style={{
+                    backgroundColor: 'white',
+                    borderRadius: 12,
+                    borderWidth: 1.5,
+                    borderColor: '#F0E0D0',
+                    marginTop: 6,
+                    overflow: 'hidden',
+                }}>
+                    {suggestions.map((s, i) => (
+                        <TouchableOpacity
+                            key={s}
+                            style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                paddingHorizontal: 12,
+                                paddingVertical: 10,
+                                borderTopWidth: i > 0 ? 1 : 0,
+                                borderTopColor: '#F0E0D0',
+                                gap: 8,
+                            }}
+                            onPress={() => onChange(s)}
+                        >
+                            <Ionicons name="school-outline" size={14} color={colors.textSecondary} />
+                            <Text style={{ fontSize: 14, fontFamily: fonts.medium, color: colors.textPrimary }}>{s}</Text>
+                        </TouchableOpacity>
+                    ))}
+                </View>
+            )}
+        </View>
+    );
 }
 
 export function ProfileScreen({
@@ -46,7 +143,8 @@ export function ProfileScreen({
     onPersonOpen,
     onInfoPage,
     onRateApp,
-    onShareApp
+    onShareApp,
+    onSchoolOpen
 }: Props) {
     const [editName, setEditName] = useState(userData.name || '');
     const [editUsername, setEditUsername] = useState(userData.username || '');
@@ -212,11 +310,35 @@ export function ProfileScreen({
         ]);
     };
 
+    // Fetch real schoolmates from Supabase
+    const [schoolmates, setSchoolmates] = useState<{id: string; name: string; color: string; status: 'online' | 'studying' | 'offline'; school?: string}[]>([]);
+    useEffect(() => {
+        if (!userData.school || !session?.user?.id) return;
+        (async () => {
+            try {
+                const { data } = await supabase
+                    .from('profiles')
+                    .select('id, username, display_name, school')
+                    .eq('school', userData.school)
+                    .neq('id', session.user.id)
+                    .limit(5);
+                if (data) {
+                    setSchoolmates(data.map((p: any) => ({
+                        id: p.id,
+                        name: p.display_name || p.username || 'User',
+                        color: '#E0E7FF',
+                        status: 'offline' as const,
+                        school: p.school || '',
+                    })));
+                }
+            } catch (e) {
+                console.log('Error fetching schoolmates:', e);
+            }
+        })();
+    }, [userData.school, session?.user?.id]);
+
     const totalDocs = classes.reduce((a, c) => a + c.documents, 0);
     const totalFiles = classes.reduce((a, c) => a + c.files.length, 0);
-    const schoolmates = friendsDirectory.filter(
-        f => f.course && userData.school && f.course.includes('AP')
-    );
 
     return (
         <View style={styles.container}>
@@ -407,14 +529,13 @@ export function ProfileScreen({
                             <View style={styles.infoContent}>
                                 <Text style={styles.infoLabel}>School</Text>
                                 {editingField === 'school' ? (
-                                    <View style={styles.editRow}>
-                                        <TextInput style={styles.editInput} value={editSchool} onChangeText={setEditSchool} autoFocus />
-                                        <AnimatedPressable onPress={() => saveField('school')} style={styles.saveSmall} scaleDown={0.75}>
-                                            <Animated.View style={{ transform: [{ rotate: saveSpinInterp }, { scale: saveScale }] }}>
-                                                <Ionicons name="checkmark" size={16} color="white" />
-                                            </Animated.View>
-                                        </AnimatedPressable>
-                                    </View>
+                                    <SchoolEditField
+                                        value={editSchool}
+                                        onChange={setEditSchool}
+                                        onSave={() => saveField('school')}
+                                        saveScale={saveScale}
+                                        saveSpinInterp={saveSpinInterp}
+                                    />
                                 ) : (
                                     <Text style={styles.infoValue}>{userData.school || 'Not set'}</Text>
                                 )}
@@ -426,7 +547,14 @@ export function ProfileScreen({
                     {/* People at your school */}
                     {userData.school ? (
                         <>
-                            <Text style={styles.sectionTitle}>People at {userData.school}</Text>
+                            <TouchableOpacity
+                                style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 24, marginTop: 24, marginBottom: 10 }}
+                                onPress={() => onSchoolOpen?.(userData.school)}
+                                activeOpacity={0.7}
+                            >
+                                <Text style={styles.sectionTitle}>People at {userData.school}</Text>
+                                <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+                            </TouchableOpacity>
                             <View style={styles.card}>
                                 {schoolmates.length > 0 ? (
                                     schoolmates.slice(0, 5).map((person) => (
@@ -453,6 +581,14 @@ export function ProfileScreen({
                                         <Text style={styles.emptySchoolText}>No classmates found yet</Text>
                                         <Text style={styles.emptySchoolSub}>Invite friends from your school!</Text>
                                     </View>
+                                )}
+                                {schoolmates.length > 0 && (
+                                    <TouchableOpacity
+                                        style={{ alignItems: 'center', paddingVertical: 12 }}
+                                        onPress={() => onSchoolOpen?.(userData.school)}
+                                    >
+                                        <Text style={{ fontSize: 13, fontFamily: fonts.bold, color: colors.maroon }}>View All →</Text>
+                                    </TouchableOpacity>
                                 )}
                             </View>
                         </>

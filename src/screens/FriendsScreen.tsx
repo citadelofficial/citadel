@@ -49,6 +49,8 @@ interface Props {
   onAcceptRequest: (requestId: string) => void;
   onDeclineRequest: (requestId: string) => void;
   classes: ClassData[];
+  userSchool?: string;
+  onSchoolOpen?: (schoolName: string) => void;
 }
 
 type Tab = 'friends' | 'requests' | 'sessions' | 'discover';
@@ -89,10 +91,213 @@ function formatDuration(seconds: number) {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
+// ==================== DISCOVER SECTION ====================
+interface DiscoverProps {
+  userSchool?: string;
+  onSchoolOpen?: (schoolName: string) => void;
+  onPersonOpen?: (person: FriendData) => void;
+  onSendRequest: (username: string) => Promise<{ success: boolean; message: string }>;
+  showFeedback: (text: string, color: string) => void;
+  friends: FriendData[];
+  userUsername: string;
+}
+
+function DiscoverSection({ userSchool, onSchoolOpen, onPersonOpen, onSendRequest, showFeedback, friends, userUsername }: DiscoverProps) {
+  const [schoolmates, setSchoolmates] = useState<{ id: string; name: string; username: string; grade: string; school: string }[]>([]);
+  const [loadingDiscover, setLoadingDiscover] = useState(false);
+  const [addingIds, setAddingIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!userSchool) return;
+    setLoadingDiscover(true);
+    (async () => {
+      try {
+        const { data: userData } = await supabase.auth.getUser();
+        const userId = userData?.user?.id;
+
+        const { data } = await supabase
+          .from('profiles')
+          .select('id, username, display_name, grade, school')
+          .eq('school', userSchool)
+          .neq('id', userId || '')
+          .limit(20);
+
+        if (data) {
+          const friendIds = new Set(friends.map(f => f.id));
+          const filtered = data.filter((p: any) => !friendIds.has(p.id));
+          setSchoolmates(filtered.map((p: any) => ({
+            id: p.id,
+            name: p.display_name || p.username || 'User',
+            username: p.username || '',
+            grade: p.grade || '',
+            school: p.school || '',
+          })));
+        }
+      } catch (e) {
+        console.log('Error fetching discover:', e);
+      } finally {
+        setLoadingDiscover(false);
+      }
+    })();
+  }, [userSchool, friends]);
+
+  const handleAddFromDiscover = async (person: { id: string; username: string; name: string }) => {
+    if (!person.username) return;
+    setAddingIds(prev => new Set(prev).add(person.id));
+    const result = await onSendRequest(person.username);
+    setAddingIds(prev => { const next = new Set(prev); next.delete(person.id); return next; });
+    if (result.success) {
+      showFeedback(`Request sent to ${person.name}!`, '#166534');
+    } else {
+      showFeedback(result.message, '#991b1b');
+    }
+  };
+
+  const avatarColors = ['#E0E7FF', '#DBEAFE', '#D1FAE5', '#FEF3C7', '#FCE7F3', '#EDE9FE', '#FFEDD5'];
+
+  return (
+    <View style={styles.section}>
+      {/* School link */}
+      {userSchool ? (
+        <TouchableOpacity
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: 'white',
+            borderRadius: 20,
+            padding: 16,
+            borderWidth: 2,
+            borderColor: '#F0E0D0',
+            marginBottom: 16,
+          }}
+          onPress={() => onSchoolOpen?.(userSchool)}
+          activeOpacity={0.7}
+        >
+          <View style={{
+            width: 44,
+            height: 44,
+            borderRadius: 14,
+            backgroundColor: `${colors.maroon}14`,
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginRight: 12,
+          }}>
+            <Ionicons name="school" size={22} color={colors.maroon} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 11, fontFamily: fonts.medium, color: colors.textTertiary }}>Your School</Text>
+            <Text style={{ fontSize: 15, fontFamily: fonts.semiBold, color: colors.textPrimary, marginTop: 2 }}>{userSchool}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+        </TouchableOpacity>
+      ) : null}
+
+      {/* Schoolmates to discover */}
+      {loadingDiscover ? (
+        <View style={styles.emptyCard}>
+          <ActivityIndicator size="small" color={colors.maroon} />
+          <Text style={[styles.emptyCardSub, { marginTop: 8 }]}>Finding classmates...</Text>
+        </View>
+      ) : schoolmates.length > 0 ? (
+        <>
+          <Text style={styles.sectionLabel}>People at Your School</Text>
+          {schoolmates.map((person, index) => (
+            <View
+              key={person.id}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: 'white',
+                borderRadius: 18,
+                padding: 14,
+                borderWidth: 2,
+                borderColor: '#F0E0D0',
+                marginBottom: 10,
+              }}
+            >
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}
+                onPress={() => onPersonOpen?.({
+                  id: person.id,
+                  name: person.name,
+                  color: avatarColors[index % avatarColors.length],
+                  status: 'offline',
+                  grade: person.grade,
+                  school: person.school,
+                })}
+                activeOpacity={0.7}
+              >
+                <View style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 14,
+                  backgroundColor: avatarColors[index % avatarColors.length],
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginRight: 12,
+                }}>
+                  <Ionicons name="person" size={18} color="#6366f1" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 14, fontFamily: fonts.semiBold, color: colors.textPrimary }}>{person.name}</Text>
+                  <Text style={{ fontSize: 12, fontFamily: fonts.regular, color: colors.textSecondary, marginTop: 1 }}>
+                    {person.username ? `@${person.username}` : ''}{person.grade ? ` • ${person.grade}` : ''}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  backgroundColor: colors.maroon,
+                  borderRadius: 14,
+                  paddingHorizontal: 14,
+                  paddingVertical: 8,
+                  gap: 4,
+                }}
+                onPress={() => handleAddFromDiscover(person)}
+                disabled={addingIds.has(person.id)}
+              >
+                {addingIds.has(person.id) ? (
+                  <ActivityIndicator size="small" color="white" />
+                ) : (
+                  <>
+                    <Ionicons name="person-add" size={14} color="white" />
+                    <Text style={{ fontSize: 12, fontFamily: fonts.bold, color: 'white' }}>Add</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          ))}
+        </>
+      ) : (
+        <View style={styles.emptyCard}>
+          <View style={styles.emptyIconLarge}>
+            <Ionicons name="compass-outline" size={36} color={colors.maroon} />
+          </View>
+          <Text style={styles.emptyCardTitle}>
+            {userSchool ? 'No new classmates to discover' : 'Discover classmates'}
+          </Text>
+          <Text style={styles.emptyCardSub}>
+            {userSchool
+              ? 'All your schoolmates are already in your friends list!'
+              : 'Set your school in your profile to discover classmates. You can also add friends using the + button above!'}
+          </Text>
+          <View style={styles.usernameShareCard}>
+            <Text style={styles.usernameShareLabel}>Your Username</Text>
+            <Text style={styles.usernameShareValue}>@{userUsername || 'not set'}</Text>
+          </View>
+        </View>
+      )}
+    </View>
+  );
+}
+
 export function FriendsScreen({
   onHome, onScan, onFiles, profilePicture, userName, userUsername,
   onPersonOpen, friends, friendRequests,
   onSendRequest, onAcceptRequest, onDeclineRequest, classes,
+  userSchool, onSchoolOpen,
 }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>('friends');
   const [searchQuery, setSearchQuery] = useState('');
@@ -132,7 +337,12 @@ export function FriendsScreen({
       }
       
       if (data) {
-        const formattedSessions: StudySession[] = data.map((session: any) => ({
+        // Only show sessions for classes the user is in, or sessions they created
+        const userClassTitles = classes.map(c => c.title.toLowerCase());
+        const filteredData = data.filter((session: any) =>
+          session.user_id === userId || userClassTitles.includes((session.course || '').toLowerCase())
+        );
+        const formattedSessions: StudySession[] = filteredData.map((session: any) => ({
           id: session.id?.toString() || `session-${Date.now()}-${Math.random()}`,
           title: session.title,
           course: session.course,
@@ -147,6 +357,11 @@ export function FriendsScreen({
       console.log(e);
     }
   };
+
+  // Load sessions on mount AND when tab is clicked
+  useEffect(() => {
+    fetchSessions();
+  }, []);
 
   useEffect(() => {
     if (activeTab === 'sessions') {
@@ -676,7 +891,10 @@ export function FriendsScreen({
                           <Ionicons name="pencil" size={12} color={colors.maroon} />
                           <Text style={styles.ownerActionText}>Edit</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity style={styles.ownerActionBtn} onPress={() => setUpcomingSessions((prev) => prev.filter((x) => x.id !== s.id))}>
+                        <TouchableOpacity style={styles.ownerActionBtn} onPress={async () => {
+                          await supabase.from('study_sessions').delete().eq('id', s.id);
+                          setUpcomingSessions((prev) => prev.filter((x) => x.id !== s.id));
+                        }}>
                           <Ionicons name="trash" size={12} color="#b91c1c" />
                           <Text style={styles.ownerActionDangerText}>Delete</Text>
                         </TouchableOpacity>
@@ -691,25 +909,15 @@ export function FriendsScreen({
 
         {/* ================== DISCOVER TAB ================== */}
         {activeTab === 'discover' && (
-          <View style={styles.section}>
-            <View style={styles.emptyCard}>
-              <View style={styles.emptyIconLarge}>
-                <Ionicons name="compass-outline" size={36} color={colors.maroon} />
-              </View>
-              <Text style={styles.emptyCardTitle}>Discover classmates</Text>
-              <Text style={styles.emptyCardSub}>
-                Share your username with classmates so they can add you as a friend. You can also add friends using the + button above!
-              </Text>
-              <View style={styles.usernameShareCard}>
-                <Text style={styles.usernameShareLabel}>Your Username</Text>
-                <Text style={styles.usernameShareValue}>@{userUsername || 'not set'}</Text>
-              </View>
-              <TouchableOpacity style={styles.emptyActionBtn} onPress={() => { setShowAddFriendModal(true); setSendResult(null); setFriendSearchUsername(''); }}>
-                <Ionicons name="person-add" size={16} color="white" />
-                <Text style={styles.emptyActionText}>Add by Username</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+          <DiscoverSection
+            userSchool={userSchool}
+            onSchoolOpen={onSchoolOpen}
+            onPersonOpen={onPersonOpen}
+            onSendRequest={onSendRequest}
+            showFeedback={showFeedback}
+            friends={friends}
+            userUsername={userUsername}
+          />
         )}
       </ScrollView>
 

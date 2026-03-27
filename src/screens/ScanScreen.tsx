@@ -43,6 +43,30 @@ function formatSize(sizeBytes?: number) {
   return `${Math.max(0.1, mb).toFixed(1)}MB`;
 }
 
+const MODE_CONFIG: Record<ScanMode, { title: string; subtitle: string; badge: string }> = {
+  notes: {
+    title: 'Scan Notes',
+    subtitle: 'Point your camera at handwritten or printed notes.',
+    badge: 'Notes scan',
+  },
+  document: {
+    title: 'Import Document',
+    subtitle: 'Upload PDFs, images, or text files from your device.',
+    badge: 'Document import',
+  },
+  whiteboard: {
+    title: 'Capture Whiteboard',
+    subtitle: 'Photograph a whiteboard — auto-enhances contrast & readability.',
+    badge: 'Whiteboard capture',
+  },
+};
+
+const MODE_PREFIX: Record<ScanMode, string> = {
+  notes: 'Notes',
+  document: 'Doc',
+  whiteboard: 'Whiteboard',
+};
+
 export function ScanScreen({ onHome, onFiles, onFriends, classes, onSaveScan }: Props) {
   const insets = useSafeAreaInsets();
   const [scanMode, setScanMode] = useState<ScanMode>('notes');
@@ -82,7 +106,7 @@ export function ScanScreen({ onHome, onFiles, onFriends, classes, onSaveScan }: 
       const asset = result.assets[0];
       setPending({
         uri: asset.uri,
-        name: `Scan_${Date.now()}.jpg`,
+        name: `${MODE_PREFIX[scanMode]}_${Date.now()}.jpg`,
         source: 'camera',
         pages: 1,
         sizeBytes: asset.fileSize,
@@ -194,36 +218,47 @@ export function ScanScreen({ onHome, onFiles, onFriends, classes, onSaveScan }: 
 
         {!pending ? (
           <View style={styles.capturePanel}>
-            <Text style={styles.captureTitle}>Capture or Import</Text>
-            <Text style={styles.captureSub}>Use your camera or bring files from your device.</Text>
+            <Text style={styles.captureTitle}>{MODE_CONFIG[scanMode].title}</Text>
+            <Text style={styles.captureSub}>{MODE_CONFIG[scanMode].subtitle}</Text>
 
             <View style={styles.captureActions}>
-              <AnimatedPressable style={styles.captureCard} onPress={handleCameraCapture} scaleDown={0.96}>
-                <View style={styles.captureIcon}><Ionicons name="camera" size={22} color={colors.maroon} /></View>
-                <View>
-                  <Text style={styles.captureCardTitle}>Camera</Text>
-                  <Text style={styles.captureCardSub}>Scan notes instantly</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} style={{ marginLeft: 'auto' }} />
-              </AnimatedPressable>
+              {/* Camera — available in Notes & Whiteboard */}
+              {(scanMode === 'notes' || scanMode === 'whiteboard') && (
+                <AnimatedPressable style={styles.captureCard} onPress={handleCameraCapture} scaleDown={0.96}>
+                  <View style={styles.captureIcon}><Ionicons name="camera" size={22} color={colors.maroon} /></View>
+                  <View>
+                    <Text style={styles.captureCardTitle}>Camera</Text>
+                    <Text style={styles.captureCardSub}>
+                      {scanMode === 'whiteboard' ? 'Snap a whiteboard photo' : 'Scan notes instantly'}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} style={{ marginLeft: 'auto' }} />
+                </AnimatedPressable>
+              )}
 
-              <AnimatedPressable style={styles.captureCard} onPress={handlePickFromLibrary} scaleDown={0.96}>
-                <View style={styles.captureIcon}><Ionicons name="images" size={22} color={colors.maroon} /></View>
-                <View>
-                  <Text style={styles.captureCardTitle}>Photos</Text>
-                  <Text style={styles.captureCardSub}>Import from gallery</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} style={{ marginLeft: 'auto' }} />
-              </AnimatedPressable>
+              {/* Photos — available in Notes & Document */}
+              {(scanMode === 'notes' || scanMode === 'document') && (
+                <AnimatedPressable style={styles.captureCard} onPress={handlePickFromLibrary} scaleDown={0.96}>
+                  <View style={styles.captureIcon}><Ionicons name="images" size={22} color={colors.maroon} /></View>
+                  <View>
+                    <Text style={styles.captureCardTitle}>Photos</Text>
+                    <Text style={styles.captureCardSub}>Import from gallery</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} style={{ marginLeft: 'auto' }} />
+                </AnimatedPressable>
+              )}
 
-              <AnimatedPressable style={styles.captureCard} onPress={handlePickDocument} scaleDown={0.96}>
-                <View style={styles.captureIcon}><Ionicons name="folder-open" size={22} color={colors.maroon} /></View>
-                <View>
-                  <Text style={styles.captureCardTitle}>Files</Text>
-                  <Text style={styles.captureCardSub}>PDF, image, text</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} style={{ marginLeft: 'auto' }} />
-              </AnimatedPressable>
+              {/* Files — available in Document only */}
+              {scanMode === 'document' && (
+                <AnimatedPressable style={styles.captureCard} onPress={handlePickDocument} scaleDown={0.96}>
+                  <View style={styles.captureIcon}><Ionicons name="folder-open" size={22} color={colors.maroon} /></View>
+                  <View>
+                    <Text style={styles.captureCardTitle}>Files</Text>
+                    <Text style={styles.captureCardSub}>PDF, image, text</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} style={{ marginLeft: 'auto' }} />
+                </AnimatedPressable>
+              )}
             </View>
           </View>
         ) : (
@@ -233,6 +268,10 @@ export function ScanScreen({ onHome, onFiles, onFriends, classes, onSaveScan }: 
                 <Ionicons name="checkmark-circle" size={20} color="#059669" />
               </View>
               <Text style={styles.pendingTitle}>Ready to Save</Text>
+            </View>
+            <View style={styles.modeBadge}>
+              <Ionicons name={modeIcon(scanMode)} size={12} color={colors.maroon} />
+              <Text style={styles.modeBadgeText}>{MODE_CONFIG[scanMode].badge}</Text>
             </View>
             <Text style={styles.pendingFileName}>{pending.name}</Text>
             <Text style={styles.pendingMeta}>
@@ -396,7 +435,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   pendingTitle: { fontSize: 18, fontFamily: fonts.bold, color: colors.textPrimary },
-  pendingFileName: { fontSize: 15, fontFamily: fonts.bold, color: colors.textPrimary, marginTop: 12 },
+  modeBadge: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    alignSelf: 'flex-start' as const,
+    gap: 5,
+    marginTop: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    backgroundColor: `${colors.maroon}12`,
+  },
+  modeBadgeText: { fontSize: 11, fontFamily: fonts.semiBold, color: colors.maroon },
+  pendingFileName: { fontSize: 15, fontFamily: fonts.bold, color: colors.textPrimary, marginTop: 8 },
   pendingMeta: { fontSize: 12, color: colors.textSecondary, marginTop: 3, fontFamily: fonts.regular },
   destinationTitle: { fontSize: 12, fontFamily: fonts.bold, color: colors.textSecondary, marginTop: 16, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
   destinationRow: { gap: 8 },

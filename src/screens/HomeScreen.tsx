@@ -14,6 +14,7 @@ import {
   Platform,
   Animated,
   Easing,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -22,6 +23,8 @@ import { AnimatedPressable } from '../components/AnimatedPressable';
 import { colors, fonts } from '../theme';
 import type { ClassData, FriendData, UserData, UnitData } from '../types';
 import { friendsDirectory } from '../data/friends';
+import { supabase } from '../lib/supabase';
+import DateTimePickerModal from 'react-native-modal-datetime-picker';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const CARD_WIDTH = SCREEN_WIDTH - 48 - 56;
@@ -29,7 +32,7 @@ const CARD_GAP = 14;
 
 type SearchFilter = 'all' | 'classes' | 'files' | 'friends' | 'actions';
 type ShortcutType = 'class' | 'friend' | 'scan' | 'files';
-type ClassTemplate = 'Standard' | 'AP Exam' | 'Lab' | 'Seminar';
+type ClassTemplate = 'Standard' | 'AP Class';
 
 type SearchResult =
   | { id: string; type: 'class'; title: string; subtitle: string; classId: string }
@@ -60,10 +63,73 @@ interface Props {
   onRemoveClass: (id: string) => void;
   shortcuts: ShortcutItem[];
   onUpdateShortcuts: (shortcuts: ShortcutItem[]) => void;
+  onSchoolOpen?: (schoolName: string) => void;
 }
 
 const blocks = ['Block 1', 'Block 2', 'Block 3', 'Block 4', 'Block 5', 'Block 6', 'Block 7', 'Block 8'];
-const classGoals = ['Notes', 'Projects', 'Exam Prep', 'Labs'];
+const classGoals = ['Notes', 'Projects', 'Exam Prep', 'Study Groups'];
+
+const AP_COURSES = [
+  'AP Biology', 'AP Chemistry', 'AP Physics 1', 'AP Physics 2',
+  'AP Physics C: Mechanics', 'AP Physics C: E&M',
+  'AP Calculus AB', 'AP Calculus BC', 'AP Statistics',
+  'AP Computer Science A', 'AP Computer Science Principles',
+  'AP English Language', 'AP English Literature',
+  'AP US History', 'AP World History', 'AP European History',
+  'AP Government', 'AP Macroeconomics', 'AP Microeconomics',
+  'AP Psychology', 'AP Environmental Science',
+  'AP Human Geography', 'AP Spanish', 'AP French', 'AP Art History',
+];
+
+const AP_COURSE_UNITS: Record<string, string[]> = {
+  'AP Biology': ['Unit 1: Chemistry of Life', 'Unit 2: Cell Structure', 'Unit 3: Cellular Energetics'],
+  'AP Chemistry': ['Unit 1: Atomic Structure', 'Unit 2: Molecular Bonding', 'Unit 3: Intermolecular Forces'],
+  'AP Physics 1': ['Unit 1: Kinematics', 'Unit 2: Dynamics', 'Unit 3: Energy & Momentum'],
+  'AP Physics 2': ['Unit 1: Fluids', 'Unit 2: Thermodynamics', 'Unit 3: Electric Force & Fields'],
+  'AP Physics C: Mechanics': ['Unit 1: Kinematics', 'Unit 2: Newton\'s Laws', 'Unit 3: Work, Energy & Power'],
+  'AP Physics C: E&M': ['Unit 1: Electrostatics', 'Unit 2: Conductors & Capacitors', 'Unit 3: Circuits'],
+  'AP Calculus AB': ['Unit 1: Limits & Continuity', 'Unit 2: Differentiation', 'Unit 3: Integration'],
+  'AP Calculus BC': ['Unit 1: Limits & Continuity', 'Unit 2: Advanced Differentiation', 'Unit 3: Integration Techniques'],
+  'AP Statistics': ['Unit 1: Exploring Data', 'Unit 2: Sampling & Experimentation', 'Unit 3: Probability'],
+  'AP Computer Science A': ['Unit 1: Primitive Types', 'Unit 2: Objects & Classes', 'Unit 3: Arrays & ArrayLists'],
+  'AP Computer Science Principles': ['Unit 1: Creative Development', 'Unit 2: Data', 'Unit 3: Algorithms'],
+  'AP English Language': ['Unit 1: Rhetorical Analysis', 'Unit 2: Argumentation', 'Unit 3: Synthesis'],
+  'AP English Literature': ['Unit 1: Short Fiction', 'Unit 2: Poetry', 'Unit 3: Longer Fiction'],
+  'AP US History': ['Unit 1: Colonial America', 'Unit 2: Revolution & Constitution', 'Unit 3: Expansion & Reform'],
+  'AP World History': ['Unit 1: Ancient Civilizations', 'Unit 2: Networks of Exchange', 'Unit 3: Land-Based Empires'],
+  'AP European History': ['Unit 1: Renaissance & Reformation', 'Unit 2: Absolutism', 'Unit 3: Revolutions'],
+  'AP Government': ['Unit 1: Foundations of Democracy', 'Unit 2: Interactions Among Branches', 'Unit 3: Civil Liberties'],
+  'AP Macroeconomics': ['Unit 1: Basic Economic Concepts', 'Unit 2: GDP & Unemployment', 'Unit 3: Monetary Policy'],
+  'AP Microeconomics': ['Unit 1: Supply & Demand', 'Unit 2: Production & Costs', 'Unit 3: Market Structures'],
+  'AP Psychology': ['Unit 1: Scientific Foundations', 'Unit 2: Biological Bases', 'Unit 3: Sensation & Perception'],
+  'AP Environmental Science': ['Unit 1: The Living World', 'Unit 2: Populations', 'Unit 3: Land & Water Use'],
+  'AP Human Geography': ['Unit 1: Thinking Geographically', 'Unit 2: Population & Migration', 'Unit 3: Cultural Patterns'],
+  'AP Spanish': ['Unit 1: Families & Communities', 'Unit 2: Personal & Public Identities', 'Unit 3: Science & Technology'],
+  'AP French': ['Unit 1: Families & Communities', 'Unit 2: Personal & Public Identities', 'Unit 3: Beauty & Aesthetics'],
+  'AP Art History': ['Unit 1: Global Prehistory', 'Unit 2: Ancient Mediterranean', 'Unit 3: Early Europe & Americas'],
+};
+
+function buildStarterUnits(template: ClassTemplate, apCourse?: string): UnitData[] {
+  const base =
+    template === 'AP Class' && apCourse && AP_COURSE_UNITS[apCourse]
+      ? AP_COURSE_UNITS[apCourse]
+      : template === 'AP Class'
+        ? ['Unit 1 Review', 'Unit 2 Review', 'Unit 3 Review']
+        : ['Unit 1', 'Unit 2', 'Unit 3'];
+
+  return base.map((title, idx) => ({
+    id: idx + 1,
+    title,
+    pages: 0,
+    collaborators: 0,
+    examDate: 'TBD',
+    daysLeft: 0,
+    subUnits: [
+      { id: `${idx + 1}.1`, title: 'Core Concepts', notes: [] },
+      { id: `${idx + 1}.2`, title: 'Resources', notes: [] },
+    ],
+  }));
+}
 
 function makeClassCode(title: string) {
   const prefix = title
@@ -79,30 +145,6 @@ function makeClassCode(title: string) {
 
 function normalizeClassCode(code: string) {
   return code.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-}
-
-function buildStarterUnits(template: ClassTemplate): UnitData[] {
-  const base =
-    template === 'AP Exam'
-      ? ['Unit 1 Review', 'Unit 2 Review', 'Practice FRQ']
-      : template === 'Lab'
-        ? ['Lab Setup', 'Lab Notebook', 'Lab Analysis']
-        : template === 'Seminar'
-          ? ['Discussion 1', 'Reading Circle', 'Final Reflection']
-          : ['Week 1', 'Week 2', 'Week 3'];
-
-  return base.map((title, idx) => ({
-    id: idx + 1,
-    title,
-    pages: 0,
-    collaborators: 0,
-    examDate: 'TBD',
-    daysLeft: 0,
-    subUnits: [
-      { id: `${idx + 1}.1`, title: 'Core Concepts', notes: [] },
-      { id: `${idx + 1}.2`, title: 'Resources', notes: [] },
-    ],
-  }));
 }
 
 export function HomeScreen({
@@ -121,6 +163,7 @@ export function HomeScreen({
   onRemoveClass,
   shortcuts,
   onUpdateShortcuts,
+  onSchoolOpen,
 }: Props) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFilter, setSearchFilter] = useState<SearchFilter>('all');
@@ -141,10 +184,132 @@ export function HomeScreen({
   const [newClassColor, setNewClassColor] = useState(colors.maroon);
   const [newClassGoal, setNewClassGoal] = useState('Notes');
   const [newClassImage, setNewClassImage] = useState<string | null>(null);
+  const [selectedAPCourse, setSelectedAPCourse] = useState<string | null>(null);
+  const [showAPPicker, setShowAPPicker] = useState(false);
+  const [apSearchQuery, setApSearchQuery] = useState('');
   const [showJoinClassModal, setShowJoinClassModal] = useState(false);
   const [joinClassCode, setJoinClassCode] = useState('');
   const [joinClassStatus, setJoinClassStatus] = useState('');
   const [showTitleModal, setShowTitleModal] = useState(false);
+
+  // === Tasks ===
+  interface TaskItem { id: number; title: string; classId: string | null; done: boolean; date: string; dueDate: string | null; supaId?: string; }
+  const [tasks, setTasks] = useState<TaskItem[]>([]);
+  const [showAddTask, setShowAddTask] = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskClassId, setNewTaskClassId] = useState<string | null>(null);
+  const [newTaskDueDate, setNewTaskDueDate] = useState<string | null>(null);
+  const [showTaskDatePicker, setShowTaskDatePicker] = useState(false);
+  const [editingTask, setEditingTask] = useState<TaskItem | null>(null);
+  const [editTaskTitle, setEditTaskTitle] = useState('');
+  const [editTaskClassId, setEditTaskClassId] = useState<string | null>(null);
+  const [editTaskDueDate, setEditTaskDueDate] = useState<string | null>(null);
+  const [showEditTaskDatePicker, setShowEditTaskDatePicker] = useState(false);
+
+  const formatToday = () => {
+    const d = new Date();
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
+  // Load tasks from Supabase on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data: userData } = await supabase.auth.getUser();
+        if (!userData?.user?.id) return;
+        const { data, error } = await supabase
+          .from('homework_tasks')
+          .select('*')
+          .eq('user_id', userData.user.id)
+          .order('created_at', { ascending: false });
+        if (error) { console.log('Error loading tasks:', error); return; }
+        if (data) {
+          setTasks(data.map((row: any) => ({
+            id: row.id,
+            title: row.title,
+            classId: row.class_id || null,
+            done: row.done ?? false,
+            date: row.date_label || '',
+            dueDate: row.due_date || null,
+            supaId: String(row.id),
+          })));
+        }
+      } catch (e) { console.log('Task load error:', e); }
+    })();
+  }, []);
+
+  const formatDueDate = (iso: string) => {
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
+  const saveTask = async () => {
+    if (!newTaskTitle.trim()) return;
+    const dateLabel = formatToday();
+    const localId = Date.now();
+    const newItem: TaskItem = { id: localId, title: newTaskTitle.trim(), classId: newTaskClassId, done: false, date: dateLabel, dueDate: newTaskDueDate };
+    setTasks((prev) => [newItem, ...prev]);
+    setNewTaskTitle('');
+    setNewTaskClassId(null);
+    setNewTaskDueDate(null);
+    setShowAddTask(false);
+
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData?.user?.id;
+      const { data, error } = await supabase.from('homework_tasks').insert({
+        title: newItem.title,
+        class_id: newItem.classId,
+        done: false,
+        date_label: dateLabel,
+        due_date: newTaskDueDate,
+        user_id: userId,
+      }).select().single();
+      if (error) console.log('Error saving task:', error);
+      if (data) setTasks((prev) => prev.map((t) => t.id === localId ? { ...t, supaId: String(data.id) } : t));
+    } catch (e) { console.log(e); }
+  };
+
+  const openEditTask = (task: TaskItem) => {
+    setEditingTask(task);
+    setEditTaskTitle(task.title);
+    setEditTaskClassId(task.classId);
+    setEditTaskDueDate(task.dueDate);
+  };
+
+  const saveEditTask = async () => {
+    if (!editingTask || !editTaskTitle.trim()) return;
+    const id = editingTask.id;
+    setTasks((prev) => prev.map((t) => t.id === id ? { ...t, title: editTaskTitle.trim(), classId: editTaskClassId, dueDate: editTaskDueDate } : t));
+    setEditingTask(null);
+    try {
+      if (editingTask.supaId) {
+        await supabase.from('homework_tasks').update({
+          title: editTaskTitle.trim(),
+          class_id: editTaskClassId,
+          due_date: editTaskDueDate,
+        }).eq('id', editingTask.supaId);
+      }
+    } catch (e) { console.log(e); }
+  };
+
+  const toggleTask = async (id: number) => {
+    const task = tasks.find((t) => t.id === id);
+    if (!task) return;
+    const newDone = !task.done;
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, done: newDone } : t)));
+    try {
+      if (task.supaId) await supabase.from('homework_tasks').update({ done: newDone }).eq('id', task.supaId);
+    } catch (e) { console.log(e); }
+  };
+
+  const removeTask = async (id: number) => {
+    const task = tasks.find((t) => t.id === id);
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+    try {
+      if (task?.supaId) await supabase.from('homework_tasks').delete().eq('id', task.supaId);
+    } catch (e) { console.log(e); }
+  };
 
   const flatListRef = useRef<FlatList>(null);
 
@@ -366,6 +531,11 @@ export function HomeScreen({
 
   const runShortcut = (item: ShortcutItem) => {
     if (item.type === 'class' && item.refId) {
+      const classExists = classes.some(c => c.id === item.refId);
+      if (!classExists) {
+        Alert.alert('Class Not Found', 'This class has been deleted. You can remove this shortcut.');
+        return;
+      }
       onCourseOpen(item.refId);
       return;
     }
@@ -378,6 +548,23 @@ export function HomeScreen({
       return;
     }
     onScanOpen();
+  };
+
+  const longPressShortcut = (item: ShortcutItem) => {
+    Alert.alert(
+      item.label,
+      'What would you like to do with this shortcut?',
+      [
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            setShortcuts(shortcuts.filter(s => s.id !== item.id));
+          },
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
   };
 
   const saveShortcut = () => {
@@ -410,6 +597,9 @@ export function HomeScreen({
     setNewClassColor(colors.maroon);
     setNewClassGoal('Notes');
     setNewClassImage(null);
+    setSelectedAPCourse(null);
+    setApSearchQuery('');
+    setShowAPPicker(false);
     setShowClassModal(true);
   };
 
@@ -433,17 +623,13 @@ export function HomeScreen({
     const title = newClassName.trim() || 'New Class';
 
     const templateImage =
-      newClassTemplate === 'AP Exam'
+      newClassTemplate === 'AP Class'
         ? 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=600&h=500&fit=crop'
-        : newClassTemplate === 'Lab'
-          ? 'https://images.unsplash.com/photo-1532187863486-abf9dbad1b69?w=600&h=500&fit=crop'
-          : newClassTemplate === 'Seminar'
-            ? 'https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=600&h=500&fit=crop'
-            : 'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?w=600&h=500&fit=crop';
+        : 'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?w=600&h=500&fit=crop';
 
     const newClass: ClassData = {
       id: Date.now().toString(),
-      title,
+      title: newClassTemplate === 'AP Class' && selectedAPCourse ? selectedAPCourse : title,
       block: newClassBlock,
       classCode: makeClassCode(title),
       image: newClassImage || templateImage,
@@ -453,16 +639,35 @@ export function HomeScreen({
       color: newClassColor,
       description: `${newClassTemplate} setup • Focus: ${newClassGoal}`,
       files: [],
-      units: buildStarterUnits(newClassTemplate),
+      units: buildStarterUnits(newClassTemplate, selectedAPCourse || undefined),
     };
 
-    onAddClass(newClass);
-    setShowClassModal(false);
-    setCurrentCardIndex(classes.length);
-    showSuccessToast(`${title} created! 🎉`);
-    setTimeout(() => {
-      flatListRef.current?.scrollToOffset({ offset: classes.length * (CARD_WIDTH + CARD_GAP), animated: true });
-    }, 120);
+    const finishCreate = (replaceId?: string) => {
+      if (replaceId) onRemoveClass(replaceId);
+      onAddClass(newClass);
+      setShowClassModal(false);
+      setCurrentCardIndex(replaceId ? classes.length - 1 : classes.length);
+      showSuccessToast(`${newClass.title} created! 🎉`);
+      setTimeout(() => {
+        flatListRef.current?.scrollToOffset({ offset: (replaceId ? classes.length - 1 : classes.length) * (CARD_WIDTH + CARD_GAP), animated: true });
+      }, 120);
+    };
+
+    // Check for block conflict
+    const existing = classes.find((c) => c.block === newClassBlock);
+    if (existing) {
+      Alert.alert(
+        `${newClassBlock} already has a class`,
+        `"${existing.title}" is already in ${newClassBlock}. What would you like to do?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Replace', style: 'destructive', onPress: () => finishCreate(existing.id) },
+          { text: 'Keep Both', onPress: () => finishCreate() },
+        ]
+      );
+    } else {
+      finishCreate();
+    }
   };
 
   const handleSearchSelect = (item: SearchResult) => {
@@ -488,7 +693,7 @@ export function HomeScreen({
     setShowJoinClassModal(true);
   };
 
-  const joinExistingClass = () => {
+  const joinExistingClass = async () => {
     const normalized = normalizeClassCode(joinClassCode.trim());
 
     if (!normalized) {
@@ -496,16 +701,41 @@ export function HomeScreen({
       return;
     }
 
-    const match = classes.find((cls) => normalizeClassCode(cls.classCode) === normalized);
-
-    if (!match) {
-      setJoinClassStatus('Class code not found. Check it and try again.');
+    // Check if user already has this class
+    const localMatch = classes.find((cls) => normalizeClassCode(cls.classCode) === normalized);
+    if (localMatch) {
+      setShowJoinClassModal(false);
+      setJoinClassStatus('');
+      onCourseOpen(localMatch.id);
       return;
     }
 
-    setShowJoinClassModal(false);
-    setJoinClassStatus('');
-    onCourseOpen(match.id);
+    // Search ALL classes in Supabase
+    setJoinClassStatus('Looking up class code...');
+    try {
+      const { data, error } = await supabase.from('user_classes').select('class_data');
+      if (error) {
+        setJoinClassStatus('Something went wrong. Try again.');
+        return;
+      }
+      const found = data?.find((row: any) => {
+        const code = row.class_data?.classCode;
+        return code && normalizeClassCode(code) === normalized;
+      });
+      if (!found) {
+        setJoinClassStatus('Class code not found. Check it and try again.');
+        return;
+      }
+      const classData = found.class_data as ClassData;
+      // Give the joined class a new local ID to avoid conflicts
+      const joinedClass: ClassData = { ...classData, id: Date.now().toString(), classmates: (classData.classmates || 0) + 1 };
+      onAddClass(joinedClass);
+      setShowJoinClassModal(false);
+      setJoinClassStatus('');
+      showSuccessToast(`Joined ${joinedClass.title}! 🎉`);
+    } catch (e) {
+      setJoinClassStatus('Something went wrong. Try again.');
+    }
   };
 
   return (
@@ -625,7 +855,7 @@ export function HomeScreen({
             </AnimatedPressable>
 
             {shortcuts.map((shortcut) => (
-              <AnimatedPressable key={shortcut.id} style={styles.shortcut} onPress={() => runShortcut(shortcut)} scaleDown={0.92}>
+              <AnimatedPressable key={shortcut.id} style={styles.shortcut} onPress={() => runShortcut(shortcut)} onLongPress={() => longPressShortcut(shortcut)} scaleDown={0.92}>
                 <Ionicons name={shortcutIcon(shortcut)} size={16} color={colors.maroon} />
                 <Text style={styles.shortcutLabel} numberOfLines={1}>
                   {shortcut.label}
@@ -659,6 +889,16 @@ export function HomeScreen({
             snapToAlignment="start"
             decelerationRate="fast"
             showsHorizontalScrollIndicator={false}
+            nestedScrollEnabled
+            initialNumToRender={3}
+            maxToRenderPerBatch={3}
+            windowSize={3}
+            removeClippedSubviews={false}
+            getItemLayout={(data, index) => ({
+              length: CARD_WIDTH + CARD_GAP,
+              offset: (CARD_WIDTH + CARD_GAP) * index,
+              index,
+            })}
             contentContainerStyle={styles.carouselContent}
             onMomentumScrollEnd={(e) => {
               const index = Math.round(e.nativeEvent.contentOffset.x / (CARD_WIDTH + CARD_GAP));
@@ -753,6 +993,149 @@ export function HomeScreen({
             ))}
           </View>
         </Animated.View>
+
+        {/* Schedule & Tasks Section */}
+        <View style={{ marginTop: 28 }}>
+          <Text style={styles.sectionTitle}>My Schedule</Text>
+
+          {/* Block Schedule Row */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 12 }} contentContainerStyle={{ gap: 10, paddingRight: 24 }}>
+            {blocks.map((block) => {
+              const blockClasses = classes.filter((c) => c.block === block);
+              return (
+                <View key={block} style={[styles.blockCard, blockClasses.length > 0 && { borderColor: blockClasses[0].color }]}>
+                  <Text style={[styles.blockLabel, blockClasses.length > 0 && { color: blockClasses[0].color }]}>{block}</Text>
+                  {blockClasses.length === 0 ? (
+                    <Text style={styles.blockClass} numberOfLines={1}>Free</Text>
+                  ) : blockClasses.length === 1 ? (
+                    <Text style={styles.blockClass} numberOfLines={1}>{blockClasses[0].title}</Text>
+                  ) : (
+                    <View style={{ gap: 2 }}>
+                      {blockClasses.map((bc) => (
+                        <Text key={bc.id} style={[styles.blockClass, { fontSize: 10 }]} numberOfLines={1}>{bc.title}</Text>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </ScrollView>
+
+          {/* Tasks */}
+          <View style={{ marginTop: 20 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={styles.schedSubTitle}>📝 Tasks & Homework</Text>
+              <TouchableOpacity onPress={() => setShowAddTask(true)} style={styles.addTaskBtn}>
+                <Ionicons name="add" size={16} color="white" />
+                <Text style={styles.addTaskBtnText}>Add</Text>
+              </TouchableOpacity>
+            </View>
+
+            {tasks.length === 0 && !showAddTask ? (
+              <View style={styles.emptyTasks}>
+                <Ionicons name="checkmark-done" size={28} color={colors.textTertiary} />
+                <Text style={styles.emptyTasksText}>No tasks yet — add homework or to-dos above.</Text>
+              </View>
+            ) : (
+              <View style={{ marginTop: 10, gap: 8 }}>
+                {tasks.map((task) => {
+                  const taskClass = classes.find((c) => c.id === task.classId);
+                  return (
+                    <View key={task.id} style={[styles.taskRow, task.done && styles.taskRowDone]}>
+                      <TouchableOpacity onPress={() => toggleTask(task.id)} style={styles.taskCheck}>
+                        <Ionicons name={task.done ? 'checkmark-circle' : 'ellipse-outline'} size={22} color={task.done ? '#059669' : colors.textTertiary} />
+                      </TouchableOpacity>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.taskTitle, task.done && styles.taskTitleDone]}>{task.title}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 }}>
+                          {taskClass && (
+                            <View style={[styles.taskClassPill, { backgroundColor: `${taskClass.color}14` }]}>
+                              <Text style={[styles.taskClassPillText, { color: taskClass.color }]}>{taskClass.title}</Text>
+                            </View>
+                          )}
+                          {task.dueDate && (
+                            <View style={styles.dueDatePill}>
+                              <Ionicons name="calendar-outline" size={10} color="#b45309" />
+                              <Text style={styles.dueDateText}>Due {formatDueDate(task.dueDate)}</Text>
+                            </View>
+                          )}
+                          <Text style={styles.taskDate}>{task.date}</Text>
+                        </View>
+                      </View>
+                      <TouchableOpacity onPress={() => openEditTask(task)} hitSlop={8} style={{ marginRight: 8 }}>
+                        <Ionicons name="pencil-outline" size={15} color={colors.textTertiary} />
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => removeTask(task.id)} hitSlop={8}>
+                        <Ionicons name="trash-outline" size={16} color={colors.textTertiary} />
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+
+            {showAddTask && (
+              <View style={styles.addTaskRow}>
+                <TextInput
+                  style={styles.addTaskInput}
+                  placeholder="What's due?"
+                  placeholderTextColor={colors.textTertiary}
+                  value={newTaskTitle}
+                  onChangeText={setNewTaskTitle}
+                  autoFocus
+                />
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }} contentContainerStyle={{ gap: 6 }}>
+                  <TouchableOpacity
+                    style={[styles.taskClassChip, !newTaskClassId && styles.taskClassChipActive]}
+                    onPress={() => setNewTaskClassId(null)}
+                  >
+                    <Text style={[styles.taskClassChipText, !newTaskClassId && styles.taskClassChipTextActive]}>None</Text>
+                  </TouchableOpacity>
+                  {classes.map((cls) => (
+                    <TouchableOpacity
+                      key={cls.id}
+                      style={[styles.taskClassChip, newTaskClassId === cls.id && styles.taskClassChipActive]}
+                      onPress={() => setNewTaskClassId(cls.id)}
+                    >
+                      <Text style={[styles.taskClassChipText, newTaskClassId === cls.id && styles.taskClassChipTextActive]}>{cls.title}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+                <TouchableOpacity
+                  style={styles.dueDatePickerBtn}
+                  onPress={() => setShowTaskDatePicker(true)}
+                >
+                  <Ionicons name="calendar-outline" size={14} color={newTaskDueDate ? '#b45309' : colors.textTertiary} />
+                  <Text style={[styles.dueDatePickerText, newTaskDueDate && { color: '#b45309' }]}>
+                    {newTaskDueDate ? `Due ${formatDueDate(newTaskDueDate)}` : 'Set due date'}
+                  </Text>
+                  {newTaskDueDate && (
+                    <TouchableOpacity onPress={() => setNewTaskDueDate(null)} hitSlop={6}>
+                      <Ionicons name="close-circle" size={14} color={colors.textTertiary} />
+                    </TouchableOpacity>
+                  )}
+                </TouchableOpacity>
+                <DateTimePickerModal
+                  isVisible={showTaskDatePicker}
+                  mode="date"
+                  onConfirm={(date) => {
+                    setNewTaskDueDate(date.toISOString());
+                    setShowTaskDatePicker(false);
+                  }}
+                  onCancel={() => setShowTaskDatePicker(false)}
+                />
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                  <TouchableOpacity style={styles.cancelTaskBtn} onPress={() => { setShowAddTask(false); setNewTaskTitle(''); setNewTaskDueDate(null); }}>
+                    <Text style={styles.cancelTaskBtnText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.saveTaskBtn, !newTaskTitle.trim() && { opacity: 0.5 }]} onPress={saveTask} disabled={!newTaskTitle.trim()}>
+                    <Text style={styles.saveTaskBtnText}>Save</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </View>
+        </View>
 
         <Animated.View style={{ opacity: sectionFade3, transform: [{ translateY: sectionSlide3 }] }}>
           <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Overview</Text>
@@ -943,6 +1326,43 @@ export function HomeScreen({
                   <Text style={styles.modalSaveBtnText}>Save</Text>
                 </TouchableOpacity>
               </View>
+            ) : showAPPicker ? (
+              <View style={styles.modalCardLarge}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Choose AP Course</Text>
+                  <TouchableOpacity onPress={() => setShowAPPicker(false)}>
+                    <Ionicons name="close" size={22} color={colors.textPrimary} />
+                  </TouchableOpacity>
+                </View>
+                <Text style={{ fontSize: 13, color: colors.textSecondary, fontFamily: fonts.regular, marginBottom: 12 }}>Pick your AP course to personalize units.</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="Search AP courses..."
+                  placeholderTextColor={colors.textTertiary}
+                  value={apSearchQuery}
+                  onChangeText={setApSearchQuery}
+                  autoFocus
+                />
+                <ScrollView style={{ marginTop: 12 }} showsVerticalScrollIndicator={false}>
+                  <View style={styles.optionRow}>
+                    {AP_COURSES
+                      .filter((c) => c.toLowerCase().includes(apSearchQuery.toLowerCase()))
+                      .map((course) => (
+                        <TouchableOpacity
+                          key={course}
+                          style={[styles.pickChip, selectedAPCourse === course && styles.pickChipActive]}
+                          onPress={() => {
+                            setSelectedAPCourse(course);
+                            setNewClassName(course);
+                            setShowAPPicker(false);
+                          }}
+                        >
+                          <Text style={[styles.pickChipText, selectedAPCourse === course && styles.pickChipTextActive]}>{course}</Text>
+                        </TouchableOpacity>
+                      ))}
+                  </View>
+                </ScrollView>
+              </View>
             ) : (
               <View style={styles.modalCardLarge}>
                 <View style={styles.modalHeader}>
@@ -986,15 +1406,27 @@ export function HomeScreen({
 
                   <Text style={styles.modalLabel}>Template</Text>
                   <View style={styles.optionRow}>
-                    {(['Standard', 'AP Exam', 'Lab', 'Seminar'] as ClassTemplate[]).map((template) => (
+                    {(['Standard', 'AP Class'] as ClassTemplate[]).map((template) => (
                       <TouchableOpacity
                         key={template}
                         style={[styles.pickChip, newClassTemplate === template && styles.pickChipActive]}
-                        onPress={() => setNewClassTemplate(template)}
+                        onPress={() => {
+                          setNewClassTemplate(template);
+                          if (template === 'AP Class') { setShowAPPicker(true); setApSearchQuery(''); }
+                          else { setSelectedAPCourse(null); setApSearchQuery(''); }
+                        }}
                       >
                         <Text style={[styles.pickChipText, newClassTemplate === template && styles.pickChipTextActive]}>{template}</Text>
                       </TouchableOpacity>
                     ))}
+                    {newClassTemplate === 'AP Class' && selectedAPCourse && (
+                      <TouchableOpacity
+                        style={[styles.pickChip, { borderColor: colors.maroon, backgroundColor: `${colors.maroon}12` }]}
+                        onPress={() => { setShowAPPicker(true); setApSearchQuery(''); }}
+                      >
+                        <Text style={[styles.pickChipText, { color: colors.maroon }]}>{selectedAPCourse} ✏️</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
 
                   <Text style={styles.modalLabel}>Primary Focus</Text>
@@ -1027,6 +1459,78 @@ export function HomeScreen({
                 </ScrollView>
               </View>
             )}
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Edit Task Modal */}
+      <Modal visible={!!editingTask} transparent animationType="fade" onRequestClose={() => setEditingTask(null)}>
+        <KeyboardAvoidingView style={styles.modalKeyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.modalBackdrop}>
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Edit Task</Text>
+                <TouchableOpacity onPress={() => setEditingTask(null)}>
+                  <Ionicons name="close" size={22} color={colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
+              <TextInput
+                style={styles.modalInput}
+                value={editTaskTitle}
+                onChangeText={setEditTaskTitle}
+                placeholder="Task name"
+                placeholderTextColor={colors.textTertiary}
+                autoFocus
+              />
+              <Text style={styles.modalLabel}>Class</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+                <TouchableOpacity
+                  style={[styles.taskClassChip, !editTaskClassId && styles.taskClassChipActive]}
+                  onPress={() => setEditTaskClassId(null)}
+                >
+                  <Text style={[styles.taskClassChipText, !editTaskClassId && styles.taskClassChipTextActive]}>None</Text>
+                </TouchableOpacity>
+                {classes.map((cls) => (
+                  <TouchableOpacity
+                    key={cls.id}
+                    style={[styles.taskClassChip, editTaskClassId === cls.id && styles.taskClassChipActive]}
+                    onPress={() => setEditTaskClassId(cls.id)}
+                  >
+                    <Text style={[styles.taskClassChipText, editTaskClassId === cls.id && styles.taskClassChipTextActive]}>{cls.title}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+              <TouchableOpacity
+                style={[styles.dueDatePickerBtn, { marginTop: 12 }]}
+                onPress={() => setShowEditTaskDatePicker(true)}
+              >
+                <Ionicons name="calendar-outline" size={14} color={editTaskDueDate ? '#b45309' : colors.textTertiary} />
+                <Text style={[styles.dueDatePickerText, editTaskDueDate && { color: '#b45309' }]}>
+                  {editTaskDueDate ? `Due ${formatDueDate(editTaskDueDate)}` : 'Set due date'}
+                </Text>
+                {editTaskDueDate && (
+                  <TouchableOpacity onPress={() => setEditTaskDueDate(null)} hitSlop={6}>
+                    <Ionicons name="close-circle" size={14} color={colors.textTertiary} />
+                  </TouchableOpacity>
+                )}
+              </TouchableOpacity>
+              <DateTimePickerModal
+                isVisible={showEditTaskDatePicker}
+                mode="date"
+                onConfirm={(date) => {
+                  setEditTaskDueDate(date.toISOString());
+                  setShowEditTaskDatePicker(false);
+                }}
+                onCancel={() => setShowEditTaskDatePicker(false)}
+              />
+              <TouchableOpacity
+                style={[styles.modalSaveBtn, { marginTop: 16 }, !editTaskTitle.trim() && { opacity: 0.5 }]}
+                onPress={saveEditTask}
+                disabled={!editTaskTitle.trim()}
+              >
+                <Text style={styles.modalSaveBtnText}>Save Changes</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -1209,4 +1713,77 @@ const styles = StyleSheet.create({
   colorRow: { flexDirection: 'row', gap: 12, marginTop: 8 },
   colorDot: { width: 30, height: 30, borderRadius: 12, borderWidth: 3, borderColor: 'transparent' },
   colorDotActive: { borderColor: '#111' },
+  // === Schedule & Tasks ===
+  blockCard: {
+    width: 100,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+    backgroundColor: 'white',
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+    alignItems: 'center',
+  },
+  blockLabel: { fontSize: 11, fontFamily: fonts.bold, color: colors.textTertiary, letterSpacing: 0.5 },
+  blockClass: { fontSize: 13, fontFamily: fonts.semiBold, color: colors.textPrimary, marginTop: 4, textAlign: 'center' },
+  schedSubTitle: { fontSize: 16, fontFamily: fonts.bold, color: colors.textPrimary },
+  addTaskBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.maroon,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 14,
+  },
+  addTaskBtnText: { color: 'white', fontSize: 12, fontFamily: fonts.bold },
+  emptyTasks: {
+    marginTop: 14,
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 24,
+    backgroundColor: 'white',
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+  },
+  emptyTasksText: { fontSize: 13, color: colors.textTertiary, fontFamily: fonts.medium, textAlign: 'center' },
+  taskRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'white',
+    padding: 14,
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+  },
+  taskRowDone: { opacity: 0.55 },
+  taskCheck: { width: 28 },
+  taskTitle: { fontSize: 14, fontFamily: fonts.semiBold, color: colors.textPrimary },
+  taskTitleDone: { textDecorationLine: 'line-through', color: colors.textTertiary },
+  taskClassPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
+  taskClassPillText: { fontSize: 10, fontFamily: fonts.bold },
+  taskDate: { fontSize: 10, color: colors.textTertiary, fontFamily: fonts.medium },
+  addTaskRow: {
+    marginTop: 10,
+    backgroundColor: 'white',
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+    padding: 14,
+  },
+  addTaskInput: { height: 44, borderRadius: 14, borderWidth: 2, borderColor: '#F0E0D0', paddingHorizontal: 14, fontSize: 14, fontFamily: fonts.medium, color: colors.textPrimary },
+  taskClassChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 12, borderWidth: 2, borderColor: '#F0E0D0', backgroundColor: '#FFF5ED' },
+  taskClassChipActive: { borderColor: colors.maroon, backgroundColor: `${colors.maroon}12` },
+  taskClassChipText: { fontSize: 11, fontFamily: fonts.semiBold, color: colors.textSecondary },
+  taskClassChipTextActive: { color: colors.maroon },
+  cancelTaskBtn: { flex: 1, height: 42, borderRadius: 14, backgroundColor: '#FFF5ED', alignItems: 'center', justifyContent: 'center' },
+  cancelTaskBtnText: { fontSize: 13, fontFamily: fonts.bold, color: colors.textSecondary },
+  saveTaskBtn: { flex: 1, height: 42, borderRadius: 14, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
+  saveTaskBtnText: { fontSize: 13, fontFamily: fonts.bold, color: 'white' },
+  dueDatePill: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8, backgroundColor: '#fef3c7' },
+  dueDateText: { fontSize: 10, fontFamily: fonts.bold, color: '#b45309' },
+  dueDatePickerBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, paddingVertical: 10, paddingHorizontal: 14, borderRadius: 14, backgroundColor: '#FFF5ED', borderWidth: 2, borderColor: '#F0E0D0' },
+  dueDatePickerText: { fontSize: 12, fontFamily: fonts.medium, color: colors.textTertiary },
 });

@@ -46,6 +46,7 @@ export interface Quiz {
   questions: number;
   score?: number; // percentage 0-100 if taken
   date: string;
+  status?: 'generating' | 'ready' | 'grading' | 'graded';
 }
 
 export interface SubUnit {
@@ -91,4 +92,5 @@ export type Screen =
   | 'course-detail'
   | 'files'
   | 'scan'
-  | 'friends';
+  | 'friends'
+  | 'school';

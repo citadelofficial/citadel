@@ -12,6 +12,7 @@ import {
   Share,
   Animated,
   Easing,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
@@ -117,6 +118,12 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
   const themeColorChoices = [colors.maroon, '#0f766e', '#1d4ed8', '#7c3aed', '#b45309'];
 
   const [selectedUnit, setSelectedUnit] = useState<UnitData | null>(null);
+
+  // Refs to avoid stale closures in setTimeout callbacks
+  const classDataRef = useRef(classData);
+  classDataRef.current = classData;
+  const selectedUnitRef = useRef(selectedUnit);
+  selectedUnitRef.current = selectedUnit;
   const [showEditModal, setShowEditModal] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [showClassmatesModal, setShowClassmatesModal] = useState(false);
@@ -193,14 +200,18 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
   const [showAddQuiz, setShowAddQuiz] = useState(false);
   const [quizTitle, setQuizTitle] = useState('');
   const [quizQuestionCount, setQuizQuestionCount] = useState('5');
+  const [editingQuizId, setEditingQuizId] = useState<number | null>(null);
+  const [editingQuizSubUnitId, setEditingQuizSubUnitId] = useState<string | null>(null);
 
   const addQuiz = () => {
     if (!selectedUnit || !activeSubUnitId || !quizTitle.trim()) return;
+    const quizId = Date.now();
     const newQuiz: Quiz = {
-      id: Date.now(),
+      id: quizId,
       title: quizTitle.trim(),
       questions: parseInt(quizQuestionCount) || 5,
       date: formatToday(),
+      status: 'generating',
     };
     updateSelectedUnit((unit) => ({
       ...unit,
@@ -212,10 +223,22 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
     }));
     setShowAddQuiz(false);
     setQuizTitle('');
+    // Simulate AI generation delay
+    setTimeout(() => {
+      updateSelectedUnitDeferred((unit) => ({
+        ...unit,
+        subUnits: unit.subUnits.map((sub) => ({
+          ...sub,
+          quizzes: (sub.quizzes || []).map((q) =>
+            q.id === quizId ? { ...q, status: 'ready' as const } : q
+          ),
+        })),
+      }));
+    }, 2000);
   };
 
   const takeQuiz = (subUnitId: string, quizId: number) => {
-    const score = Math.floor(Math.random() * 41) + 60; // 60-100
+    // Set to grading state
     updateSelectedUnit((unit) => ({
       ...unit,
       subUnits: unit.subUnits.map((sub) =>
@@ -223,12 +246,79 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
           ? {
             ...sub,
             quizzes: (sub.quizzes || []).map((q) =>
-              q.id === quizId ? { ...q, score } : q
+              q.id === quizId ? { ...q, status: 'grading' as const } : q
             ),
           }
           : sub
       ),
     }));
+    // Simulate AI grading delay — will be replaced by real API call
+    setTimeout(() => {
+      updateSelectedUnitDeferred((unit) => ({
+        ...unit,
+        subUnits: unit.subUnits.map((sub) =>
+          sub.id === subUnitId
+            ? {
+              ...sub,
+              quizzes: (sub.quizzes || []).map((q) =>
+                q.id === quizId ? { ...q, status: 'graded' as const } : q
+              ),
+            }
+            : sub
+        ),
+      }));
+    }, 2000);
+  };
+
+  const openEditQuiz = (quiz: Quiz, subUnitId: string) => {
+    setEditingQuizId(quiz.id);
+    setEditingQuizSubUnitId(subUnitId);
+    setQuizTitle(quiz.title);
+    setQuizQuestionCount(String(quiz.questions));
+    setShowAddQuiz(true);
+  };
+
+  const saveQuizEdit = () => {
+    if (!selectedUnit || !editingQuizSubUnitId || !quizTitle.trim()) return;
+    updateSelectedUnit((unit) => ({
+      ...unit,
+      subUnits: unit.subUnits.map((sub) =>
+        sub.id === editingQuizSubUnitId
+          ? {
+            ...sub,
+            quizzes: (sub.quizzes || []).map((q) =>
+              q.id === editingQuizId
+                ? { ...q, title: quizTitle.trim(), questions: parseInt(quizQuestionCount) || 5 }
+                : q
+            ),
+          }
+          : sub
+      ),
+    }));
+    setShowAddQuiz(false);
+    setEditingQuizId(null);
+    setEditingQuizSubUnitId(null);
+    setQuizTitle('');
+  };
+
+  const deleteQuiz = (subUnitId: string, quizId: number) => {
+    Alert.alert('Delete Quiz', 'Remove this quiz? This cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          updateSelectedUnit((unit) => ({
+            ...unit,
+            subUnits: unit.subUnits.map((sub) =>
+              sub.id === subUnitId
+                ? { ...sub, quizzes: (sub.quizzes || []).filter((q) => q.id !== quizId) }
+                : sub
+            ),
+          }));
+        },
+      },
+    ]);
   };
 
   // === Copy icon morph microinteraction ===
@@ -454,6 +544,17 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
     onUpdateClass({ ...classData, units: updatedUnits });
     setSelectedUnit(refreshed);
   };
+
+  // Deferred version that reads from refs — safe to call inside setTimeout
+  const updateSelectedUnitDeferred = useCallback((updater: (unit: UnitData) => UnitData) => {
+    const currentUnit = selectedUnitRef.current;
+    const currentData = classDataRef.current;
+    if (!currentUnit) return;
+    const updatedUnits = currentData.units.map((unit) => (unit.id === currentUnit.id ? updater(unit) : unit));
+    const refreshed = updatedUnits.find((unit) => unit.id === currentUnit.id) || currentUnit;
+    onUpdateClass({ ...currentData, units: updatedUnits });
+    setSelectedUnit(refreshed);
+  }, [onUpdateClass]);
 
   const openAddNoteModal = (subUnitId: string) => {
     setActiveSubUnitId(subUnitId);
@@ -769,24 +870,61 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
                     {/* Quizzes */}
                     {quizzes.length > 0 && (
                       <View style={{ marginTop: 8 }}>
-                        {quizzes.map((quiz) => (
-                          <View key={quiz.id} style={styles.quizRow}>
-                            <Ionicons name="school" size={14} color={classAccent} />
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.quizTitle}>{quiz.title}</Text>
-                              <Text style={styles.quizMeta}>{quiz.questions} questions • {quiz.date}</Text>
-                            </View>
-                            {quiz.score !== undefined ? (
-                              <View style={[styles.quizScorePill, { backgroundColor: quiz.score >= 80 ? '#D1FAE5' : '#FEF3C7' }]}>
-                                <Text style={[styles.quizScoreText, { color: quiz.score >= 80 ? '#059669' : '#d97706' }]}>{quiz.score}%</Text>
+                        {quizzes.map((quiz) => {
+                          const isGenerating = quiz.status === 'generating';
+                          const isGrading = quiz.status === 'grading';
+                          const isGraded = quiz.status === 'graded';
+                          const isReady = !quiz.status || quiz.status === 'ready';
+                          return (
+                            <View key={quiz.id} style={[styles.quizRow, (isGenerating || isGrading) && styles.quizRowPending]}>
+                              {isGenerating || isGrading ? (
+                                <ActivityIndicator size="small" color={classAccent} />
+                              ) : (
+                                <Ionicons name="school" size={14} color={classAccent} />
+                              )}
+                              <View style={{ flex: 1 }}>
+                                <Text style={[styles.quizTitle, (isGenerating || isGrading) && { color: colors.textTertiary }]}>
+                                  {isGenerating ? 'Generating…' : isGrading ? 'Grading…' : quiz.title}
+                                </Text>
+                                {!isGenerating && (
+                                  <Text style={styles.quizMeta}>{quiz.questions} questions • {quiz.date}</Text>
+                                )}
                               </View>
-                            ) : (
-                              <TouchableOpacity style={styles.quizTakeBtn} onPress={() => takeQuiz(subUnit.id, quiz.id)}>
-                                <Text style={styles.quizTakeBtnText}>Take</Text>
-                              </TouchableOpacity>
-                            )}
-                          </View>
-                        ))}
+                              {isGenerating || isGrading ? null : isGraded ? (
+                                <View style={styles.quizActions}>
+                                  {quiz.score !== undefined && (
+                                    <View style={[styles.quizScorePill, { backgroundColor: quiz.score >= 80 ? '#D1FAE5' : '#FEF3C7' }]}>
+                                      <Text style={[styles.quizScoreText, { color: quiz.score >= 80 ? '#059669' : '#d97706' }]}>{quiz.score}%</Text>
+                                    </View>
+                                  )}
+                                  {quiz.score === undefined && (
+                                    <View style={[styles.quizScorePill, { backgroundColor: '#EDE9FE' }]}>
+                                      <Text style={[styles.quizScoreText, { color: '#7c3aed' }]}>Awaiting AI</Text>
+                                    </View>
+                                  )}
+                                  <TouchableOpacity onPress={() => openEditQuiz(quiz, subUnit.id)} hitSlop={8}>
+                                    <Ionicons name="pencil" size={15} color={colors.textTertiary} />
+                                  </TouchableOpacity>
+                                  <TouchableOpacity onPress={() => deleteQuiz(subUnit.id, quiz.id)} hitSlop={8}>
+                                    <Ionicons name="trash-outline" size={15} color={colors.textTertiary} />
+                                  </TouchableOpacity>
+                                </View>
+                              ) : isReady ? (
+                                <View style={styles.quizActions}>
+                                  <TouchableOpacity style={styles.quizTakeBtn} onPress={() => takeQuiz(subUnit.id, quiz.id)}>
+                                    <Text style={styles.quizTakeBtnText}>Take</Text>
+                                  </TouchableOpacity>
+                                  <TouchableOpacity onPress={() => openEditQuiz(quiz, subUnit.id)} hitSlop={8}>
+                                    <Ionicons name="pencil" size={15} color={colors.textTertiary} />
+                                  </TouchableOpacity>
+                                  <TouchableOpacity onPress={() => deleteQuiz(subUnit.id, quiz.id)} hitSlop={8}>
+                                    <Ionicons name="trash-outline" size={15} color={colors.textTertiary} />
+                                  </TouchableOpacity>
+                                </View>
+                              ) : null}
+                            </View>
+                          );
+                        })}
                       </View>
                     )}
                   </View>
@@ -946,17 +1084,17 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
           </View>
         </Modal>
 
-        {/* Add Quiz Modal */}
-        <Modal visible={showAddQuiz} transparent animationType="fade" onRequestClose={() => setShowAddQuiz(false)}>
+        {/* Add / Edit Quiz Modal */}
+        <Modal visible={showAddQuiz} transparent animationType="fade" onRequestClose={() => { setShowAddQuiz(false); setEditingQuizId(null); setEditingQuizSubUnitId(null); }}>
           <View style={styles.modalBackdropCentered}>
             <View style={styles.sosCard}>
               <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>🎓 Add Quiz</Text>
-                <TouchableOpacity onPress={() => setShowAddQuiz(false)}>
+                <Text style={styles.modalTitle}>{editingQuizId ? '✏️ Edit Quiz' : '🎓 Add Quiz'}</Text>
+                <TouchableOpacity onPress={() => { setShowAddQuiz(false); setEditingQuizId(null); setEditingQuizSubUnitId(null); }}>
                   <Ionicons name="close" size={22} color={colors.textPrimary} />
                 </TouchableOpacity>
               </View>
-              <Text style={styles.sosSubtitle}>Create a quiz for this section to test your knowledge.</Text>
+              <Text style={styles.sosSubtitle}>{editingQuizId ? 'Update the quiz details below.' : 'Create a quiz for this section to test your knowledge.'}</Text>
               <TextInput
                 style={styles.input}
                 placeholder="Quiz title"
@@ -974,11 +1112,11 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
               />
               <TouchableOpacity
                 style={[styles.modalSaveBtn, { backgroundColor: classAccent, marginTop: 14 }, !quizTitle.trim() && styles.modalSaveBtnDisabled]}
-                onPress={addQuiz}
+                onPress={editingQuizId ? saveQuizEdit : addQuiz}
                 disabled={!quizTitle.trim()}
               >
-                <Ionicons name="school" size={16} color="white" />
-                <Text style={styles.modalSaveBtnText}>  Create Quiz</Text>
+                <Ionicons name={editingQuizId ? 'checkmark' : 'school'} size={16} color="white" />
+                <Text style={styles.modalSaveBtnText}>  {editingQuizId ? 'Save Changes' : 'Create Quiz'}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -2289,6 +2427,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.maroon,
   },
   quizTakeBtnText: { fontSize: 12, fontFamily: fonts.bold, color: 'white' },
+  quizRowPending: { opacity: 0.6 },
+  quizActions: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 10 },
 
   // === Inline Action Bar (inside scroll) ===
   unitActionBarInline: {
