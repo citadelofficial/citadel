@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { supabase } from '../lib/supabase';
 import {
   View,
   Text,
@@ -20,9 +21,14 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { BottomNav } from '../components/BottomNav';
 import { AnimatedPressable } from '../components/AnimatedPressable';
+import { InlineTutorialCard } from '../components/InlineTutorialCard';
+import { FormattedText } from '../components/FormattedText';
 import { colors, fonts } from '../theme';
 import { friendsDirectory } from '../data/friends';
-import type { ClassData, SubUnitNote, UnitData, Quiz } from '../types';
+import { mergeNotesWithAI, extractTextFromImage, generateQuizFromNotes } from '../lib/gemini';
+import * as FileSystemLegacy from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
+import type { ClassData, SubUnitNote, UnitData, Quiz, QuizQuestion } from '../types';
 
 interface Props {
   classData: ClassData;
@@ -34,7 +40,15 @@ interface Props {
   onPersonOpen?: (name: string) => void;
   unitProgress: Record<string, boolean>;
   onUpdateProgress: (progress: Record<string, boolean>) => void;
+  userName?: string;
+  onSendClassInvite?: (toUserId: string, classes: ClassData[]) => void;
+  tutorialStep?: number;
+  onTutorialNext?: () => void;
+  onTutorialBack?: () => void;
+  onTutorialSkip?: () => void;
 }
+
+const TUTORIAL_TOTAL_STEPS = 7;
 
 function makeCustomCode(title: string) {
   const prefix =
@@ -54,66 +68,39 @@ function formatToday() {
   return `${String(now.getMonth() + 1).padStart(2, '0')}/${String(now.getDate()).padStart(2, '0')}/${now.getFullYear()}`;
 }
 
-const fallbackClassmateNames = [
-  'Laasya Potuluri',
-  'Anya Vulupala',
-  'Andrew Boldea',
-  'Saraa Rana',
-  'Risha Guru',
-  'Annika Shah',
-  'Zayyan Masud',
-  'Roshan Shah',
-  'Catalina Nemes',
-  'Jack Swartz',
-  'Will Caling',
-  'Maya Chen',
-  'Ethan Patel',
-  'Nora Kim',
-  'Ava Martinez',
-  'Liam Walker',
-  'Noah Brown',
-  'Emma Johnson',
-  'Sophia Davis',
-  'Lucas Miller',
-  'Olivia Moore',
-  'Mason Taylor',
-  'Isabella Thomas',
-  'James Lee',
-  'Amelia Harris',
-  'Benjamin Clark',
-  'Charlotte Young',
-  'Elijah Hall',
-  'Mila Allen',
-  'Alexander Scott',
-  'Harper Green',
-  'Michael Adams',
-];
-
 function buildClassmateList(total: number, preset: string[] | undefined, seed: string) {
-  if (total <= 0) return [];
+  // Only return real classmate names — no fake filler names
   const fromPreset = (preset || []).map((name) => name.trim()).filter(Boolean);
-  const used = new Set(fromPreset.map((name) => name.toLowerCase()));
-  const result = [...fromPreset];
-
-  const offset = seed.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0) % fallbackClassmateNames.length;
-  let cursor = 0;
-
-  while (result.length < total && cursor < fallbackClassmateNames.length * 3) {
-    const candidate = fallbackClassmateNames[(offset + cursor) % fallbackClassmateNames.length];
-    cursor += 1;
-    if (used.has(candidate.toLowerCase())) continue;
-    used.add(candidate.toLowerCase());
-    result.push(candidate);
+  // Deduplicate
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const name of fromPreset) {
+    const lower = name.toLowerCase();
+    if (!seen.has(lower)) {
+      seen.add(lower);
+      result.push(name);
+    }
   }
-
-  while (result.length < total) {
-    result.push(`Classmate ${result.length + 1}`);
-  }
-
-  return result.slice(0, total);
+  return result;
 }
 
-export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onFriends, onUpdateClass, onPersonOpen, unitProgress, onUpdateProgress }: Props) {
+export function CourseDetailScreen({
+  classData,
+  onBack,
+  onFilesOpen,
+  onScan,
+  onFriends,
+  onUpdateClass,
+  onPersonOpen,
+  unitProgress,
+  onUpdateProgress,
+  userName,
+  onSendClassInvite,
+  tutorialStep = 0,
+  onTutorialNext = () => { },
+  onTutorialBack = () => { },
+  onTutorialSkip = () => { },
+}: Props) {
   const classAccent = classData.color || colors.maroon;
   const themeColorChoices = [colors.maroon, '#0f766e', '#1d4ed8', '#7c3aed', '#b45309'];
 
@@ -128,6 +115,8 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [showClassmatesModal, setShowClassmatesModal] = useState(false);
   const [showBlockEditModal, setShowBlockEditModal] = useState(false);
+  const [editingTeacher, setEditingTeacher] = useState(false);
+  const [teacherDraft, setTeacherDraft] = useState(classData.teacher || '');
   const [showCodeEditModal, setShowCodeEditModal] = useState(false);
   const [copyStatus, setCopyStatus] = useState('');
   const [invitedFriends, setInvitedFriends] = useState<string[]>([]);
@@ -151,12 +140,24 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
   const [noteSource, setNoteSource] = useState<'filesTab' | 'phone'>('filesTab');
   const [selectedClassFileId, setSelectedClassFileId] = useState<number | null>(classData.files[0]?.id || null);
   const [localUpload, setLocalUpload] = useState<{ name: string; content: string; pages: number } | null>(null);
-  const [newNoteAuthor, setNewNoteAuthor] = useState('You');
+  const [newNoteAuthor, setNewNoteAuthor] = useState(userName || 'You');
   const [newNoteTitle, setNewNoteTitle] = useState('');
   const [newNoteContent, setNewNoteContent] = useState('');
+  const [noteStep, setNoteStep] = useState<1 | 2 | 3>(1);
   const [selectedMergeNoteIds, setSelectedMergeNoteIds] = useState<number[]>([]);
+  const [isMerging, setIsMerging] = useState(false);
+  const [mergedResult, setMergedResult] = useState<{ title: string; content: string } | null>(null);
+  const [showMergedViewer, setShowMergedViewer] = useState(false);
   const [activeNote, setActiveNote] = useState<{ note: SubUnitNote; sectionTitle: string } | null>(null);
   const [noteActionStatus, setNoteActionStatus] = useState('');
+  // Edit note state
+  const [isEditingNote, setIsEditingNote] = useState(false);
+  const [editNoteTitle, setEditNoteTitle] = useState('');
+  const [editNoteContent, setEditNoteContent] = useState('');
+  // Pending scan target — when user taps "Scan Now" from add-note
+  const [pendingScanTarget, setPendingScanTarget] = useState<{ unitId: number; subUnitId: string } | null>(null);
+  const [collapsedUnits, setCollapsedUnits] = useState<Set<number>>(new Set());
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
 
   const setUnitProgress = (updater: Record<string, boolean> | ((prev: Record<string, boolean>) => Record<string, boolean>)) => {
     if (typeof updater === 'function') {
@@ -166,11 +167,8 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
     }
   };
 
-  // === Study Sheet & SOS ===
-  const [showStudySheet, setShowStudySheet] = useState(false);
-  const [showSOS, setShowSOS] = useState(false);
-  const [sosSent, setSosSent] = useState(false);
-  const sosPulse = useRef(new Animated.Value(1)).current;
+
+
 
   // === Plane animation ===
   const planeX = useRef(new Animated.Value(0)).current;
@@ -203,16 +201,40 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
   const [editingQuizId, setEditingQuizId] = useState<number | null>(null);
   const [editingQuizSubUnitId, setEditingQuizSubUnitId] = useState<string | null>(null);
 
-  const addQuiz = () => {
-    if (!selectedUnit || !activeSubUnitId || !quizTitle.trim()) return;
+  // Quiz-taking state
+  const [activeQuiz, setActiveQuiz] = useState<Quiz | null>(null);
+  const [activeQuizSubUnitId, setActiveQuizSubUnitId] = useState<string | null>(null);
+  const [quizCurrentQ, setQuizCurrentQ] = useState(0);
+  const [quizAnswers, setQuizAnswers] = useState<(number | null)[]>([]);
+  const [quizSubmitted, setQuizSubmitted] = useState(false);
+  const [quizScore, setQuizScore] = useState<number | null>(null);
+
+  const tutorialGuide = tutorialStep === 3 ? {
+    step: 3,
+    title: 'This class is your hub',
+    body: 'This page keeps your class details, units, classmates, and saved materials together. Tap Files below when you want the library for this class.',
+  } : null;
+
+  const addQuiz = async () => {
+    if (!selectedUnit || !activeSubUnitId) return;
+
+    // Gather all notes from this sub-unit
+    const subUnit = selectedUnit.subUnits.find((s) => s.id === activeSubUnitId);
+    if (!subUnit || subUnit.notes.length === 0) {
+      Alert.alert('No Notes', 'Add some notes to this section first, then generate a quiz from them.');
+      return;
+    }
+
+    const count = parseInt(quizQuestionCount) || 5;
     const quizId = Date.now();
     const newQuiz: Quiz = {
       id: quizId,
-      title: quizTitle.trim(),
-      questions: parseInt(quizQuestionCount) || 5,
+      title: 'Generating quiz…',
+      questions: count,
       date: formatToday(),
       status: 'generating',
     };
+
     updateSelectedUnit((unit) => ({
       ...unit,
       subUnits: unit.subUnits.map((sub) =>
@@ -223,51 +245,101 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
     }));
     setShowAddQuiz(false);
     setQuizTitle('');
-    // Simulate AI generation delay
-    setTimeout(() => {
+
+    // Call Gemini to generate questions
+    const noteInputs = subUnit.notes.map((n) => ({ title: n.title, content: n.content }));
+    const result = await generateQuizFromNotes(noteInputs, count);
+
+    if (result.success) {
       updateSelectedUnitDeferred((unit) => ({
         ...unit,
         subUnits: unit.subUnits.map((sub) => ({
           ...sub,
           quizzes: (sub.quizzes || []).map((q) =>
-            q.id === quizId ? { ...q, status: 'ready' as const } : q
+            q.id === quizId
+              ? {
+                ...q,
+                title: result.title,
+                status: 'ready' as const,
+                questions: result.questions.length,
+                questionData: result.questions.map((rq) => ({
+                  question: rq.question,
+                  options: rq.options,
+                  correctIndex: rq.correctIndex,
+                })),
+              }
+              : q
           ),
         })),
       }));
-    }, 2000);
+    } else {
+      Alert.alert('Quiz Generation Failed', result.error || 'Please try again.');
+      // Remove the failed quiz
+      updateSelectedUnitDeferred((unit) => ({
+        ...unit,
+        subUnits: unit.subUnits.map((sub) => ({
+          ...sub,
+          quizzes: (sub.quizzes || []).filter((q) => q.id !== quizId),
+        })),
+      }));
+    }
   };
 
-  const takeQuiz = (subUnitId: string, quizId: number) => {
-    // Set to grading state
+  const startQuiz = (subUnitId: string, quiz: Quiz) => {
+    if (!quiz.questionData || quiz.questionData.length === 0) return;
+    setActiveQuiz(quiz);
+    setActiveQuizSubUnitId(subUnitId);
+    setQuizCurrentQ(0);
+    setQuizAnswers(new Array(quiz.questionData.length).fill(null));
+    setQuizSubmitted(false);
+    setQuizScore(null);
+  };
+
+  const submitQuiz = () => {
+    if (!activeQuiz?.questionData || !activeQuizSubUnitId) return;
+
+    let correct = 0;
+    activeQuiz.questionData.forEach((q, i) => {
+      if (quizAnswers[i] === q.correctIndex) correct++;
+    });
+    const score = Math.round((correct / activeQuiz.questionData.length) * 100);
+
+    setQuizScore(score);
+    setQuizSubmitted(true);
+
+    // Save score to quiz data
     updateSelectedUnit((unit) => ({
       ...unit,
       subUnits: unit.subUnits.map((sub) =>
-        sub.id === subUnitId
+        sub.id === activeQuizSubUnitId
           ? {
             ...sub,
             quizzes: (sub.quizzes || []).map((q) =>
-              q.id === quizId ? { ...q, status: 'grading' as const } : q
+              q.id === activeQuiz.id
+                ? {
+                  ...q,
+                  score,
+                  status: 'graded' as const,
+                  questionData: q.questionData?.map((qd, i) => ({
+                    ...qd,
+                    selectedIndex: quizAnswers[i] ?? undefined,
+                  })),
+                }
+                : q
             ),
           }
           : sub
       ),
     }));
-    // Simulate AI grading delay — will be replaced by real API call
-    setTimeout(() => {
-      updateSelectedUnitDeferred((unit) => ({
-        ...unit,
-        subUnits: unit.subUnits.map((sub) =>
-          sub.id === subUnitId
-            ? {
-              ...sub,
-              quizzes: (sub.quizzes || []).map((q) =>
-                q.id === quizId ? { ...q, status: 'graded' as const } : q
-              ),
-            }
-            : sub
-        ),
-      }));
-    }, 2000);
+  };
+
+  const closeQuizModal = () => {
+    setActiveQuiz(null);
+    setActiveQuizSubUnitId(null);
+    setQuizCurrentQ(0);
+    setQuizAnswers([]);
+    setQuizSubmitted(false);
+    setQuizScore(null);
   };
 
   const openEditQuiz = (quiz: Quiz, subUnitId: string) => {
@@ -339,7 +411,7 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
   const selectedUnitTotalSections = selectedUnit?.subUnits.length || 0;
   const selectedUnitCompletedSections = useMemo(() => {
     if (!selectedUnit) return 0;
-    return selectedUnit.subUnits.filter((sub) => unitProgress[`${selectedUnit.id}-${sub.id}`]).length;
+    return selectedUnit.subUnits.filter((sub) => unitProgress[`${classData.id}-${selectedUnit.id}-${sub.id}`]).length;
   }, [selectedUnit, unitProgress]);
 
   const selectedUnitProgress =
@@ -347,12 +419,9 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
 
   const canSaveAddedNote = useMemo(() => {
     if (!activeSubUnitId) return false;
-    const hasTypedText = newNoteContent.trim().length > 0;
-    if (noteSource === 'filesTab') {
-      return hasTypedText || classData.files.some((file) => file.id === selectedClassFileId) || classData.files.length > 0;
-    }
+    const hasTypedText = newNoteContent.trim().length > 0 || newNoteTitle.trim().length > 0;
     return hasTypedText || !!localUpload;
-  }, [activeSubUnitId, classData.files, localUpload, newNoteContent, noteSource, selectedClassFileId]);
+  }, [activeSubUnitId, localUpload, newNoteContent, newNoteTitle]);
 
   useEffect(() => {
     if (!selectedUnit) return;
@@ -558,18 +627,106 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
 
   const openAddNoteModal = (subUnitId: string) => {
     setActiveSubUnitId(subUnitId);
-    setNoteSource('filesTab');
-    setSelectedClassFileId(classData.files[0]?.id || null);
+    setNoteSource('phone');
     setLocalUpload(null);
-    setNewNoteAuthor('You');
+    setNewNoteAuthor(userName || 'You');
     setNewNoteTitle('');
     setNewNoteContent('');
+    setNoteStep(1);
     setShowAddNoteModal(true);
   };
 
-  const openScanTabFromAddNote = () => {
+  const [isScanningNote, setIsScanningNote] = useState(false);
+
+  const scanNoteWithCamera = async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Camera Permission', 'Camera access is needed to scan notes.');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      quality: 0.85,
+      mediaTypes: ['images'],
+      base64: true,
+    });
+
+    if (result.canceled || !result.assets[0]) return;
+    const asset = result.assets[0];
+
+    if (!selectedUnit || !activeSubUnitId) return;
+
+    // Show loading state while OCR runs
     setShowAddNoteModal(false);
-    onScan?.();
+    setIsScanningNote(true);
+
+    // OCR via Gemini
+    let noteTitle = `Scanned Note — ${formatToday()}`;
+    let noteContent = 'Scanned note captured from camera.';
+
+    if (asset.base64) {
+      const ocrResult = await extractTextFromImage(asset.base64, 'image/jpeg');
+      if (ocrResult.success) {
+        noteTitle = ocrResult.title;
+        noteContent = ocrResult.text;
+      }
+    }
+
+    const scanName = `Scan_${Date.now()}.jpg`;
+    const wordCount = noteContent.trim().split(/\s+/).filter(Boolean).length;
+    const readTime = Math.max(1, Math.ceil(wordCount / 180));
+
+    // Save as file in class files tab
+    const file = {
+      id: Date.now(),
+      name: scanName,
+      date: formatToday(),
+      thumbnail: asset.uri,
+      pages: 1,
+      size: asset.fileSize ? `${Math.max(0.1, asset.fileSize / (1024 * 1024)).toFixed(1)}MB` : '1.0MB',
+      readTime: `${readTime} Min Read`,
+      previewTitle: noteTitle,
+      previewText: noteContent,
+      source: 'camera' as const,
+    };
+
+    // Save as note in the target unit/subUnit
+    const updatedUnits = classData.units.map((unit) =>
+      unit.id === selectedUnit.id
+        ? {
+          ...unit,
+          subUnits: unit.subUnits.map((sub) =>
+            sub.id === activeSubUnitId
+              ? {
+                ...sub,
+                notes: [
+                  ...sub.notes,
+                  {
+                    id: Date.now() + 1,
+                    title: noteTitle,
+                    author: userName || 'You',
+                    date: formatToday(),
+                    pages: 1,
+                    content: noteContent,
+                  },
+                ],
+              }
+              : sub
+          ),
+        }
+        : unit
+    );
+
+    const updatedClass = {
+      ...classData,
+      units: updatedUnits,
+      files: [file, ...classData.files],
+      documents: classData.documents + 1,
+    };
+
+    onUpdateClass(updatedClass);
+    setSelectedUnit(updatedUnits.find((u) => u.id === selectedUnit.id) || selectedUnit);
+    setIsScanningNote(false);
   };
 
   const pickNoteFromPhone = async () => {
@@ -592,47 +749,129 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
     }
   };
 
+  // Sync notes to class_code_registry for cross-user sharing
+  const syncNotesToRegistry = async (updatedClassData: ClassData) => {
+    try {
+      const normalized = updatedClassData.classCode.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      await supabase.from('class_code_registry')
+        .update({ class_data: updatedClassData })
+        .eq('class_code', normalized);
+    } catch (e) {
+      // Registry may not exist, that's ok
+    }
+  };
+
+  // Fetch remote notes from registry and merge any new ones
+  const fetchRemoteNotes = useCallback(async () => {
+    try {
+      const normalized = classData.classCode.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      const { data, error } = await supabase
+        .from('class_code_registry')
+        .select('class_data')
+        .eq('class_code', normalized);
+
+      if (error || !data || data.length === 0) return;
+
+      const allRemoteNotes = new Map<string, Map<number, any>>();
+
+      for (const row of data) {
+        const remoteClass = row.class_data as ClassData;
+        if (!remoteClass?.units) continue;
+
+        for (const remoteUnit of remoteClass.units) {
+          for (const remoteSub of remoteUnit.subUnits) {
+            if (!allRemoteNotes.has(remoteSub.id)) {
+              allRemoteNotes.set(remoteSub.id, new Map());
+            }
+            const noteMap = allRemoteNotes.get(remoteSub.id)!;
+            for (const note of remoteSub.notes) {
+              if (!noteMap.has(note.id)) {
+                noteMap.set(note.id, note);
+              }
+            }
+          }
+        }
+      }
+
+      let hasNewNotes = false;
+      const mergedUnits = classData.units.map((localUnit) => {
+        const mergedSubUnits = localUnit.subUnits.map((localSub) => {
+          const remoteNoteMap = allRemoteNotes.get(localSub.id);
+          if (!remoteNoteMap) return localSub;
+
+          const localNoteIds = new Set(localSub.notes.map((n) => n.id));
+          const newNotes = Array.from(remoteNoteMap.values()).filter(
+            (rn) => !localNoteIds.has(rn.id)
+          );
+
+          if (newNotes.length > 0) {
+            hasNewNotes = true;
+            return { ...localSub, notes: [...localSub.notes, ...newNotes] };
+          }
+          return localSub;
+        });
+
+        return { ...localUnit, subUnits: mergedSubUnits };
+      });
+
+      if (hasNewNotes) {
+        onUpdateClass({ ...classData, units: mergedUnits });
+      }
+    } catch (e) {
+      // Silently fail
+    }
+  }, [classData, onUpdateClass]);
+
+  // Fetch remote notes on mount and when switching units
+  useEffect(() => {
+    fetchRemoteNotes();
+  }, []);
+
   const saveSectionNote = () => {
     if (!selectedUnit || !activeSubUnitId) return;
 
-    const selectedFile = classData.files.find((file) => file.id === selectedClassFileId) || classData.files[0] || null;
-    const sourceTitle =
-      noteSource === 'filesTab'
-        ? selectedFile
-          ? `From File: ${selectedFile.name}`
-          : 'Imported File Note'
-        : localUpload
-          ? `From Phone: ${localUpload.name}`
-          : 'Uploaded Note';
+    const sourceTitle = localUpload
+      ? `From Phone: ${localUpload.name}`
+      : 'New Note';
 
-    const sourceContent = noteSource === 'filesTab' ? selectedFile?.previewText : localUpload?.content;
-    const sourcePages =
-      noteSource === 'filesTab' ? Math.max(1, selectedFile?.pages || 1) : Math.max(1, localUpload?.pages || 1);
+    const sourceContent = localUpload?.content || '';
+    const sourcePages = Math.max(1, localUpload?.pages || 1);
 
     const title = newNoteTitle.trim() || sourceTitle;
     const content = newNoteContent.trim() || sourceContent || 'New class note added.';
 
-    updateSelectedUnit((unit) => ({
-      ...unit,
-      subUnits: unit.subUnits.map((sub) =>
-        sub.id === activeSubUnitId
-          ? {
-            ...sub,
-            notes: [
-              ...sub.notes,
-              {
-                id: Date.now(),
-                title,
-                author: newNoteAuthor.trim() || 'You',
-                date: formatToday(),
-                pages: sourcePages,
-                content,
-              },
-            ],
-          }
-          : sub
-      ),
-    }));
+    const updatedUnits = classData.units.map((unit) =>
+      unit.id === selectedUnit.id
+        ? {
+          ...unit,
+          subUnits: unit.subUnits.map((sub) =>
+            sub.id === activeSubUnitId
+              ? {
+                ...sub,
+                notes: [
+                  ...sub.notes,
+                  {
+                    id: Date.now(),
+                    title,
+                    author: newNoteAuthor.trim() || userName || 'You',
+                    date: formatToday(),
+                    pages: sourcePages,
+                    content,
+                  },
+                ],
+              }
+              : sub
+          ),
+        }
+        : unit
+    );
+
+    const updatedClass = { ...classData, units: updatedUnits };
+    onUpdateClass(updatedClass);
+    setSelectedUnit(updatedUnits.find((u) => u.id === selectedUnit.id) || selectedUnit);
+
+    // Sync to registry for other class members to see
+    syncNotesToRegistry(updatedClass);
 
     setShowAddNoteModal(false);
   };
@@ -647,27 +886,41 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
     setSelectedMergeNoteIds((prev) => (prev.includes(id) ? prev.filter((noteId) => noteId !== id) : [...prev, id]));
   };
 
-  const mergeSelectedNotes = () => {
+  const mergeSelectedNotes = async () => {
     if (!selectedUnit || !activeSubUnitId || selectedMergeNoteIds.length < 2) return;
+
+    const sub = selectedUnit.subUnits.find((s) => s.id === activeSubUnitId);
+    if (!sub) return;
+    const chosen = sub.notes.filter((note) => selectedMergeNoteIds.includes(note.id));
+
+    setIsMerging(true);
+    const result = await mergeNotesWithAI(
+      chosen.map((n) => ({ title: n.title, content: n.content, author: n.author }))
+    );
+    setIsMerging(false);
+
+    if (!result.success) {
+      setShowMergeModal(false);
+      setNoteActionStatus(result.content);
+      setTimeout(() => setNoteActionStatus(''), 2500);
+      return;
+    }
 
     updateSelectedUnit((unit) => ({
       ...unit,
-      subUnits: unit.subUnits.map((sub) => {
-        if (sub.id !== activeSubUnitId) return sub;
-        const chosen = sub.notes.filter((note) => selectedMergeNoteIds.includes(note.id));
-        const mergedBody = chosen.map((note) => `- ${note.title}: ${note.content}`).join(' ');
-
+      subUnits: unit.subUnits.map((s) => {
+        if (s.id !== activeSubUnitId) return s;
         return {
-          ...sub,
+          ...s,
           notes: [
-            ...sub.notes,
+            ...s.notes,
             {
               id: Date.now(),
-              title: `Merged (${chosen.length} Notes)`,
-              author: 'Citadel Merge',
+              title: result.title,
+              author: 'Citadel AI',
               date: formatToday(),
               pages: 1,
-              content: `Merged summary: ${mergedBody}`.slice(0, 600),
+              content: result.content,
             },
           ],
         };
@@ -675,11 +928,45 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
     }));
 
     setShowMergeModal(false);
+    setMergedResult({ title: result.title, content: result.content });
+    setShowMergedViewer(true);
+  };
+
+  const downloadMergedToDevice = async () => {
+    if (!mergedResult) return;
+    try {
+      const fileName = mergedResult.title.replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, '_');
+      const fileUri = `${FileSystemLegacy.documentDirectory}${fileName}.txt`;
+      await FileSystemLegacy.writeAsStringAsync(fileUri, `${mergedResult.title}\n\n${mergedResult.content}`);
+
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: 'text/plain',
+          dialogTitle: `Save ${mergedResult.title}`,
+        });
+      } else {
+        setNoteActionStatus('Sharing not available on this device.');
+        setTimeout(() => setNoteActionStatus(''), 1400);
+      }
+    } catch {
+      setNoteActionStatus('Could not save to device.');
+      setTimeout(() => setNoteActionStatus(''), 1400);
+    }
+  };
+
+  const shareMergedNote = async () => {
+    if (!mergedResult) return;
+    await Share.share({
+      title: mergedResult.title,
+      message: `${mergedResult.title}\n\n${mergedResult.content}`,
+    });
   };
 
   const openNoteModal = (note: SubUnitNote, sectionTitle: string) => {
     setActiveNote({ note, sectionTitle });
     setNoteActionStatus('');
+    setIsEditingNote(false);
   };
 
   const shareActiveNote = async () => {
@@ -690,33 +977,86 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
     });
   };
 
-  const downloadActiveNote = () => {
+  const downloadActiveNote = async () => {
     if (!activeNote) return;
-    const wordCount = activeNote.note.content.trim().split(/\s+/).filter(Boolean).length;
-    const sizeMb = Math.max(0.1, Number((activeNote.note.content.length / 1800).toFixed(1)));
-    const readTime = Math.max(1, Math.ceil(wordCount / 180));
+    try {
+      const fileName = activeNote.note.title.replace(/[^a-zA-Z0-9 ]/g, '').replace(/\s+/g, '_');
+      const fileUri = `${FileSystemLegacy.documentDirectory}${fileName}.txt`;
+      const fileContent = `${activeNote.note.title}\n${activeNote.note.author} • ${activeNote.note.date}\n\n${activeNote.note.content}`;
+      await FileSystemLegacy.writeAsStringAsync(fileUri, fileContent);
 
-    const file = {
-      id: Date.now(),
-      name: `${activeNote.note.title}.txt`,
-      date: formatToday(),
-      thumbnail: classData.image,
-      pages: Math.max(1, activeNote.note.pages),
-      size: `${sizeMb}MB`,
-      readTime: `${readTime} Min Read`,
-      previewTitle: activeNote.note.title,
-      previewText: activeNote.note.content,
-      source: 'document' as const,
-    };
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: 'text/plain',
+          dialogTitle: `Save ${activeNote.note.title}`,
+        });
+      } else {
+        setNoteActionStatus('Sharing not available on this device.');
+        setTimeout(() => setNoteActionStatus(''), 1400);
+      }
+    } catch {
+      setNoteActionStatus('Could not download note.');
+      setTimeout(() => setNoteActionStatus(''), 1400);
+    }
+  };
 
-    onUpdateClass({
-      ...classData,
-      files: [file, ...classData.files],
-      documents: classData.documents + 1,
+  const startEditNote = () => {
+    if (!activeNote) return;
+    setEditNoteTitle(activeNote.note.title);
+    setEditNoteContent(activeNote.note.content);
+    setIsEditingNote(true);
+  };
+
+  const saveEditNote = () => {
+    if (!activeNote || !selectedUnit) return;
+    const newTitle = editNoteTitle.trim() || activeNote.note.title;
+    const newContent = editNoteContent.trim() || activeNote.note.content;
+
+    updateSelectedUnit((unit) => ({
+      ...unit,
+      subUnits: unit.subUnits.map((sub) => ({
+        ...sub,
+        notes: sub.notes.map((note) =>
+          note.id === activeNote.note.id
+            ? { ...note, title: newTitle, content: newContent }
+            : note
+        ),
+      })),
+    }));
+
+    setActiveNote({
+      ...activeNote,
+      note: { ...activeNote.note, title: newTitle, content: newContent },
     });
-
-    setNoteActionStatus('Saved to Files tab.');
+    setIsEditingNote(false);
+    setNoteActionStatus('Note updated.');
     setTimeout(() => setNoteActionStatus(''), 1400);
+  };
+
+  const deleteNote = () => {
+    if (!activeNote || !selectedUnit) return;
+    Alert.alert(
+      'Delete Note',
+      `Are you sure you want to delete "${activeNote.note.title}"? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            updateSelectedUnit((unit) => ({
+              ...unit,
+              subUnits: unit.subUnits.map((sub) => ({
+                ...sub,
+                notes: sub.notes.filter((note) => note.id !== activeNote.note.id),
+              })),
+            }));
+            setActiveNote(null);
+          },
+        },
+      ]
+    );
   };
 
   if (selectedUnit) {
@@ -734,6 +1074,18 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
               <Text style={styles.unitMeta}>{classData.title}</Text>
             </View>
           </View>
+
+          {tutorialGuide && (
+          <InlineTutorialCard
+            step={tutorialGuide.step}
+            totalSteps={TUTORIAL_TOTAL_STEPS}
+            title={tutorialGuide.title}
+            body={tutorialGuide.body}
+            onDismiss={onTutorialSkip}
+            onPrevious={onTutorialBack}
+            onNext={onTutorialNext}
+          />
+        )}
 
           <View style={styles.unitOverviewCard}>
             <Text style={styles.unitOverviewTitle}>Unit Progress</Text>
@@ -775,7 +1127,7 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
 
           <View style={styles.flightPath}>
             {selectedUnit.subUnits.map((subUnit, idx) => {
-              const key = `${selectedUnit.id}-${subUnit.id}`;
+              const key = `${classData.id}-${selectedUnit.id}-${subUnit.id}`;
               const done = !!unitProgress[key];
               const isLast = idx === selectedUnit.subUnits.length - 1;
               const quizzes = subUnit.quizzes || [];
@@ -821,111 +1173,133 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
 
                   {/* Section info card */}
                   <View style={styles.flightInfo}>
-                    <View style={styles.flightInfoTop}>
+                    <TouchableOpacity
+                      style={styles.flightInfoTop}
+                      onPress={() => {
+                        setCollapsedSections((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(subUnit.id)) next.delete(subUnit.id);
+                          else next.add(subUnit.id);
+                          return next;
+                        });
+                      }}
+                      activeOpacity={0.7}
+                    >
                       <Text style={styles.flightInfoTitle}>{subUnit.title}</Text>
-                    </View>
-                    <Text style={styles.flightInfoMeta}>
-                      {subUnit.notes.length} note{subUnit.notes.length !== 1 ? 's' : ''}{quizzes.length > 0 ? ` • ${quizzes.length} quiz${quizzes.length !== 1 ? 'zes' : ''}` : ''}
-                    </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <Text style={[styles.flightInfoMeta, { marginTop: 0 }]}>
+                          {subUnit.notes.length} note{subUnit.notes.length !== 1 ? 's' : ''}{quizzes.length > 0 ? ` • ${quizzes.length} quiz${quizzes.length !== 1 ? 'zes' : ''}` : ''}
+                        </Text>
+                        <Ionicons
+                          name={collapsedSections.has(subUnit.id) ? 'chevron-down' : 'chevron-up'}
+                          size={14}
+                          color={colors.textTertiary}
+                        />
+                      </View>
+                    </TouchableOpacity>
 
-                    {/* Action buttons */}
-                    <View style={[styles.subUnitActionsRow, { marginTop: 8 }]}>
-                      <TouchableOpacity style={[styles.subUnitAction, { backgroundColor: `${classAccent}12` }]} onPress={() => openAddNoteModal(subUnit.id)}>
-                        <Ionicons name="add" size={14} color={classAccent} />
-                        <Text style={[styles.subUnitActionText, { color: classAccent }]}>Note</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.subUnitAction, { backgroundColor: `${classAccent}12` }, subUnit.notes.length < 2 && styles.subUnitActionDisabled]}
-                        onPress={() => openMergeNotesModal(subUnit.id)}
-                        disabled={subUnit.notes.length < 2}
-                      >
-                        <Ionicons name="git-merge" size={14} color={subUnit.notes.length < 2 ? colors.textTertiary : classAccent} />
-                        <Text style={[styles.subUnitActionText, { color: classAccent }, subUnit.notes.length < 2 && styles.subUnitActionTextDisabled]}>Merge</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.subUnitAction, { backgroundColor: `${classAccent}12` }]}
-                        onPress={() => { setActiveSubUnitId(subUnit.id); setQuizTitle(''); setShowAddQuiz(true); }}
-                      >
-                        <Ionicons name="school" size={14} color={classAccent} />
-                        <Text style={[styles.subUnitActionText, { color: classAccent }]}>Quiz</Text>
-                      </TouchableOpacity>
-                    </View>
-
-                    {/* Notes list */}
-                    {subUnit.notes.length > 0 && (
-                      <View style={[styles.notesList, { marginTop: 8 }]}>
-                        {subUnit.notes.map((note) => (
-                          <TouchableOpacity key={note.id} style={styles.noteCard} onPress={() => openNoteModal(note, subUnit.title)}>
-                            <View style={styles.noteTopRow}>
-                              <Text style={styles.noteTitle}>{note.title}</Text>
-                              <Text style={[styles.noteAuthorPill, { color: classAccent, backgroundColor: `${classAccent}12` }]}>{note.author}</Text>
-                            </View>
-                            <Text style={styles.noteMeta}>{note.date}</Text>
-                            <Text style={styles.noteContent} numberOfLines={2}>{note.content}</Text>
+                    {!collapsedSections.has(subUnit.id) && (
+                      <>
+                        {/* Action buttons */}
+                        <View style={[styles.subUnitActionsRow, { marginTop: 8 }]}>
+                          <TouchableOpacity style={[styles.subUnitAction, { backgroundColor: `${classAccent}12` }]} onPress={() => openAddNoteModal(subUnit.id)}>
+                            <Ionicons name="add" size={14} color={classAccent} />
+                            <Text style={[styles.subUnitActionText, { color: classAccent }]}>Note</Text>
                           </TouchableOpacity>
-                        ))}
-                      </View>
-                    )}
+                          <TouchableOpacity
+                            style={[styles.subUnitAction, { backgroundColor: `${classAccent}12` }, subUnit.notes.length < 2 && styles.subUnitActionDisabled]}
+                            onPress={() => openMergeNotesModal(subUnit.id)}
+                            disabled={subUnit.notes.length < 2}
+                          >
+                            <Ionicons name="git-merge" size={14} color={subUnit.notes.length < 2 ? colors.textTertiary : classAccent} />
+                            <Text style={[styles.subUnitActionText, { color: classAccent }, subUnit.notes.length < 2 && styles.subUnitActionTextDisabled]}>Merge</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.subUnitAction, { backgroundColor: `${classAccent}12` }]}
+                            onPress={() => { setActiveSubUnitId(subUnit.id); setQuizTitle(''); setShowAddQuiz(true); }}
+                          >
+                            <Ionicons name="school" size={14} color={classAccent} />
+                            <Text style={[styles.subUnitActionText, { color: classAccent }]}>Quiz</Text>
+                          </TouchableOpacity>
+                        </View>
 
-                    {/* Quizzes */}
-                    {quizzes.length > 0 && (
-                      <View style={{ marginTop: 8 }}>
-                        {quizzes.map((quiz) => {
-                          const isGenerating = quiz.status === 'generating';
-                          const isGrading = quiz.status === 'grading';
-                          const isGraded = quiz.status === 'graded';
-                          const isReady = !quiz.status || quiz.status === 'ready';
-                          return (
-                            <View key={quiz.id} style={[styles.quizRow, (isGenerating || isGrading) && styles.quizRowPending]}>
-                              {isGenerating || isGrading ? (
-                                <ActivityIndicator size="small" color={classAccent} />
-                              ) : (
-                                <Ionicons name="school" size={14} color={classAccent} />
-                              )}
-                              <View style={{ flex: 1 }}>
-                                <Text style={[styles.quizTitle, (isGenerating || isGrading) && { color: colors.textTertiary }]}>
-                                  {isGenerating ? 'Generating…' : isGrading ? 'Grading…' : quiz.title}
-                                </Text>
-                                {!isGenerating && (
-                                  <Text style={styles.quizMeta}>{quiz.questions} questions • {quiz.date}</Text>
-                                )}
-                              </View>
-                              {isGenerating || isGrading ? null : isGraded ? (
-                                <View style={styles.quizActions}>
-                                  {quiz.score !== undefined && (
-                                    <View style={[styles.quizScorePill, { backgroundColor: quiz.score >= 80 ? '#D1FAE5' : '#FEF3C7' }]}>
-                                      <Text style={[styles.quizScoreText, { color: quiz.score >= 80 ? '#059669' : '#d97706' }]}>{quiz.score}%</Text>
-                                    </View>
-                                  )}
-                                  {quiz.score === undefined && (
-                                    <View style={[styles.quizScorePill, { backgroundColor: '#EDE9FE' }]}>
-                                      <Text style={[styles.quizScoreText, { color: '#7c3aed' }]}>Awaiting AI</Text>
-                                    </View>
-                                  )}
-                                  <TouchableOpacity onPress={() => openEditQuiz(quiz, subUnit.id)} hitSlop={8}>
-                                    <Ionicons name="pencil" size={15} color={colors.textTertiary} />
-                                  </TouchableOpacity>
-                                  <TouchableOpacity onPress={() => deleteQuiz(subUnit.id, quiz.id)} hitSlop={8}>
-                                    <Ionicons name="trash-outline" size={15} color={colors.textTertiary} />
-                                  </TouchableOpacity>
+                        {/* Notes list */}
+                        {subUnit.notes.length > 0 && (
+                          <View style={[styles.notesList, { marginTop: 8 }]}>
+                            {subUnit.notes.map((note) => (
+                              <TouchableOpacity key={note.id} style={styles.noteCard} onPress={() => openNoteModal(note, subUnit.title)}>
+                                <View style={styles.noteTopRow}>
+                                  <Text style={styles.noteTitle}>{note.title}</Text>
+                                  <Text style={[styles.noteAuthorPill, { color: classAccent, backgroundColor: `${classAccent}12` }]}>{note.author}</Text>
                                 </View>
-                              ) : isReady ? (
-                                <View style={styles.quizActions}>
-                                  <TouchableOpacity style={styles.quizTakeBtn} onPress={() => takeQuiz(subUnit.id, quiz.id)}>
-                                    <Text style={styles.quizTakeBtnText}>Take</Text>
-                                  </TouchableOpacity>
-                                  <TouchableOpacity onPress={() => openEditQuiz(quiz, subUnit.id)} hitSlop={8}>
-                                    <Ionicons name="pencil" size={15} color={colors.textTertiary} />
-                                  </TouchableOpacity>
-                                  <TouchableOpacity onPress={() => deleteQuiz(subUnit.id, quiz.id)} hitSlop={8}>
-                                    <Ionicons name="trash-outline" size={15} color={colors.textTertiary} />
-                                  </TouchableOpacity>
+                                <Text style={styles.noteMeta}>{note.date}</Text>
+                                <Text style={styles.noteContent} numberOfLines={2}>{note.content}</Text>
+                              </TouchableOpacity>
+                            ))}
+                          </View>
+                        )}
+
+                        {/* Quizzes */}
+                        {quizzes.length > 0 && (
+                          <View style={{ marginTop: 8 }}>
+                            {quizzes.map((quiz) => {
+                              const isGenerating = quiz.status === 'generating';
+                              const isGrading = quiz.status === 'grading';
+                              const isGraded = quiz.status === 'graded';
+                              const isReady = !quiz.status || quiz.status === 'ready';
+                              return (
+                                <View key={quiz.id} style={[styles.quizRow, (isGenerating || isGrading) && styles.quizRowPending]}>
+                                  {isGenerating || isGrading ? (
+                                    <ActivityIndicator size="small" color={classAccent} />
+                                  ) : (
+                                    <Ionicons name="school" size={14} color={classAccent} />
+                                  )}
+                                  <View style={{ flex: 1 }}>
+                                    <Text style={[styles.quizTitle, (isGenerating || isGrading) && { color: colors.textTertiary }]}>
+                                      {isGenerating ? 'Generating…' : isGrading ? 'Grading…' : quiz.title}
+                                    </Text>
+                                    {!isGenerating && (
+                                      <Text style={styles.quizMeta}>{quiz.questions} questions • {quiz.date}</Text>
+                                    )}
+                                  </View>
+                                  {isGenerating || isGrading ? null : isGraded ? (
+                                    <View style={styles.quizActions}>
+                                      {quiz.score !== undefined && (
+                                        <View style={[styles.quizScorePill, { backgroundColor: quiz.score >= 80 ? '#D1FAE5' : '#FEF3C7' }]}>
+                                          <Text style={[styles.quizScoreText, { color: quiz.score >= 80 ? '#059669' : '#d97706' }]}>{quiz.score}%</Text>
+                                        </View>
+                                      )}
+                                      {quiz.score === undefined && (
+                                        <View style={[styles.quizScorePill, { backgroundColor: '#EDE9FE' }]}>
+                                          <Text style={[styles.quizScoreText, { color: '#7c3aed' }]}>Awaiting AI</Text>
+                                        </View>
+                                      )}
+                                      <TouchableOpacity onPress={() => openEditQuiz(quiz, subUnit.id)} hitSlop={8}>
+                                        <Ionicons name="pencil" size={15} color={colors.textTertiary} />
+                                      </TouchableOpacity>
+                                      <TouchableOpacity onPress={() => deleteQuiz(subUnit.id, quiz.id)} hitSlop={8}>
+                                        <Ionicons name="trash-outline" size={15} color={colors.textTertiary} />
+                                      </TouchableOpacity>
+                                    </View>
+                                  ) : isReady ? (
+                                    <View style={styles.quizActions}>
+                                      <TouchableOpacity style={styles.quizTakeBtn} onPress={() => startQuiz(subUnit.id, quiz)}>
+                                        <Text style={styles.quizTakeBtnText}>Take</Text>
+                                      </TouchableOpacity>
+                                      <TouchableOpacity onPress={() => openEditQuiz(quiz, subUnit.id)} hitSlop={8}>
+                                        <Ionicons name="pencil" size={15} color={colors.textTertiary} />
+                                      </TouchableOpacity>
+                                      <TouchableOpacity onPress={() => deleteQuiz(subUnit.id, quiz.id)} hitSlop={8}>
+                                        <Ionicons name="trash-outline" size={15} color={colors.textTertiary} />
+                                      </TouchableOpacity>
+                                    </View>
+                                  ) : null}
                                 </View>
-                              ) : null}
-                            </View>
-                          );
-                        })}
-                      </View>
+                              );
+                            })}
+                          </View>
+                        )}
+                      </>
                     )}
                   </View>
                 </View>
@@ -949,175 +1323,223 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
             </View>
           </View>
 
-          {/* Study Sheet + SOS inside scroll, not blocking nav */}
-          <View style={styles.unitActionBarInline}>
-            <AnimatedPressable
-              style={[styles.unitActionBtn, { backgroundColor: `${classAccent}12`, borderColor: `${classAccent}30` }]}
-              onPress={() => setShowStudySheet(true)}
-              scaleDown={0.94}
-            >
-              <Ionicons name="document-text" size={16} color={classAccent} />
-              <Text style={[styles.unitActionBtnText, { color: classAccent }]}>Study Sheet</Text>
-            </AnimatedPressable>
-            <AnimatedPressable
-              style={[styles.sosBtn]}
-              onPress={() => { setShowSOS(true); setSosSent(false); }}
-              scaleDown={0.9}
-            >
-              <Ionicons name="alert-circle" size={18} color="white" />
-              <Text style={styles.sosBtnText}>SOS</Text>
-            </AnimatedPressable>
-          </View>
+
         </ScrollView>
 
-        <BottomNav active="home" onHome={onBack} onScan={onScan} onFriends={onFriends} onFiles={onFilesOpen} />
+        <BottomNav active="home" onHome={onBack} onScan={onScan} onFriends={onFriends} onFiles={onFilesOpen} highlightedTab={tutorialStep === 3 ? 'files' : undefined} />
 
-        {/* Study Sheet Modal */}
-        <Modal visible={showStudySheet} transparent animationType="slide" onRequestClose={() => setShowStudySheet(false)}>
-          <View style={styles.modalBackdrop}>
-            <View style={styles.studySheetCard}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>📄 Study Sheet</Text>
-                <TouchableOpacity onPress={() => setShowStudySheet(false)}>
-                  <Ionicons name="close" size={22} color={colors.textPrimary} />
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.studySheetSub}>{selectedUnit.title} — {classData.title}</Text>
 
-              <ScrollView style={styles.studySheetScroll} showsVerticalScrollIndicator={false}>
-                {selectedUnit.subUnits.map((sub) => {
-                  const mergedNotes = sub.notes.filter(n => n.title.startsWith('Merged'));
-                  const regularNotes = mergedNotes.length > 0 ? mergedNotes : sub.notes;
-                  if (regularNotes.length === 0) return null;
-                  return (
-                    <View key={sub.id} style={styles.studySection}>
-                      <Text style={styles.studySectionTitle}>{sub.title}</Text>
-                      <View style={styles.studySectionDivider} />
-                      {regularNotes.map((note) => (
-                        <View key={note.id} style={styles.studyNoteBlock}>
-                          <Text style={styles.studyNoteHeading}>{note.title}</Text>
-                          <Text style={styles.studyNoteAuthor}>{note.author} • {note.date}</Text>
-                          {note.content.split('. ').filter(Boolean).map((sentence, i) => (
-                            <View key={i} style={styles.studyBullet}>
-                              <Text style={styles.studyBulletDot}>•</Text>
-                              <Text style={styles.studyBulletText}>{sentence.trim()}{sentence.endsWith('.') ? '' : '.'}</Text>
-                            </View>
-                          ))}
-                        </View>
-                      ))}
-                    </View>
-                  );
-                })}
-              </ScrollView>
-
-              <TouchableOpacity
-                style={[styles.modalSaveBtn, { backgroundColor: classAccent }]}
-                onPress={async () => {
-                  const sheetText = selectedUnit.subUnits.map(sub => {
-                    const notes = sub.notes.filter(n => n.title.startsWith('Merged'));
-                    const use = notes.length > 0 ? notes : sub.notes;
-                    return `## ${sub.title}\n${use.map(n => `${n.title}: ${n.content}`).join('\n')}`;
-                  }).join('\n\n');
-                  await Share.share({ title: `${selectedUnit.title} Study Sheet`, message: `${selectedUnit.title} — ${classData.title}\n\n${sheetText}` });
-                }}
-              >
-                <Ionicons name="share-social" size={16} color="white" />
-                <Text style={styles.modalSaveBtnText}>  Share Study Sheet</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
-
-        {/* SOS Modal */}
-        <Modal visible={showSOS} transparent animationType="fade" onRequestClose={() => setShowSOS(false)}>
-          <View style={styles.modalBackdropCentered}>
-            <View style={styles.sosCard}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>🚨 SOS Help</Text>
-                <TouchableOpacity onPress={() => setShowSOS(false)}>
-                  <Ionicons name="close" size={22} color={colors.textPrimary} />
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.sosSubtitle}>Stuck on {selectedUnit.title}? We'll notify classmates who can help.</Text>
-
-              {sosSent ? (
-                <View style={styles.sosSentContainer}>
-                  <Ionicons name="checkmark-circle" size={48} color="#059669" />
-                  <Text style={styles.sosSentTitle}>SOS Sent! 🎉</Text>
-                  <Text style={styles.sosSentSub}>Your classmates have been notified. Help is on the way!</Text>
-                </View>
-              ) : (
-                <>
-                  <Text style={styles.sosSectionLabel}>🟢 Active Now</Text>
-                  <View style={styles.sosPersonList}>
-                    {friendsDirectory.filter(f => f.status === 'online' || f.status === 'studying').map(f => (
-                      <View key={f.id} style={styles.sosPersonRow}>
-                        <View style={[styles.sosPersonDot, { backgroundColor: f.status === 'online' ? '#059669' : '#d97706' }]} />
-                        <Text style={styles.sosPersonName}>{f.name}</Text>
-                        <Text style={styles.sosPersonStatus}>{f.status === 'studying' ? 'Studying' : 'Online'}</Text>
-                      </View>
-                    ))}
-                  </View>
-
-                  <Text style={styles.sosSectionLabel}>📝 Unit Note Contributors</Text>
-                  <View style={styles.sosPersonList}>
-                    {[...new Set(selectedUnit.subUnits.flatMap(s => s.notes.map(n => n.author)))].filter(a => a !== 'You' && a !== 'Citadel Merge').map(author => (
-                      <View key={author} style={styles.sosPersonRow}>
-                        <Ionicons name="document-text" size={14} color={classAccent} />
-                        <Text style={styles.sosPersonName}>{author}</Text>
-                        <Text style={styles.sosPersonStatus}>Contributor</Text>
-                      </View>
-                    ))}
-                  </View>
-
-                  <AnimatedPressable
-                    style={styles.sosSendBtn}
-                    onPress={() => setSosSent(true)}
-                    scaleDown={0.95}
-                  >
-                    <Ionicons name="paper-plane" size={16} color="white" />
-                    <Text style={styles.sosSendBtnText}>Send SOS</Text>
-                  </AnimatedPressable>
-                </>
-              )}
-            </View>
-          </View>
-        </Modal>
 
         {/* Add / Edit Quiz Modal */}
         <Modal visible={showAddQuiz} transparent animationType="fade" onRequestClose={() => { setShowAddQuiz(false); setEditingQuizId(null); setEditingQuizSubUnitId(null); }}>
           <View style={styles.modalBackdropCentered}>
             <View style={styles.sosCard}>
               <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>{editingQuizId ? '✏️ Edit Quiz' : '🎓 Add Quiz'}</Text>
+                <Text style={styles.modalTitle}>{editingQuizId ? '✏️ Edit Quiz' : '🧠 Generate Quiz'}</Text>
                 <TouchableOpacity onPress={() => { setShowAddQuiz(false); setEditingQuizId(null); setEditingQuizSubUnitId(null); }}>
                   <Ionicons name="close" size={22} color={colors.textPrimary} />
                 </TouchableOpacity>
               </View>
-              <Text style={styles.sosSubtitle}>{editingQuizId ? 'Update the quiz details below.' : 'Create a quiz for this section to test your knowledge.'}</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Quiz title"
-                placeholderTextColor={colors.textTertiary}
-                value={quizTitle}
-                onChangeText={setQuizTitle}
-              />
-              <TextInput
-                style={[styles.input, { marginTop: 10 }]}
-                placeholder="Number of questions"
-                placeholderTextColor={colors.textTertiary}
-                value={quizQuestionCount}
-                onChangeText={setQuizQuestionCount}
-                keyboardType="numeric"
-              />
+              <Text style={styles.sosSubtitle}>
+                {editingQuizId
+                  ? 'Update the quiz details below.'
+                  : 'AI will generate multiple-choice questions from your notes in this section.'}
+              </Text>
+
+              {editingQuizId ? (
+                <>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Quiz title"
+                    placeholderTextColor={colors.textTertiary}
+                    value={quizTitle}
+                    onChangeText={setQuizTitle}
+                  />
+                  <TextInput
+                    style={[styles.input, { marginTop: 10 }]}
+                    placeholder="Number of questions"
+                    placeholderTextColor={colors.textTertiary}
+                    value={quizQuestionCount}
+                    onChangeText={setQuizQuestionCount}
+                    keyboardType="numeric"
+                  />
+                </>
+              ) : (
+                <>
+                  <Text style={[styles.modalLabel, { marginTop: 14, marginBottom: 8 }]}>Number of Questions</Text>
+                  <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                    {['3', '5', '8', '10'].map((n) => (
+                      <TouchableOpacity
+                        key={n}
+                        style={[
+                          styles.quizCountChip,
+                          quizQuestionCount === n && { backgroundColor: classAccent, borderColor: classAccent },
+                        ]}
+                        onPress={() => setQuizQuestionCount(n)}
+                      >
+                        <Text style={[styles.quizCountChipText, quizQuestionCount === n && { color: 'white' }]}>{n}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </>
+              )}
+
               <TouchableOpacity
-                style={[styles.modalSaveBtn, { backgroundColor: classAccent, marginTop: 14 }, !quizTitle.trim() && styles.modalSaveBtnDisabled]}
+                style={[styles.modalSaveBtn, { backgroundColor: classAccent, marginTop: 16 }]}
                 onPress={editingQuizId ? saveQuizEdit : addQuiz}
-                disabled={!quizTitle.trim()}
               >
-                <Ionicons name={editingQuizId ? 'checkmark' : 'school'} size={16} color="white" />
-                <Text style={styles.modalSaveBtnText}>  {editingQuizId ? 'Save Changes' : 'Create Quiz'}</Text>
+                <Ionicons name={editingQuizId ? 'checkmark' : 'sparkles'} size={16} color="white" />
+                <Text style={styles.modalSaveBtnText}>  {editingQuizId ? 'Save Changes' : 'Generate with AI'}</Text>
               </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Quiz-Taking Modal */}
+        <Modal visible={!!activeQuiz} transparent animationType="slide" onRequestClose={closeQuizModal}>
+          <View style={styles.quizModalBackdrop}>
+            <View style={styles.quizModalCard}>
+              {activeQuiz?.questionData && (() => {
+                const questions = activeQuiz.questionData!;
+                const currentQuestion = questions[quizCurrentQ];
+                const totalQ = questions.length;
+                const isLast = quizCurrentQ === totalQ - 1;
+                const allAnswered = quizAnswers.every((a) => a !== null);
+
+                if (quizSubmitted && quizScore !== null) {
+                  // Results view
+                  const correct = questions.filter((q, i) => quizAnswers[i] === q.correctIndex).length;
+                  const emoji = quizScore >= 90 ? '🏆' : quizScore >= 70 ? '🎉' : quizScore >= 50 ? '💪' : '📚';
+                  return (
+                    <ScrollView showsVerticalScrollIndicator={false}>
+                      <View style={styles.quizResultHeader}>
+                        <Text style={{ fontSize: 48 }}>{emoji}</Text>
+                        <Text style={styles.quizResultScore}>{quizScore}%</Text>
+                        <Text style={styles.quizResultSub}>{correct}/{totalQ} correct</Text>
+                        <Text style={[styles.quizResultLabel, { color: quizScore >= 70 ? '#059669' : '#d97706' }]}>
+                          {quizScore >= 90 ? 'Outstanding!' : quizScore >= 70 ? 'Great job!' : quizScore >= 50 ? 'Good effort!' : 'Keep studying!'}
+                        </Text>
+                      </View>
+                      {/* Review each question */}
+                      {questions.map((q, qi) => {
+                        const userAnswer = quizAnswers[qi];
+                        const isCorrect = userAnswer === q.correctIndex;
+                        return (
+                          <View key={qi} style={[styles.quizReviewCard, { borderColor: isCorrect ? '#D1FAE5' : '#FEE2E2' }]}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                              <Ionicons name={isCorrect ? 'checkmark-circle' : 'close-circle'} size={18} color={isCorrect ? '#059669' : '#dc2626'} />
+                              <Text style={styles.quizReviewQ}>Q{qi + 1}. {q.question}</Text>
+                            </View>
+                            {q.options.map((opt, oi) => {
+                              const isUserPick = userAnswer === oi;
+                              const isCorrectOpt = q.correctIndex === oi;
+                              return (
+                                <View key={oi} style={[
+                                  styles.quizReviewOpt,
+                                  isCorrectOpt && { backgroundColor: '#D1FAE5', borderColor: '#059669' },
+                                  isUserPick && !isCorrectOpt && { backgroundColor: '#FEE2E2', borderColor: '#dc2626' },
+                                ]}>
+                                  <Text style={[styles.quizReviewOptLetter, isCorrectOpt && { color: '#059669' }, isUserPick && !isCorrectOpt && { color: '#dc2626' }]}>
+                                    {['A', 'B', 'C', 'D'][oi]}
+                                  </Text>
+                                  <Text style={[styles.quizReviewOptText, isCorrectOpt && { color: '#059669', fontFamily: fonts.bold }]}>
+                                    {opt}
+                                  </Text>
+                                  {isCorrectOpt && <Ionicons name="checkmark" size={14} color="#059669" />}
+                                  {isUserPick && !isCorrectOpt && <Ionicons name="close" size={14} color="#dc2626" />}
+                                </View>
+                              );
+                            })}
+                          </View>
+                        );
+                      })}
+                      <TouchableOpacity style={[styles.quizNavBtn, { backgroundColor: classAccent, marginTop: 12 }]} onPress={closeQuizModal}>
+                        <Text style={styles.quizNavBtnText}>Done</Text>
+                      </TouchableOpacity>
+                    </ScrollView>
+                  );
+                }
+
+                // Question view
+                return (
+                  <>
+                    <View style={styles.quizTopBar}>
+                      <TouchableOpacity onPress={closeQuizModal}>
+                        <Ionicons name="close" size={24} color={colors.textPrimary} />
+                      </TouchableOpacity>
+                      <Text style={styles.quizTopTitle}>{activeQuiz.title}</Text>
+                      <Text style={styles.quizTopProgress}>{quizCurrentQ + 1}/{totalQ}</Text>
+                    </View>
+
+                    {/* Progress bar */}
+                    <View style={styles.quizProgressBar}>
+                      <View style={[styles.quizProgressFill, { width: `${((quizCurrentQ + 1) / totalQ) * 100}%`, backgroundColor: classAccent }]} />
+                    </View>
+
+                    <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
+                      <Text style={styles.quizQuestionText}>{currentQuestion.question}</Text>
+
+                      <View style={styles.quizOptionsContainer}>
+                        {currentQuestion.options.map((option, oi) => {
+                          const isSelected = quizAnswers[quizCurrentQ] === oi;
+                          return (
+                            <TouchableOpacity
+                              key={oi}
+                              style={[
+                                styles.quizOptionBtn,
+                                isSelected && { backgroundColor: `${classAccent}15`, borderColor: classAccent, borderWidth: 2 },
+                              ]}
+                              onPress={() => {
+                                const newAnswers = [...quizAnswers];
+                                newAnswers[quizCurrentQ] = oi;
+                                setQuizAnswers(newAnswers);
+                              }}
+                            >
+                              <View style={[styles.quizOptionLetter, isSelected && { backgroundColor: classAccent }]}>
+                                <Text style={[styles.quizOptionLetterText, isSelected && { color: 'white' }]}>
+                                  {['A', 'B', 'C', 'D'][oi]}
+                                </Text>
+                              </View>
+                              <Text style={[styles.quizOptionText, isSelected && { color: classAccent, fontFamily: fonts.semiBold }]}>
+                                {option}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </ScrollView>
+
+                    <View style={styles.quizNavRow}>
+                      {quizCurrentQ > 0 && (
+                        <TouchableOpacity style={[styles.quizNavBtn, { backgroundColor: '#F0E0D0' }]} onPress={() => setQuizCurrentQ((q) => q - 1)}>
+                          <Ionicons name="arrow-back" size={16} color={colors.textPrimary} />
+                          <Text style={[styles.quizNavBtnText, { color: colors.textPrimary }]}>Back</Text>
+                        </TouchableOpacity>
+                      )}
+                      <View style={{ flex: 1 }} />
+                      {isLast ? (
+                        <TouchableOpacity
+                          style={[styles.quizNavBtn, { backgroundColor: allAnswered ? classAccent : '#D8C8B8' }]}
+                          onPress={submitQuiz}
+                          disabled={!allAnswered}
+                        >
+                          <Ionicons name="checkmark-circle" size={16} color="white" />
+                          <Text style={styles.quizNavBtnText}>Submit</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          style={[styles.quizNavBtn, { backgroundColor: quizAnswers[quizCurrentQ] !== null ? classAccent : '#D8C8B8' }]}
+                          onPress={() => setQuizCurrentQ((q) => q + 1)}
+                          disabled={quizAnswers[quizCurrentQ] === null}
+                        >
+                          <Text style={styles.quizNavBtnText}>Next</Text>
+                          <Ionicons name="arrow-forward" size={16} color="white" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </>
+                );
+              })()}
             </View>
           </View>
         </Modal>
@@ -1132,110 +1554,130 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
                 </TouchableOpacity>
               </View>
 
-              <View style={styles.noteMethodRow}>
-                <TouchableOpacity style={[styles.noteMethodBtn, styles.noteMethodBtnActive, { backgroundColor: classAccent }]}>
-                  <Text style={[styles.noteMethodText, styles.noteMethodTextActive]}>Upload from Files</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.noteMethodBtn} onPress={openScanTabFromAddNote}>
-                  <Text style={styles.noteMethodText}>Scan Now</Text>
-                </TouchableOpacity>
-              </View>
-
-              <Text style={styles.modalLabel}>Source</Text>
-              <View style={styles.sourceRow}>
-                <TouchableOpacity
-                  style={[
-                    styles.sourceChip,
-                    noteSource === 'filesTab' && [styles.sourceChipActive, { backgroundColor: `${classAccent}15`, borderColor: `${classAccent}40` }],
-                  ]}
-                  onPress={() => setNoteSource('filesTab')}
-                >
-                  <Text style={[styles.sourceChipText, noteSource === 'filesTab' && [styles.sourceChipTextActive, { color: classAccent }]]}>
-                    Files Tab
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.sourceChip,
-                    noteSource === 'phone' && [styles.sourceChipActive, { backgroundColor: `${classAccent}15`, borderColor: `${classAccent}40` }],
-                  ]}
-                  onPress={() => setNoteSource('phone')}
-                >
-                  <Text style={[styles.sourceChipText, noteSource === 'phone' && [styles.sourceChipTextActive, { color: classAccent }]]}>
-                    Phone Storage
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {noteSource === 'filesTab' ? (
-                classData.files.length > 0 ? (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filePickRow}>
-                    {classData.files.map((file) => (
-                      <TouchableOpacity
-                        key={file.id}
-                        style={[
-                          styles.filePickChip,
-                          selectedClassFileId === file.id && [styles.filePickChipActive, { borderColor: classAccent, backgroundColor: `${classAccent}12` }],
-                        ]}
-                        onPress={() => setSelectedClassFileId(file.id)}
-                      >
-                        <Text
-                          style={[
-                            styles.filePickChipText,
-                            selectedClassFileId === file.id && [styles.filePickChipTextActive, { color: classAccent }],
-                          ]}
-                          numberOfLines={1}
-                        >
-                          {file.name}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                ) : (
-                  <Text style={styles.sourceHint}>No files in this class yet. Add content manually or scan first.</Text>
-                )
-              ) : (
-                <View>
-                  <TouchableOpacity
-                    style={[styles.phonePickBtn, { borderColor: `${classAccent}40`, backgroundColor: `${classAccent}10` }]}
-                    onPress={pickNoteFromPhone}
-                  >
-                    <Ionicons name="folder-open" size={14} color={classAccent} />
-                    <Text style={[styles.phonePickBtnText, { color: classAccent }]}>Choose File from Phone</Text>
-                  </TouchableOpacity>
-                  {localUpload && (
-                    <Text style={styles.sourceHint}>
-                      Selected: {localUpload.name} ({localUpload.pages} page{localUpload.pages > 1 ? 's' : ''})
+              {/* Step indicators */}
+              <View style={styles.wizardSteps}>
+                {[1, 2].map((step) => (
+                  <View key={step} style={styles.wizardStepRow}>
+                    <View style={[
+                      styles.wizardStepDot,
+                      noteStep >= step && { backgroundColor: classAccent, borderColor: classAccent },
+                    ]}>
+                      {noteStep > step ? (
+                        <Ionicons name="checkmark" size={12} color="white" />
+                      ) : (
+                        <Text style={[styles.wizardStepNum, noteStep >= step && { color: 'white' }]}>{step}</Text>
+                      )}
+                    </View>
+                    <Text style={[styles.wizardStepLabel, noteStep >= step && { color: classAccent }]}>
+                      {step === 1 ? 'Source' : 'Details'}
                     </Text>
-                  )}
+                    {step < 2 && <View style={[styles.wizardStepLine, noteStep > step && { backgroundColor: classAccent }]} />}
+                  </View>
+                ))}
+              </View>
+
+              {/* Step 1: Choose Source */}
+              {noteStep === 1 && (
+                <View>
+                  <Text style={styles.wizardStepTitle}>How do you want to add your note?</Text>
+
+                  <TouchableOpacity
+                    style={[styles.sourceActionCard, { borderColor: `${classAccent}40` }]}
+                    onPress={async () => {
+                      await pickNoteFromPhone();
+                      setNoteStep(2);
+                    }}
+                  >
+                    <View style={[styles.sourceActionIcon, { backgroundColor: `${classAccent}12` }]}>
+                      <Ionicons name="folder-open" size={20} color={classAccent} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.sourceActionTitle}>Upload from Phone</Text>
+                      <Text style={styles.sourceActionSub}>Pick a PDF, image, or text file</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.sourceActionCard, { borderColor: `${classAccent}40` }]}
+                    onPress={scanNoteWithCamera}
+                  >
+                    <View style={[styles.sourceActionIcon, { backgroundColor: `${classAccent}12` }]}>
+                      <Ionicons name="scan" size={20} color={classAccent} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.sourceActionTitle}>Scan Now</Text>
+                      <Text style={styles.sourceActionSub}>Use camera to capture notes</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.sourceActionCard, { borderColor: `${classAccent}40` }]}
+                    onPress={() => setNoteStep(2)}
+                  >
+                    <View style={[styles.sourceActionIcon, { backgroundColor: `${classAccent}12` }]}>
+                      <Ionicons name="create" size={20} color={classAccent} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.sourceActionTitle}>Write Manually</Text>
+                      <Text style={styles.sourceActionSub}>Type your own note content</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+                  </TouchableOpacity>
                 </View>
               )}
 
-              <Text style={styles.modalLabel}>Contributor Name</Text>
-              <TextInput style={styles.modalInput} value={newNoteAuthor} onChangeText={setNewNoteAuthor} placeholder="Name" />
-              <Text style={styles.modalLabel}>Note Title</Text>
-              <TextInput
-                style={styles.modalInput}
-                value={newNoteTitle}
-                onChangeText={setNewNoteTitle}
-                placeholder="Optional custom title"
-              />
-              <Text style={styles.modalLabel}>Add Extra Context (Optional)</Text>
-              <TextInput
-                style={styles.modalInputMultiline}
-                value={newNoteContent}
-                onChangeText={setNewNoteContent}
-                placeholder="Add highlights or context for this section"
-                multiline
-              />
+              {/* Step 2: Details + Save */}
+              {noteStep === 2 && (
+                <View>
+                  <Text style={styles.wizardStepTitle}>Note details</Text>
 
-              <TouchableOpacity
-                style={[styles.modalSaveBtn, { backgroundColor: classAccent }, !canSaveAddedNote && styles.modalSaveBtnDisabled]}
-                onPress={saveSectionNote}
-                disabled={!canSaveAddedNote}
-              >
-                <Text style={styles.modalSaveBtnText}>Add to Section</Text>
-              </TouchableOpacity>
+                  {localUpload && (
+                    <View style={styles.uploadedFileBanner}>
+                      <Ionicons name="document-attach" size={14} color={classAccent} />
+                      <Text style={[styles.uploadedFileText, { color: classAccent }]} numberOfLines={1}>
+                        {localUpload.name} ({localUpload.pages} page{localUpload.pages > 1 ? 's' : ''})
+                      </Text>
+                    </View>
+                  )}
+
+                  <Text style={styles.modalLabel}>Contributor Name</Text>
+                  <TextInput style={styles.modalInput} value={newNoteAuthor} onChangeText={setNewNoteAuthor} placeholder="Your name" placeholderTextColor="#999999" />
+                  <Text style={styles.modalLabel}>Note Title</Text>
+                  <TextInput
+                    style={styles.modalInput}
+                    value={newNoteTitle}
+                    onChangeText={setNewNoteTitle}
+                    placeholder="Give this note a title"
+                    placeholderTextColor="#999999"
+                  />
+                  <Text style={styles.modalLabel}>Content / Context</Text>
+                  <TextInput
+                    style={styles.modalInputMultiline}
+                    value={newNoteContent}
+                    onChangeText={setNewNoteContent}
+                    placeholder="Add note content, highlights, or context"
+                    placeholderTextColor="#999999"
+                    multiline
+                  />
+
+                  <View style={styles.wizardNavRow}>
+                    <TouchableOpacity
+                      style={[styles.wizardBackBtn, { borderColor: `${classAccent}40` }]}
+                      onPress={() => { setNoteStep(1); setLocalUpload(null); }}
+                    >
+                      <Text style={[styles.wizardBackBtnText, { color: classAccent }]}>← Back</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.modalSaveBtn, { backgroundColor: classAccent, flex: 1 }]}
+                      onPress={saveSectionNote}
+                    >
+                      <Text style={styles.modalSaveBtnText}>Add to Section ✓</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
             </View>
           </View>
         </Modal>
@@ -1271,62 +1713,69 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
               </ScrollView>
 
               <TouchableOpacity
-                style={[styles.modalSaveBtn, { backgroundColor: classAccent }, selectedMergeNoteIds.length < 2 && styles.modalSaveBtnDisabled]}
+                style={[styles.modalSaveBtn, { backgroundColor: classAccent }, (selectedMergeNoteIds.length < 2 || isMerging) && styles.modalSaveBtnDisabled]}
                 onPress={mergeSelectedNotes}
-                disabled={selectedMergeNoteIds.length < 2}
+                disabled={selectedMergeNoteIds.length < 2 || isMerging}
               >
-                <Text style={styles.modalSaveBtnText}>Merge Selected</Text>
+                {isMerging ? (
+                  <View style={styles.mergingRow}>
+                    <ActivityIndicator size="small" color="white" />
+                    <Text style={styles.modalSaveBtnText}>  AI Merging…</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.modalSaveBtnText}>✨ Merge with AI</Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>
         </Modal>
 
-        <Modal visible={!!activeNote} transparent animationType="fade" onRequestClose={() => setActiveNote(null)}>
-          <View style={styles.modalBackdropCentered}>
-            <View style={styles.noteModalCard}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Note Details</Text>
-                <TouchableOpacity onPress={() => setActiveNote(null)}>
+        {/* Merged Note Viewer */}
+        <Modal visible={showMergedViewer} transparent animationType="slide" onRequestClose={() => setShowMergedViewer(false)}>
+          <View style={styles.viewerBackdrop}>
+            <View style={styles.viewerCard}>
+              <View style={styles.viewerHeader}>
+                <View style={styles.viewerHeaderLeft}>
+                  <View style={[styles.viewerBadge, { backgroundColor: classAccent }]}>
+                    <Ionicons name="sparkles" size={14} color="white" />
+                  </View>
+                  <Text style={styles.viewerLabel}>AI Merged Note</Text>
+                </View>
+                <TouchableOpacity onPress={() => setShowMergedViewer(false)} style={styles.viewerCloseBtn}>
                   <Ionicons name="close" size={22} color={colors.textPrimary} />
                 </TouchableOpacity>
               </View>
 
-              {activeNote && (
+              {mergedResult && (
                 <>
-                  <Text style={styles.detailNoteTitle}>{activeNote.note.title}</Text>
-                  <Text style={styles.detailNoteMeta}>
-                    {activeNote.sectionTitle} • {activeNote.note.author} • {activeNote.note.date}
-                  </Text>
-                  <ScrollView style={styles.detailNoteScroll}>
-                    <Text style={styles.detailNoteBody}>{activeNote.note.content}</Text>
+                  <Text style={styles.viewerTitle}>{mergedResult.title}</Text>
+                  <View style={styles.viewerMetaRow}>
+                    <Ionicons name="document-text" size={12} color={colors.textTertiary} />
+                    <Text style={styles.viewerMeta}>
+                      {mergedResult.content.trim().split(/\s+/).length} words • {classData.title}
+                    </Text>
+                  </View>
+
+                  <ScrollView style={styles.viewerScroll} showsVerticalScrollIndicator={false}>
+                    <FormattedText accentColor={classAccent}>{mergedResult.content}</FormattedText>
                   </ScrollView>
 
                   {noteActionStatus.length > 0 && <Text style={styles.noteActionStatus}>{noteActionStatus}</Text>}
 
-                  <View style={styles.noteActionsRow}>
+                  <View style={styles.viewerActions}>
                     <TouchableOpacity
                       style={[styles.noteActionBtn, { borderColor: `${classAccent}35`, backgroundColor: `${classAccent}10` }]}
-                      onPress={downloadActiveNote}
+                      onPress={downloadMergedToDevice}
                     >
                       <Ionicons name="download-outline" size={14} color={classAccent} />
                       <Text style={[styles.noteActionText, { color: classAccent }]}>Download</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={[styles.noteActionBtn, { borderColor: `${classAccent}35`, backgroundColor: `${classAccent}10` }]}
-                      onPress={shareActiveNote}
+                      onPress={shareMergedNote}
                     >
                       <Ionicons name="share-social-outline" size={14} color={classAccent} />
                       <Text style={[styles.noteActionText, { color: classAccent }]}>Share</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.noteActionBtn, { borderColor: `${classAccent}35`, backgroundColor: `${classAccent}10` }]}
-                      onPress={() => {
-                        setActiveNote(null);
-                        onFilesOpen();
-                      }}
-                    >
-                      <Ionicons name="folder-open-outline" size={14} color={classAccent} />
-                      <Text style={[styles.noteActionText, { color: classAccent }]}>Files</Text>
                     </TouchableOpacity>
                   </View>
                 </>
@@ -1334,6 +1783,123 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
             </View>
           </View>
         </Modal>
+
+        <Modal visible={!!activeNote} transparent animationType="slide" onRequestClose={() => { setActiveNote(null); setIsEditingNote(false); }}>
+          <View style={styles.viewerBackdrop}>
+            <View style={styles.viewerCard}>
+              <View style={styles.viewerHeader}>
+                <View style={styles.viewerHeaderLeft}>
+                  <View style={[styles.viewerBadge, { backgroundColor: classAccent }]}>
+                    <Ionicons name="document-text" size={14} color="white" />
+                  </View>
+                  <Text style={styles.viewerLabel}>{isEditingNote ? 'Edit Note' : 'Note'}</Text>
+                </View>
+                <TouchableOpacity onPress={() => { setActiveNote(null); setIsEditingNote(false); }} style={styles.viewerCloseBtn}>
+                  <Ionicons name="close" size={22} color={colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
+
+              {activeNote && (
+                <>
+                  {isEditingNote ? (
+                    <>
+                      <Text style={styles.modalLabel}>Title</Text>
+                      <TextInput
+                        style={styles.modalInput}
+                        value={editNoteTitle}
+                        onChangeText={setEditNoteTitle}
+                        placeholder="Note title"
+                        placeholderTextColor="#999999"
+                      />
+                      <Text style={[styles.modalLabel, { marginTop: 8 }]}>Content</Text>
+                      <TextInput
+                        style={[styles.modalInputMultiline, { minHeight: 200 }]}
+                        value={editNoteContent}
+                        onChangeText={setEditNoteContent}
+                        placeholder="Note content"
+                        placeholderTextColor="#999999"
+                        multiline
+                      />
+                      <View style={[styles.noteActionsRow, { marginTop: 14 }]}>
+                        <TouchableOpacity
+                          style={[styles.noteActionBtn, { borderColor: '#E0D0C0' }]}
+                          onPress={() => setIsEditingNote(false)}
+                        >
+                          <Text style={[styles.noteActionText, { color: colors.textSecondary }]}>Cancel</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.noteActionBtn, { backgroundColor: classAccent, borderColor: classAccent }]}
+                          onPress={saveEditNote}
+                        >
+                          <Ionicons name="checkmark" size={14} color="white" />
+                          <Text style={[styles.noteActionText, { color: 'white' }]}>Save</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={styles.viewerTitle}>{activeNote.note.title}</Text>
+                      <View style={styles.viewerMetaRow}>
+                        <Ionicons name="person" size={12} color={colors.textTertiary} />
+                        <Text style={styles.viewerMeta}>
+                          {activeNote.note.author} • {activeNote.sectionTitle} • {activeNote.note.date}
+                        </Text>
+                      </View>
+
+                      <ScrollView style={styles.viewerScroll} showsVerticalScrollIndicator={false}>
+                        <FormattedText accentColor={classAccent}>{activeNote.note.content}</FormattedText>
+                      </ScrollView>
+
+                      {noteActionStatus.length > 0 && <Text style={styles.noteActionStatus}>{noteActionStatus}</Text>}
+
+                      <View style={styles.noteActionsRow}>
+                        <TouchableOpacity
+                          style={[styles.noteActionBtn, { borderColor: `${classAccent}35`, backgroundColor: `${classAccent}10` }]}
+                          onPress={startEditNote}
+                        >
+                          <Ionicons name="pencil" size={14} color={classAccent} />
+                          <Text style={[styles.noteActionText, { color: classAccent }]}>Edit</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.noteActionBtn, { borderColor: `${classAccent}35`, backgroundColor: `${classAccent}10` }]}
+                          onPress={downloadActiveNote}
+                        >
+                          <Ionicons name="download-outline" size={14} color={classAccent} />
+                          <Text style={[styles.noteActionText, { color: classAccent }]}>Download</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.noteActionBtn, { borderColor: `${classAccent}35`, backgroundColor: `${classAccent}10` }]}
+                          onPress={shareActiveNote}
+                        >
+                          <Ionicons name="share-social-outline" size={14} color={classAccent} />
+                          <Text style={[styles.noteActionText, { color: classAccent }]}>Share</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.noteActionBtn, { borderColor: '#fecaca', backgroundColor: '#fef2f2' }]}
+                          onPress={deleteNote}
+                        >
+                          <Ionicons name="trash-outline" size={14} color="#dc2626" />
+                          <Text style={[styles.noteActionText, { color: '#dc2626' }]}>Delete</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  )}
+                </>
+              )}
+            </View>
+          </View>
+        </Modal>
+
+        {/* Scanning OCR overlay */}
+        {isScanningNote && (
+          <View style={styles.scanOverlay}>
+            <View style={styles.scanOverlayCard}>
+              <ActivityIndicator size="large" color={classAccent} />
+              <Text style={styles.scanOverlayTitle}>Reading your notes…</Text>
+              <Text style={styles.scanOverlaySub}>AI is extracting text from your scan</Text>
+            </View>
+          </View>
+        )}
       </View >
     );
   }
@@ -1356,7 +1922,21 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
           </View>
         </View>
 
-        <View style={styles.sheet}>
+        {tutorialGuide && (
+          <View style={styles.heroTutorialWrap}>
+            <InlineTutorialCard
+              step={tutorialGuide.step}
+              totalSteps={TUTORIAL_TOTAL_STEPS}
+              title={tutorialGuide.title}
+              body={tutorialGuide.body}
+              onDismiss={onTutorialSkip}
+              onPrevious={onTutorialBack}
+              onNext={onTutorialNext}
+            />
+          </View>
+        )}
+
+        <View style={[styles.sheet, tutorialGuide && styles.sheetWithTutorial]}>
           <Text style={styles.courseTitle}>{classData.title}</Text>
           <View style={styles.badgeRow}>
             <TouchableOpacity style={styles.badge} onPress={openBlockEditModal} activeOpacity={0.7}>
@@ -1374,17 +1954,60 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
             )}
           </View>
 
-          {!isNewClass && (
-            <View style={styles.stats}>
-              <TouchableOpacity style={[styles.stat, styles.statPressable]} onPress={() => setShowClassmatesModal(true)} activeOpacity={0.8}>
-                <Ionicons name="people" size={16} color={classAccent} />
-                <Text style={styles.statText}>{classData.classmates} Classmates</Text>
-                <Ionicons name="chevron-forward" size={14} color={colors.textTertiary} />
-              </TouchableOpacity>
-              <View style={styles.stat}>
-                <Ionicons name="document-text" size={16} color={classAccent} />
-                <Text style={styles.statText}>{classData.documents} Documents</Text>
+          {!isNewClass && (() => {
+            const totalNotes = classData.units.reduce((a, u) => a + u.subUnits.reduce((b, s) => b + s.notes.length, 0), 0);
+            const totalFiles = classData.files.length;
+            const docCount = totalNotes + totalFiles;
+            return (
+              <View style={styles.stats}>
+                <TouchableOpacity style={[styles.stat, styles.statPressable]} onPress={() => setShowClassmatesModal(true)} activeOpacity={0.8}>
+                  <Ionicons name="people" size={16} color={classAccent} />
+                  <Text style={styles.statText}>{classData.classmates} Classmates</Text>
+                  <Ionicons name="chevron-forward" size={14} color={colors.textTertiary} />
+                </TouchableOpacity>
+                <View style={styles.stat}>
+                  <Ionicons name="document-text" size={16} color={classAccent} />
+                  <Text style={styles.statText}>{docCount} Documents</Text>
+                </View>
               </View>
+            );
+          })()}
+
+          {/* Teacher row */}
+          {!isNewClass && (
+            <View style={styles.teacherRow}>
+              <Ionicons name="school-outline" size={16} color={classAccent} />
+              {editingTeacher ? (
+                <View style={styles.teacherEditRow}>
+                  <TextInput
+                    style={styles.teacherInput}
+                    value={teacherDraft}
+                    onChangeText={setTeacherDraft}
+                    placeholder="Teacher name"
+                    placeholderTextColor={colors.textTertiary}
+                    autoFocus
+                  />
+                  <TouchableOpacity
+                    style={[styles.teacherSaveBtn, { backgroundColor: classAccent }]}
+                    onPress={() => {
+                      onUpdateClass({ ...classData, teacher: teacherDraft.trim() || undefined });
+                      setEditingTeacher(false);
+                    }}
+                  >
+                    <Ionicons name="checkmark" size={14} color="white" />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => { setEditingTeacher(false); setTeacherDraft(classData.teacher || ''); }}>
+                    <Ionicons name="close" size={18} color={colors.textTertiary} />
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <TouchableOpacity style={styles.teacherDisplay} onPress={() => { setTeacherDraft(classData.teacher || ''); setEditingTeacher(true); }}>
+                  <Text style={styles.teacherText}>
+                    {classData.teacher ? classData.teacher : 'Add Teacher'}
+                  </Text>
+                  <Ionicons name="pencil" size={12} color={colors.textTertiary} />
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
@@ -1400,12 +2023,27 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
                 <Text style={styles.inviteBtnText}>Invite Classmates</Text>
               </TouchableOpacity>
             </View>
-          ) : (
-            <Text style={styles.desc}>
-              Currently studying: <Text style={styles.descBold}>{classData.description}</Text>. Keep your unit pages updated and
-              collaborate with classmates.
-            </Text>
-          )}
+          ) : (() => {
+            const totalNotes = classData.units.reduce((a, u) => a + u.subUnits.reduce((b, s) => b + s.notes.length, 0), 0);
+            const totalSections = classData.units.reduce((a, u) => a + u.subUnits.length, 0);
+            const completedSects = classData.units.reduce((a, u) =>
+              a + u.subUnits.filter((s) => unitProgress[`${classData.id}-${u.id}-${s.id}`]).length, 0);
+            const unitsWithNotes = classData.units.filter((u) => u.subUnits.some((s) => s.notes.length > 0)).length;
+            const pct = totalSections > 0 ? Math.round((completedSects / totalSections) * 100) : 0;
+
+            let msg = '';
+            if (totalNotes === 0) {
+              msg = `Getting started with ${classData.description}. Add your first notes to begin tracking progress.`;
+            } else if (pct === 100) {
+              msg = `All ${totalSections} sections complete across ${classData.units.length} units with ${totalNotes} notes. Great job mastering ${classData.description}!`;
+            } else if (pct >= 60) {
+              msg = `Strong progress — ${completedSects}/${totalSections} sections done (${pct}%). ${totalNotes} notes across ${unitsWithNotes} unit${unitsWithNotes !== 1 ? 's' : ''}. Keep pushing through ${classData.description}.`;
+            } else {
+              msg = `Building momentum — ${totalNotes} note${totalNotes !== 1 ? 's' : ''} across ${unitsWithNotes} unit${unitsWithNotes !== 1 ? 's' : ''}, ${completedSects}/${totalSections} sections marked complete. Focus on ${classData.description}.`;
+            }
+
+            return <Text style={styles.desc}>{msg}</Text>;
+          })()}
 
           <View style={styles.sectionHeader}>
             <Text style={[styles.sectionTitle, { marginBottom: 4 }]}>Path</Text>
@@ -1421,7 +2059,7 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
                 const totalNotes = unit.subUnits.reduce((a, s) => a + s.notes.length, 0);
                 const sectionCount = unit.subUnits.length;
                 const completedSections = unit.subUnits.filter(
-                  (sub) => unitProgress[`${unit.id}-${sub.id}`]
+                  (sub) => unitProgress[`${classData.id}-${unit.id}-${sub.id}`]
                 ).length;
                 const unitProg = sectionCount > 0 ? completedSections / sectionCount : 0;
                 const isComplete = unitProg === 1;
@@ -1429,7 +2067,7 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
 
                 // Find "current" unit = first incomplete
                 const isCurrentUnit = !isComplete && (idx === 0 || classData.units.slice(0, idx).every((u) => {
-                  const c = u.subUnits.filter((s) => unitProgress[`${u.id}-${s.id}`]).length;
+                  const c = u.subUnits.filter((s) => unitProgress[`${classData.id}-${u.id}-${s.id}`]).length;
                   return u.subUnits.length > 0 && c === u.subUnits.length;
                 }));
 
@@ -1528,7 +2166,7 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
         </View>
       </ScrollView>
 
-      <BottomNav active="home" onHome={onBack} onScan={onScan} onFriends={onFriends} onFiles={onFilesOpen} />
+      <BottomNav active="home" onHome={onBack} onScan={onScan} onFriends={onFriends} onFiles={onFilesOpen} highlightedTab={tutorialStep === 3 ? 'files' : undefined} />
 
       <Modal visible={showEditModal} transparent animationType="slide" onRequestClose={() => setShowEditModal(false)}>
         <View style={styles.modalBackdrop}>
@@ -1714,7 +2352,12 @@ export function CourseDetailScreen({ classData, onBack, onFilesOpen, onScan, onF
                         <TouchableOpacity
                           style={[styles.friendInviteBtn, isSent && styles.friendInviteBtnSent]}
                           onPress={() => {
-                            if (!isSent) setInvitedFriends((prev) => [...prev, friend.id]);
+                            if (!isSent) {
+                              setInvitedFriends((prev) => [...prev, friend.id]);
+                              if (onSendClassInvite) {
+                                onSendClassInvite(friend.id, [classData]);
+                              }
+                            }
                           }}
                           activeOpacity={0.7}
                         >
@@ -1795,6 +2438,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   heroBtns: { flexDirection: 'row', gap: 8 },
+  heroTutorialWrap: {
+    marginTop: -78,
+    paddingHorizontal: 24,
+    zIndex: 3,
+  },
 
   sheet: {
     backgroundColor: '#FFF8F2',
@@ -1804,6 +2452,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 32,
     paddingBottom: 24,
+  },
+  sheetWithTutorial: {
+    marginTop: -10,
+    paddingTop: 40,
   },
   courseTitle: { fontSize: 26, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.5 },
   badgeRow: { flexDirection: 'row', gap: 10, marginTop: 10, flexWrap: 'wrap' },
@@ -2090,6 +2742,61 @@ const styles = StyleSheet.create({
   noteMethodBtnActive: { backgroundColor: colors.maroon, borderColor: colors.maroon },
   noteMethodText: { fontSize: 12, color: colors.textSecondary, fontFamily: fonts.bold },
   noteMethodTextActive: { color: 'white' },
+
+  sourceActionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderRadius: 18,
+    borderWidth: 2,
+    backgroundColor: 'white',
+    marginTop: 8,
+  },
+  sourceActionIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sourceActionTitle: { fontSize: 14, fontFamily: fonts.bold, color: colors.textPrimary },
+  sourceActionSub: { fontSize: 12, fontFamily: fonts.regular, color: colors.textSecondary, marginTop: 2 },
+
+  uploadedFileBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: '#FFF5ED',
+    borderWidth: 1,
+    borderColor: '#F0E0D0',
+    marginBottom: 8,
+  },
+  uploadedFileText: { fontSize: 12, fontFamily: fonts.semiBold, flex: 1 },
+
+  scanOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 999,
+  },
+  scanOverlayCard: {
+    backgroundColor: 'white',
+    borderRadius: 24,
+    padding: 32,
+    alignItems: 'center',
+    gap: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  scanOverlayTitle: { fontSize: 16, fontFamily: fonts.bold, color: colors.textPrimary },
+  scanOverlaySub: { fontSize: 13, fontFamily: fonts.regular, color: colors.textSecondary, textAlign: 'center' },
 
   sourceRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
   sourceChip: {
@@ -2427,6 +3134,82 @@ const styles = StyleSheet.create({
     backgroundColor: colors.maroon,
   },
   quizTakeBtnText: { fontSize: 12, fontFamily: fonts.bold, color: 'white' },
+
+  // Quiz count chips
+  quizCountChip: {
+    paddingHorizontal: 20, paddingVertical: 12, borderRadius: 14,
+    backgroundColor: 'white', borderWidth: 2, borderColor: '#F0E0D0',
+    minWidth: 52, alignItems: 'center',
+  },
+  quizCountChipText: { fontSize: 16, fontFamily: fonts.bold, color: colors.textSecondary },
+
+  // Quiz-taking modal
+  quizModalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  quizModalCard: {
+    backgroundColor: '#FFF8F2', borderTopLeftRadius: 32, borderTopRightRadius: 32,
+    padding: 22, paddingBottom: 40, maxHeight: '94%', flex: 1,
+  },
+  quizTopBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12,
+  },
+  quizTopTitle: { fontSize: 16, fontFamily: fonts.bold, color: colors.textPrimary },
+  quizTopProgress: { fontSize: 13, fontFamily: fonts.semiBold, color: colors.textSecondary },
+  quizProgressBar: { height: 6, backgroundColor: '#F0E0D0', borderRadius: 3, marginBottom: 24, overflow: 'hidden' },
+  quizProgressFill: { height: '100%', borderRadius: 3 },
+  quizQuestionText: { fontSize: 18, fontFamily: fonts.bold, color: colors.textPrimary, lineHeight: 26, marginBottom: 20 },
+  quizOptionsContainer: { gap: 12 },
+  quizOptionBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    backgroundColor: 'white', borderRadius: 18, padding: 16,
+    borderWidth: 2, borderColor: '#F0E0D0',
+  },
+  quizOptionLetter: {
+    width: 32, height: 32, borderRadius: 10, backgroundColor: '#F0E0D0',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  quizOptionLetterText: { fontSize: 14, fontFamily: fonts.bold, color: colors.textSecondary },
+  quizOptionText: { flex: 1, fontSize: 14, fontFamily: fonts.regular, color: colors.textPrimary, lineHeight: 20 },
+  quizNavRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 16 },
+  quizNavBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 20, paddingVertical: 12, borderRadius: 16,
+  },
+  quizNavBtnText: { fontSize: 14, fontFamily: fonts.bold, color: 'white' },
+
+  // Results
+  quizResultHeader: { alignItems: 'center', paddingVertical: 24 },
+  quizResultScore: { fontSize: 48, fontFamily: fonts.bold, color: colors.textPrimary, marginTop: 8 },
+  quizResultSub: { fontSize: 16, fontFamily: fonts.medium, color: colors.textSecondary, marginTop: 4 },
+  quizResultLabel: { fontSize: 18, fontFamily: fonts.bold, marginTop: 8 },
+
+  // Review
+  quizReviewCard: {
+    backgroundColor: 'white', borderRadius: 18, padding: 14, marginBottom: 12,
+    borderWidth: 2,
+  },
+  quizReviewQ: { flex: 1, fontSize: 13, fontFamily: fonts.semiBold, color: colors.textPrimary, lineHeight: 18 },
+  quizReviewOpt: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 6, paddingHorizontal: 10, borderRadius: 10, marginTop: 4,
+    borderWidth: 1.5, borderColor: '#F0E0D0',
+  },
+  quizReviewOptLetter: { fontSize: 11, fontFamily: fonts.bold, color: colors.textTertiary, width: 16 },
+  quizReviewOptText: { flex: 1, fontSize: 12, fontFamily: fonts.regular, color: colors.textPrimary },
+
+  // Teacher
+  teacherRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8, marginBottom: 4,
+    paddingHorizontal: 4,
+  },
+  teacherDisplay: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 },
+  teacherText: { fontSize: 13, fontFamily: fonts.medium, color: colors.textSecondary },
+  teacherEditRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  teacherInput: {
+    flex: 1, fontSize: 13, fontFamily: fonts.medium, color: colors.textPrimary,
+    backgroundColor: 'white', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6,
+    borderWidth: 1, borderColor: '#F0E0D0',
+  },
+  teacherSaveBtn: { width: 26, height: 26, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   quizRowPending: { opacity: 0.6 },
   quizActions: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 10 },
 
@@ -2451,4 +3234,114 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     backgroundColor: '#FFF8F2',
   },
+
+  // === Wizard Steps (Add Note) ===
+  wizardSteps: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    marginBottom: 16,
+    marginTop: 4,
+  },
+  wizardStepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  wizardStepDot: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 2,
+    borderColor: '#E0D0C0',
+    backgroundColor: 'white',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  wizardStepNum: {
+    fontSize: 11,
+    fontFamily: fonts.bold,
+    color: colors.textTertiary,
+  },
+  wizardStepLabel: {
+    fontSize: 11,
+    fontFamily: fonts.semiBold,
+    color: colors.textTertiary,
+  },
+  wizardStepLine: {
+    width: 20,
+    height: 2,
+    backgroundColor: '#E0D0C0',
+    borderRadius: 1,
+    marginHorizontal: 2,
+  },
+  wizardStepTitle: {
+    fontSize: 14,
+    fontFamily: fonts.semiBold,
+    color: colors.textSecondary,
+    marginBottom: 12,
+  },
+  wizardNavRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 16,
+  },
+  wizardBackBtn: {
+    height: 52,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  wizardBackBtnText: {
+    fontSize: 14,
+    fontFamily: fonts.bold,
+    color: colors.textSecondary,
+  },
+  wizardPreviewCard: {
+    backgroundColor: '#FFF5ED',
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+    marginTop: 4,
+  },
+  wizardPreviewRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  wizardPreviewLabel: {
+    fontSize: 12,
+    fontFamily: fonts.bold,
+    color: colors.textSecondary,
+  },
+  wizardPreviewValue: {
+    fontSize: 13,
+    fontFamily: fonts.medium,
+    color: colors.textPrimary,
+    flex: 1,
+    textAlign: 'right',
+    marginLeft: 12,
+  },
+
+  mergingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+
+  // Merged Note Viewer
+  viewerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  viewerCard: { backgroundColor: '#FFF8F2', borderTopLeftRadius: 32, borderTopRightRadius: 32, padding: 22, paddingBottom: 40, maxHeight: '92%' },
+  viewerHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+  viewerHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  viewerBadge: { width: 28, height: 28, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  viewerLabel: { fontSize: 14, fontFamily: fonts.bold, color: colors.textSecondary },
+  viewerCloseBtn: { width: 36, height: 36, borderRadius: 14, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#F0E0D0' },
+  viewerTitle: { fontSize: 22, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.3, marginBottom: 6 },
+  viewerMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 },
+  viewerMeta: { fontSize: 12, fontFamily: fonts.regular, color: colors.textTertiary },
+  viewerScroll: { maxHeight: 380, marginBottom: 16 },
+  viewerBody: { fontSize: 15, fontFamily: fonts.regular, color: colors.textPrimary, lineHeight: 24 },
+  viewerActions: { flexDirection: 'row', gap: 8 },
 });

@@ -12,6 +12,7 @@ import {
   Animated,
   Easing,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -19,16 +20,20 @@ import { colors, fonts } from '../theme';
 import { supabase } from '../lib/supabase';
 
 interface Props {
-  onSignIn: (profilePicture: string | null, displayName?: string) => void;
+  onSignIn: (profilePicture: string | null, displayName?: string, isNewAccount?: boolean) => void;
   onBack: () => void;
+  onBeforeSignUp?: () => void;
+  onGoToSignUp?: () => void;
+  signInOnly?: boolean;
   userName?: string;
   userUsername?: string;
   userGrade?: string;
   userSchool?: string;
+  userSchools?: string[];
 }
 
-export function SignInScreen({ onSignIn, onBack, userName, userUsername, userGrade, userSchool }: Props) {
-  const [mode, setMode] = useState<'signin' | 'signup'>('signup');
+export function SignInScreen({ onSignIn, onBack, onBeforeSignUp, onGoToSignUp, signInOnly, userName, userUsername, userGrade, userSchool, userSchools }: Props) {
+  const [mode, setMode] = useState<'signin' | 'signup'>(signInOnly ? 'signin' : 'signup');
   const [profilePicture, setProfilePicture] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [displayName, setDisplayName] = useState(userName || '');
@@ -84,17 +89,51 @@ export function SignInScreen({ onSignIn, onBack, userName, userUsername, userGra
     return () => pulseLoop.stop();
   }, [mode, avatarPulse]);
 
-  const pickImage = async () => {
+  const pickFromLibrary = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission Needed', 'Please allow access to your photo library in Settings.');
+      return;
+    }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 0.8,
+      quality: 0.7,
+      allowsMultipleSelection: false,
     });
-
     if (!result.canceled && result.assets[0]) {
       setProfilePicture(result.assets[0].uri);
     }
+  };
+
+  const takePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission Needed', 'Please allow camera access in Settings to take a photo.');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.7,
+      cameraType: ImagePicker.CameraType.front,
+    });
+    if (!result.canceled && result.assets[0]) {
+      setProfilePicture(result.assets[0].uri);
+    }
+  };
+
+  const pickImage = () => {
+    Alert.alert(
+      'Profile Photo',
+      'How would you like to add your photo?',
+      [
+        { text: 'Take Photo', onPress: takePhoto },
+        { text: 'Choose from Library', onPress: pickFromLibrary },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
   };
 
   const handleAuth = async () => {
@@ -125,6 +164,10 @@ export function SignInScreen({ onSignIn, onBack, userName, userUsername, userGra
 
     try {
       if (mode === 'signup') {
+        // Signal to App.tsx BEFORE the auth call so the tutorial flag is set
+        // before onAuthStateChange fires
+        onBeforeSignUp?.();
+
         const { error: signUpError } = await supabase.auth.signUp({
           email: email.trim(),
           password,
@@ -134,6 +177,7 @@ export function SignInScreen({ onSignIn, onBack, userName, userUsername, userGra
               username: userUsername || '',
               grade: userGrade || '',
               school: userSchool || '',
+              schools: userSchools || (userSchool ? [userSchool] : []),
             },
           },
         });
@@ -145,7 +189,7 @@ export function SignInScreen({ onSignIn, onBack, userName, userUsername, userGra
         }
 
         // Sign-up successful — onAuthStateChange in App.tsx will handle navigation
-        onSignIn(profilePicture, displayName.trim() || undefined);
+        onSignIn(profilePicture, displayName.trim() || undefined, true);
       } else {
         const { error: signInError } = await supabase.auth.signInWithPassword({
           email: email.trim(),
@@ -159,7 +203,7 @@ export function SignInScreen({ onSignIn, onBack, userName, userUsername, userGra
         }
 
         // Sign-in successful — onAuthStateChange in App.tsx will handle navigation
-        onSignIn(profilePicture);
+        onSignIn(profilePicture, undefined, false);
       }
     } catch (err: any) {
       setError(err?.message || 'An unexpected error occurred.');
@@ -193,14 +237,16 @@ export function SignInScreen({ onSignIn, onBack, userName, userUsername, userGra
           <Text style={styles.logoText}>Citadel</Text>
         </View>
 
-        <View style={styles.toggleRow}>
-          <TouchableOpacity style={[styles.toggleBtn, mode === 'signup' && styles.toggleActive]} onPress={() => { setMode('signup'); setError(null); }}>
-            <Text style={[styles.toggleText, mode === 'signup' && styles.toggleTextActive]}>Sign Up</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.toggleBtn, mode === 'signin' && styles.toggleActive]} onPress={() => { setMode('signin'); setError(null); }}>
-            <Text style={[styles.toggleText, mode === 'signin' && styles.toggleTextActive]}>Sign In</Text>
-          </TouchableOpacity>
-        </View>
+        {!signInOnly && (
+          <View style={styles.toggleRow}>
+            <TouchableOpacity style={[styles.toggleBtn, mode === 'signup' && styles.toggleActive]} onPress={() => { setMode('signup'); setError(null); }}>
+              <Text style={[styles.toggleText, mode === 'signup' && styles.toggleTextActive]}>Sign Up</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.toggleBtn, mode === 'signin' && styles.toggleActive]} onPress={() => { setMode('signin'); setError(null); }}>
+              <Text style={[styles.toggleText, mode === 'signin' && styles.toggleTextActive]}>Sign In</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         <Animated.View
           style={{
@@ -211,16 +257,21 @@ export function SignInScreen({ onSignIn, onBack, userName, userUsername, userGra
           <Text style={styles.h1}>
             {mode === 'signup'
               ? `Create your account${userName ? `, ${userName}` : ''}`
-              : `Welcome back${userName ? `, ${userName}` : ''}`}
+              : 'Welcome back'}
           </Text>
           <Text style={styles.subtitle}>
-            {mode === 'signup' ? 'Build your study identity in seconds.' : 'Sign in to continue your workflow.'}
+            {mode === 'signup' ? 'Build your study identity in seconds.' : 'Sign in to pick up where you left off.'}
           </Text>
 
           {mode === 'signup' && (
             <View style={styles.photoCard}>
-              <Text style={styles.photoTitle}>Upload a profile picture</Text>
-              <Text style={styles.photoSubtitle}>A clear photo helps friends find you faster.</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text style={styles.photoTitle}>Profile picture</Text>
+                <View style={{ backgroundColor: '#F0E0D0', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 4 }}>
+                  <Text style={{ fontSize: 11, fontFamily: fonts.bold, color: colors.textSecondary }}>OPTIONAL</Text>
+                </View>
+              </View>
+              <Text style={styles.photoSubtitle}>Add a photo so friends can find you — or skip for now.</Text>
 
               <View style={styles.avatarStage}>
                 <Animated.View
@@ -275,7 +326,7 @@ export function SignInScreen({ onSignIn, onBack, userName, userUsername, userGra
             <Text style={styles.label}>Email</Text>
             <TextInput
               style={styles.input}
-              placeholder="School Email"
+              placeholder="Email address"
               placeholderTextColor={colors.textTertiary}
               value={email}
               onChangeText={(t) => { setEmail(t); setError(null); }}
@@ -337,6 +388,15 @@ export function SignInScreen({ onSignIn, onBack, userName, userUsername, userGra
               </>
             )}
           </TouchableOpacity>
+
+          {signInOnly && onGoToSignUp && (
+            <TouchableOpacity style={{ alignItems: 'center', marginTop: 20, paddingVertical: 8 }} onPress={onGoToSignUp}>
+              <Text style={{ fontSize: 13, fontFamily: fonts.regular, color: colors.textSecondary }}>
+                Meant to sign up?{' '}
+                <Text style={{ fontFamily: fonts.bold, color: colors.maroon }}>Create an account</Text>
+              </Text>
+            </TouchableOpacity>
+          )}
         </Animated.View>
       </ScrollView>
     </KeyboardAvoidingView>

@@ -13,6 +13,8 @@ interface Props {
   onScan?: () => void;
   onFriends?: () => void;
   onFiles?: () => void;
+  onTabLayout?: (tabId: TabId, rect: { x: number; y: number; width: number; height: number }) => void;
+  highlightedTab?: TabId;
 }
 
 const items: { id: TabId; icon: keyof typeof Ionicons.glyphMap; label: string }[] = [
@@ -26,10 +28,14 @@ function BouncyTab({
   item,
   isActive,
   onPress,
+  onLayout,
+  isHighlighted,
 }: {
   item: (typeof items)[number];
   isActive: boolean;
   onPress?: () => void;
+  onLayout?: (rect: { x: number; y: number; width: number; height: number }) => void;
+  isHighlighted?: boolean;
 }) {
   const scale = useRef(new Animated.Value(1)).current;
   const wiggle = useRef(new Animated.Value(0)).current;
@@ -78,13 +84,22 @@ function BouncyTab({
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
       activeOpacity={1}
+      onLayout={(e) => {
+        if (onLayout) {
+          e.target.measureInWindow((x: number, y: number, width: number, height: number) => {
+            onLayout({ x, y, width, height });
+          });
+        }
+      }}
     >
       <Animated.View
         style={[
           styles.item,
+          isHighlighted && styles.highlightedItem,
           { transform: [{ scale }, { rotate }] },
         ]}
       >
+        {isHighlighted && <View style={styles.highlightHalo} />}
         {/* Active glow pill behind icon */}
         <Animated.View
           style={[
@@ -102,7 +117,7 @@ function BouncyTab({
   );
 }
 
-export function BottomNav({ active, onHome, onScan, onFriends, onFiles }: Props) {
+export function BottomNav({ active, onHome, onScan, onFriends, onFiles, onTabLayout, highlightedTab }: Props) {
   const insets = useSafeAreaInsets();
   const barScale = useRef(new Animated.Value(0.9)).current;
   const barOpacity = useRef(new Animated.Value(0)).current;
@@ -153,7 +168,9 @@ export function BottomNav({ active, onHome, onScan, onFriends, onFiles }: Props)
               key={item.id}
               item={item}
               isActive={active === item.id}
+              isHighlighted={highlightedTab === item.id}
               onPress={actions[item.id]}
+              onLayout={onTabLayout ? (rect) => onTabLayout(item.id, rect) : undefined}
             />
           ))}
         </View>
@@ -206,6 +223,16 @@ const styles = StyleSheet.create({
     borderRadius: 26,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  highlightedItem: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  highlightHalo: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 26,
+    borderWidth: 2,
+    borderColor: '#F3D3A7',
   },
   activePill: {
     ...StyleSheet.absoluteFillObject,

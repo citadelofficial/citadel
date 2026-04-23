@@ -15,12 +15,14 @@ import {
   UIManager,
   Easing,
   ActivityIndicator,
+  Share,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BottomNav } from '../components/BottomNav';
 import { AnimatedPressable } from '../components/AnimatedPressable';
+import { InlineTutorialCard } from '../components/InlineTutorialCard';
 import { colors, fonts } from '../theme';
-import type { FriendData, ClassData } from '../types';
+import type { FriendData, ClassData, ClassInvite } from '../types';
 import DateTimePickerModal from "react-native-modal-datetime-picker";
 import { supabase } from '../lib/supabase';
 
@@ -43,6 +45,7 @@ interface Props {
   userName: string;
   userUsername: string;
   onPersonOpen?: (person: FriendData) => void;
+  onProfileOpen?: () => void;
   friends: FriendData[];
   friendRequests: FriendRequest[];
   onSendRequest: (username: string) => Promise<{ success: boolean; message: string }>;
@@ -50,18 +53,30 @@ interface Props {
   onDeclineRequest: (requestId: string) => void;
   classes: ClassData[];
   userSchool?: string;
+  userSchools?: string[];
   onSchoolOpen?: (schoolName: string) => void;
+  classInvites?: ClassInvite[];
+  onAcceptClassInvite?: (inviteId: string) => void;
+  onDeclineClassInvite?: (inviteId: string) => void;
+  onRefreshFriends?: () => Promise<void>;
+  tutorialStep?: number;
+  onTutorialNext?: () => void;
+  onTutorialBack?: () => void;
+  onTutorialSkip?: () => void;
+  onTutorialFinish?: () => void;
 }
 
-type Tab = 'friends' | 'requests' | 'sessions' | 'discover';
-type CallMode = 'voice' | 'video';
+type Tab = 'friends' | 'requests' | 'invites' | 'sessions' | 'discover';
 
 interface StudySession {
   id: string;
   title: string;
   course: string;
   time: string;
+  location?: string;
   participants: string[];
+  attendees: string[];
+  attendee_names: string[];
   rsvped: boolean;
   createdByMe: boolean;
 }
@@ -73,64 +88,80 @@ interface Message {
   time: string;
 }
 
-interface ActiveCall {
-  mode: CallMode;
-  title: string;
-  participants: string[];
-  startedAt: number;
-}
-
 function currentTimeLabel() {
   const now = new Date();
   return `${now.getHours() % 12 || 12}:${String(now.getMinutes()).padStart(2, '0')} ${now.getHours() >= 12 ? 'PM' : 'AM'}`;
 }
 
-function formatDuration(seconds: number) {
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-}
+
+
+const TUTORIAL_TOTAL_STEPS = 7;
 
 // ==================== DISCOVER SECTION ====================
 interface DiscoverProps {
   userSchool?: string;
+  userSchools?: string[];
   onSchoolOpen?: (schoolName: string) => void;
   onPersonOpen?: (person: FriendData) => void;
   onSendRequest: (username: string) => Promise<{ success: boolean; message: string }>;
+  onInvitePeople: () => void;
   showFeedback: (text: string, color: string) => void;
   friends: FriendData[];
   userUsername: string;
+  tutorialStep?: number;
 }
 
-function DiscoverSection({ userSchool, onSchoolOpen, onPersonOpen, onSendRequest, showFeedback, friends, userUsername }: DiscoverProps) {
-  const [schoolmates, setSchoolmates] = useState<{ id: string; name: string; username: string; grade: string; school: string }[]>([]);
+function DiscoverSection({
+  userSchool,
+  userSchools,
+  onSchoolOpen,
+  onPersonOpen,
+  onSendRequest,
+  onInvitePeople,
+  showFeedback,
+  friends,
+  userUsername,
+  tutorialStep = 0,
+}: DiscoverProps) {
+  const [schoolmates, setSchoolmates] = useState<{ id: string; name: string; username: string; grade: string; school: string; avatarUrl: string | null }[]>([]);
   const [loadingDiscover, setLoadingDiscover] = useState(false);
   const [addingIds, setAddingIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    if (!userSchool) return;
+    const allSchools = userSchools && userSchools.length > 0 ? userSchools : (userSchool ? [userSchool] : []);
+    if (allSchools.length === 0) return;
     setLoadingDiscover(true);
     (async () => {
       try {
         const { data: userData } = await supabase.auth.getUser();
         const userId = userData?.user?.id;
 
+        // Query profiles matching ANY of user's schools
+        const orConditions = allSchools.map(s => `school.eq.${s}`).join(',');
         const { data } = await supabase
           .from('profiles')
-          .select('id, username, display_name, grade, school')
-          .eq('school', userSchool)
+          .select('id, username, display_name, grade, school, schools, avatar_url')
+          .or(orConditions)
           .neq('id', userId || '')
-          .limit(20);
+          .limit(30);
 
         if (data) {
           const friendIds = new Set(friends.map(f => f.id));
-          const filtered = data.filter((p: any) => !friendIds.has(p.id));
+          // Also include people whose schools array overlaps
+          const allSchoolsLower = allSchools.map(s => s.toLowerCase());
+          const filtered = data.filter((p: any) => {
+            if (friendIds.has(p.id)) return false;
+            // Check primary school match or schools array overlap
+            const personSchools: string[] = Array.isArray(p.schools) ? p.schools : (p.school ? [p.school] : []);
+            return personSchools.some((s: string) => allSchoolsLower.includes(s.toLowerCase()));
+          });
           setSchoolmates(filtered.map((p: any) => ({
             id: p.id,
             name: p.display_name || p.username || 'User',
             username: p.username || '',
             grade: p.grade || '',
             school: p.school || '',
+            avatarUrl: p.avatar_url || null,
           })));
         }
       } catch (e) {
@@ -139,7 +170,7 @@ function DiscoverSection({ userSchool, onSchoolOpen, onPersonOpen, onSendRequest
         setLoadingDiscover(false);
       }
     })();
-  }, [userSchool, friends]);
+  }, [userSchool, userSchools, friends]);
 
   const handleAddFromDiscover = async (person: { id: string; username: string; name: string }) => {
     if (!person.username) return;
@@ -157,6 +188,26 @@ function DiscoverSection({ userSchool, onSchoolOpen, onPersonOpen, onSendRequest
 
   return (
     <View style={styles.section}>
+      <AnimatedPressable
+        style={[
+          styles.discoverInviteButton,
+          tutorialStep === 7 && styles.discoverInviteButtonTutorial,
+        ]}
+        onPress={onInvitePeople}
+        scaleDown={0.98}
+      >
+        <View style={styles.discoverInviteIcon}>
+          <Ionicons name="share-social-outline" size={20} color={colors.maroon} />
+        </View>
+        <View style={styles.discoverInviteTextWrap}>
+          <Text style={styles.discoverInviteTitle}>Invite People to Your School</Text>
+          <Text style={styles.discoverInviteSub}>
+            Open the share sheet and send an invite people can use to join your school network.
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+      </AnimatedPressable>
+
       {/* School link */}
       {userSchool ? (
         <TouchableOpacity
@@ -224,6 +275,7 @@ function DiscoverSection({ userSchool, onSchoolOpen, onPersonOpen, onSendRequest
                   status: 'offline',
                   grade: person.grade,
                   school: person.school,
+                  avatarUrl: person.avatarUrl,
                 })}
                 activeOpacity={0.7}
               >
@@ -235,8 +287,13 @@ function DiscoverSection({ userSchool, onSchoolOpen, onPersonOpen, onSendRequest
                   alignItems: 'center',
                   justifyContent: 'center',
                   marginRight: 12,
+                  overflow: 'hidden',
                 }}>
-                  <Ionicons name="person" size={18} color="#6366f1" />
+                  {person.avatarUrl ? (
+                    <Image source={{ uri: person.avatarUrl }} style={{ width: 40, height: 40, borderRadius: 14 }} />
+                  ) : (
+                    <Ionicons name="person" size={18} color="#6366f1" />
+                  )}
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={{ fontSize: 14, fontFamily: fonts.semiBold, color: colors.textPrimary }}>{person.name}</Text>
@@ -281,7 +338,7 @@ function DiscoverSection({ userSchool, onSchoolOpen, onPersonOpen, onSendRequest
           <Text style={styles.emptyCardSub}>
             {userSchool
               ? 'All your schoolmates are already in your friends list!'
-              : 'Set your school in your profile to discover classmates. You can also add friends using the + button above!'}
+              : 'Set your school in your profile to discover classmates and share your school invite with new people.'}
           </Text>
           <View style={styles.usernameShareCard}>
             <Text style={styles.usernameShareLabel}>Your Username</Text>
@@ -295,9 +352,16 @@ function DiscoverSection({ userSchool, onSchoolOpen, onPersonOpen, onSendRequest
 
 export function FriendsScreen({
   onHome, onScan, onFiles, profilePicture, userName, userUsername,
-  onPersonOpen, friends, friendRequests,
+  onPersonOpen, onProfileOpen, friends, friendRequests,
   onSendRequest, onAcceptRequest, onDeclineRequest, classes,
-  userSchool, onSchoolOpen,
+  userSchool, userSchools, onSchoolOpen,
+  classInvites = [], onAcceptClassInvite, onDeclineClassInvite,
+  onRefreshFriends,
+  tutorialStep = 0,
+  onTutorialNext = () => { },
+  onTutorialBack = () => { },
+  onTutorialSkip = () => { },
+  onTutorialFinish = () => { },
 }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>('friends');
   const [searchQuery, setSearchQuery] = useState('');
@@ -307,12 +371,9 @@ export function FriendsScreen({
   const [friendSearchUsername, setFriendSearchUsername] = useState('');
   const [sendingRequest, setSendingRequest] = useState(false);
   const [sendResult, setSendResult] = useState<{ success: boolean; message: string } | null>(null);
+  const tabsScrollRef = useRef<ScrollView>(null);
 
-  const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
-  const [callSeconds, setCallSeconds] = useState(0);
-  const [micMuted, setMicMuted] = useState(false);
-  const [speakerOn, setSpeakerOn] = useState(true);
-  const [cameraOn, setCameraOn] = useState(true);
+
 
   const [messagesByFriend, setMessagesByFriend] = useState<Record<string, Message[]>>({});
 
@@ -322,6 +383,7 @@ export function FriendsScreen({
   const [sessionDraftTitle, setSessionDraftTitle] = useState('');
   const [sessionDraftCourse, setSessionDraftCourse] = useState('');
   const [sessionDraftTime, setSessionDraftTime] = useState('');
+  const [sessionDraftLocation, setSessionDraftLocation] = useState('');
   const [isDatePickerVisible, setDatePickerVisibility] = useState(false);
 
   const fetchSessions = async () => {
@@ -347,8 +409,11 @@ export function FriendsScreen({
           title: session.title,
           course: session.course,
           time: session.time,
+          location: session.location || '',
           participants: session.participants || [],
-          rsvped: true,
+          attendees: session.attendees || [],
+          attendee_names: session.attendee_names || session.participants || [],
+          rsvped: (session.attendees || []).includes(userId),
           createdByMe: session.user_id === userId,
         }));
         setUpcomingSessions(formattedSessions);
@@ -357,6 +422,11 @@ export function FriendsScreen({
       console.log(e);
     }
   };
+
+  // Refresh friends data on mount to get latest profile pictures/info
+  useEffect(() => {
+    onRefreshFriends?.();
+  }, []);
 
   // Load sessions on mount AND when tab is clicked
   useEffect(() => {
@@ -372,8 +442,12 @@ export function FriendsScreen({
   const formatSessionTime = (date: Date) => {
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const hours = date.getHours();
+    const mins = String(date.getMinutes()).padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    const h12 = hours % 12 || 12;
     
-    return `${days[date.getDay()]}, ${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+    return `${days[date.getDay()]}, ${months[date.getMonth()]} ${date.getDate()} • ${h12}:${mins} ${ampm}`;
   };
 
   // Feedback toast
@@ -381,23 +455,26 @@ export function FriendsScreen({
   const [feedbackColor, setFeedbackColor] = useState('#166534');
   const feedbackOpacity = useRef(new Animated.Value(0)).current;
   const feedbackY = useRef(new Animated.Value(-8)).current;
+  const tutorialGuide =
+    tutorialStep === 6
+      ? {
+        step: 6,
+        title: 'People keeps your network together',
+        body: 'This page holds chats, requests, invites, and school discovery in one place. Tap the highlighted Discover tab to open your school network.',
+      }
+      : tutorialStep === 7
+        ? {
+          step: 7,
+          title: 'Grow your school network',
+          body: 'Discover is where you bring more people into your school network. Use the highlighted Invite People to Your School button to share an invite.',
+        }
+        : null;
 
   // Message send swoosh animation
   const messageSwoosh = useRef(new Animated.Value(0)).current;
   const messageSwooshOpacity = useRef(new Animated.Value(0)).current;
+  const [justSentMessageId, setJustSentMessageId] = useState<number | null>(null);
 
-  // Online status pulse
-  const onlinePulse = useRef(new Animated.Value(1)).current;
-  useEffect(() => {
-    const pulse = Animated.loop(
-      Animated.sequence([
-        Animated.timing(onlinePulse, { toValue: 1.15, duration: 1800, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-        Animated.timing(onlinePulse, { toValue: 1, duration: 1800, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-      ])
-    );
-    pulse.start();
-    return () => pulse.stop();
-  }, [onlinePulse]);
 
   // Request reveal animation
   const requestReveal = useRef(new Animated.Value(0)).current;
@@ -417,19 +494,7 @@ export function FriendsScreen({
     }
   }, []);
 
-  useEffect(() => {
-    if (!activeCall) {
-      setCallSeconds(0);
-      setMicMuted(false);
-      setSpeakerOn(true);
-      setCameraOn(true);
-      return;
-    }
-    const timer = setInterval(() => {
-      setCallSeconds(Math.floor((Date.now() - activeCall.startedAt) / 1000));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [activeCall]);
+
 
   const showFeedback = useCallback((text: string, color: string) => {
     setFeedbackText(text);
@@ -449,13 +514,50 @@ export function FriendsScreen({
     ]).start(() => setFeedbackText(null));
   }, [feedbackOpacity, feedbackY]);
 
+  useEffect(() => {
+    if (tutorialStep === 7 && activeTab !== 'discover') {
+      setActiveTab('discover');
+    }
+  }, [activeTab, tutorialStep]);
+
+  useEffect(() => {
+    if (tutorialStep !== 6 && tutorialStep !== 7) return;
+    const timer = setTimeout(() => {
+      tabsScrollRef.current?.scrollToEnd({ animated: true });
+    }, 240);
+    return () => clearTimeout(timer);
+  }, [activeTab, tutorialStep]);
+
+  const openAddFriendModal = () => {
+    setShowAddFriendModal(true);
+    setSendResult(null);
+    setFriendSearchUsername('');
+  };
+
+  const shareSchoolInvite = useCallback(async () => {
+    try {
+      await Share.share({
+        title: userSchool ? `Join ${userSchool} on Citadel` : 'Join me on Citadel',
+        message: userSchool
+          ? `Join me on Citadel and set your school to ${userSchool} so we can share notes, scans, and study sessions together.\n\nMy username: @${userUsername || 'citadel-user'}`
+          : `Join me on Citadel so we can share notes, scans, and study sessions together.\n\nMy username: @${userUsername || 'citadel-user'}`,
+      });
+    } catch {
+      // Ignore share sheet cancellation
+    }
+
+    if (tutorialStep === 7) {
+      onTutorialFinish();
+    }
+  }, [onTutorialFinish, tutorialStep, userSchool, userUsername]);
+
   const filteredFriends = friends.filter((f) =>
     f.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const activeChatFriend = friends.find((f) => f.id === activeChatId) || null;
 
-  const sendMessage = () => {
+  const sendMessage = async () => {
     const text = draftMessage.trim();
     if (!text || !activeChatId) return;
     messageSwoosh.setValue(40);
@@ -465,21 +567,76 @@ export function FriendsScreen({
       Animated.timing(messageSwooshOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
     ]).start();
 
+    const msgId = Date.now();
+    const newMsg = { id: msgId, from: 'me' as const, text, time: currentTimeLabel() };
+    setJustSentMessageId(msgId);
     setMessagesByFriend((prev) => ({
       ...prev,
-      [activeChatId]: [...(prev[activeChatId] || []), { id: Date.now(), from: 'me', text, time: currentTimeLabel() }],
+      [activeChatId]: [...(prev[activeChatId] || []), newMsg],
     }));
     setDraftMessage('');
+
+    // Persist to Supabase
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      if (authData?.user?.id) {
+        // Validate receiver UUID and sanitize message text
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!uuidRegex.test(activeChatId)) return;
+        const sanitizedText = text.slice(0, 5000); // Limit message length
+        await supabase.from('messages').insert({
+          sender_id: authData.user.id,
+          receiver_id: activeChatId,
+          text: sanitizedText,
+          created_at: new Date().toISOString(),
+        });
+      }
+    } catch (e) {
+      console.log('Message save error (table may not exist yet):', e);
+    }
   };
 
-  const startFriendCall = (friendName: string, mode: CallMode) => {
-    setActiveCall({
-      mode,
-      title: mode === 'voice' ? `Voice with ${friendName}` : `Video with ${friendName}`,
-      participants: [friendName, userName || 'You'],
-      startedAt: Date.now(),
-    });
-  };
+  // Load messages from Supabase when chat opens
+  useEffect(() => {
+    if (!activeChatId) return;
+    (async () => {
+      try {
+        const { data: authData } = await supabase.auth.getUser();
+        const userId = authData?.user?.id;
+        if (!userId) return;
+
+        // Validate UUIDs before interpolating into filter string to prevent PostgREST filter injection
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!uuidRegex.test(userId) || !uuidRegex.test(activeChatId)) return;
+
+        const { data, error } = await supabase
+          .from('messages')
+          .select('*')
+          .or(`and(sender_id.eq.${userId},receiver_id.eq.${activeChatId}),and(sender_id.eq.${activeChatId},receiver_id.eq.${userId})`)
+          .order('created_at', { ascending: true })
+          .limit(100);
+
+        if (error) {
+          console.log('Messages load error (table may not exist):', error.message);
+          return;
+        }
+
+        if (data && data.length > 0) {
+          const loaded = data.map((m: any) => ({
+            id: new Date(m.created_at).getTime(),
+            from: m.sender_id === userId ? 'me' as const : 'them' as const,
+            text: m.text,
+            time: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          }));
+          setMessagesByFriend((prev) => ({ ...prev, [activeChatId]: loaded }));
+        }
+      } catch (e) {
+        console.log('Messages load error:', e);
+      }
+    })();
+  }, [activeChatId]);
+
+
 
   const handleSendFriendRequest = async () => {
     const un = friendSearchUsername.trim();
@@ -511,108 +668,115 @@ export function FriendsScreen({
     showFeedback(`Declined ${name}.`, '#991b1b');
   };
 
-  // ==================== CALL SCREEN ====================
-  if (activeCall) {
-    const isVideo = activeCall.mode === 'video';
-    const participants = activeCall.participants;
 
-    return (
-      <View style={styles.callScreen}>
-        <View style={styles.callGlowOne} />
-        <View style={styles.callGlowTwo} />
-        <View style={styles.callTopRow}>
-          <TouchableOpacity style={styles.callTopBtn} onPress={() => setActiveCall(null)}>
-            <Ionicons name="chevron-down" size={22} color="white" />
-          </TouchableOpacity>
-          <View style={styles.callTitleWrap}>
-            <Text style={styles.callTypeLabel}>{isVideo ? 'VIDEO CALL' : 'VOICE CALL'}</Text>
-            <Text style={styles.callTitleText} numberOfLines={1}>{activeCall.title}</Text>
-            <Text style={styles.callClock}>{formatDuration(callSeconds)}</Text>
-          </View>
-          <View style={{ width: 42 }} />
-        </View>
 
-        {isVideo ? (
-          <View style={styles.videoStage}>
-            <View style={styles.videoFocusTile}>
-              <Ionicons name={cameraOn ? 'videocam' : 'videocam-off'} size={22} color="rgba(255,255,255,0.9)" />
-              <Text style={styles.videoFocusName}>{participants[0]}</Text>
-            </View>
-          </View>
-        ) : (
-          <View style={styles.voiceStage}>
-            <View style={styles.voiceAvatarOuter}>
-              <View style={styles.voiceAvatarInner}>
-                <Ionicons name="person" size={42} color="white" />
-              </View>
-            </View>
-            <Text style={styles.voiceName}>{participants[0]}</Text>
-          </View>
-        )}
-
-        <View style={styles.callControlsDock}>
-          <TouchableOpacity style={[styles.callControlBtn, micMuted && styles.callControlBtnActive]} onPress={() => setMicMuted((v) => !v)}>
-            <Ionicons name={micMuted ? 'mic-off' : 'mic'} size={20} color={micMuted ? 'white' : colors.textPrimary} />
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.callControlBtn, speakerOn && styles.callControlBtnActive]} onPress={() => setSpeakerOn((v) => !v)}>
-            <Ionicons name={speakerOn ? 'volume-high' : 'volume-mute'} size={20} color={speakerOn ? 'white' : colors.textPrimary} />
-          </TouchableOpacity>
-          {isVideo && (
-            <TouchableOpacity style={[styles.callControlBtn, cameraOn && styles.callControlBtnActive]} onPress={() => setCameraOn((v) => !v)}>
-              <Ionicons name={cameraOn ? 'videocam' : 'videocam-off'} size={20} color={cameraOn ? 'white' : colors.textPrimary} />
-            </TouchableOpacity>
-          )}
-          <TouchableOpacity style={[styles.callControlBtn, styles.callEndBtn]} onPress={() => setActiveCall(null)}>
-            <Ionicons name="call" size={20} color="white" />
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
-
-  // ==================== CHAT SCREEN ====================
+  // ==================== CHAT SCREEN (REDESIGNED) ====================
   if (activeChatFriend) {
     const messages = messagesByFriend[activeChatFriend.id] || [];
+    const friendFirstName = activeChatFriend.name.split(' ')[0];
 
     return (
       <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <View style={styles.chatHeader}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => setActiveChatId(null)}>
-            <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
-          </TouchableOpacity>
-          <View style={styles.chatHeaderInfo}>
-            <Text style={styles.chatFriendName}>{activeChatFriend.name}</Text>
-            <Text style={styles.chatFriendStatus}>
-              {activeChatFriend.status === 'online' ? 'Online now' : 'Available later'}
-            </Text>
+        {/* Premium Chat Header */}
+        <View style={{
+          paddingTop: 56, paddingBottom: 16, paddingHorizontal: 20,
+          backgroundColor: '#FFF8F2', borderBottomWidth: 1, borderBottomColor: '#F0E0D0',
+        }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <TouchableOpacity
+              style={{ width: 38, height: 38, borderRadius: 14, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#F0E0D0' }}
+              onPress={() => setActiveChatId(null)}
+            >
+              <Ionicons name="arrow-back" size={20} color={colors.textPrimary} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}
+              onPress={() => onPersonOpen?.(activeChatFriend)}
+              activeOpacity={0.7}
+            >
+              <View style={{
+                width: 42, height: 42, borderRadius: 14, backgroundColor: activeChatFriend.color || '#E0E7FF',
+                alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: `${colors.maroon}30`,
+                overflow: 'hidden',
+              }}>
+                {activeChatFriend.avatarUrl ? (
+                  <Image source={{ uri: activeChatFriend.avatarUrl }} style={{ width: 42, height: 42, borderRadius: 14 }} />
+                ) : (
+                  <Ionicons name="person" size={18} color={colors.maroon} />
+                )}
+              </View>
+              <View>
+                <Text style={{ fontSize: 16, fontFamily: fonts.bold, color: colors.textPrimary }}>{activeChatFriend.name}</Text>
+                <Text style={{ fontSize: 12, fontFamily: fonts.medium, color: colors.textTertiary }}>
+                  {activeChatFriend.school || 'Citadel member'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+
           </View>
-          <TouchableOpacity style={styles.chatTopAction} onPress={() => startFriendCall(activeChatFriend.name, 'voice')}>
-            <Ionicons name="call" size={18} color={colors.maroon} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.chatTopAction} onPress={() => startFriendCall(activeChatFriend.name, 'video')}>
-            <Ionicons name="videocam" size={18} color={colors.maroon} />
-          </TouchableOpacity>
         </View>
 
-        <ScrollView style={styles.chatScroll} contentContainerStyle={styles.chatContent} keyboardShouldPersistTaps="handled">
+        {/* Messages */}
+        <ScrollView
+          style={{ flex: 1, backgroundColor: '#FEFCFA' }}
+          contentContainerStyle={{ padding: 16, paddingBottom: 8 }}
+          keyboardShouldPersistTaps="handled"
+        >
           {messages.length === 0 && (
-            <View style={styles.chatEmpty}>
-              <View style={styles.chatEmptyIcon}><Ionicons name="chatbubble-ellipses-outline" size={28} color={colors.textTertiary} /></View>
-              <Text style={styles.chatEmptyTitle}>Start the conversation</Text>
-              <Text style={styles.chatEmptySub}>Say hello to {activeChatFriend.name.split(' ')[0]}!</Text>
+            <View style={{ alignItems: 'center', justifyContent: 'center', paddingTop: 80 }}>
+              <View style={{
+                width: 80, height: 80, borderRadius: 24, backgroundColor: `${colors.maroon}10`,
+                alignItems: 'center', justifyContent: 'center', marginBottom: 16,
+              }}>
+                <Ionicons name="chatbubbles-outline" size={36} color={colors.maroon} />
+              </View>
+              <Text style={{ fontSize: 18, fontFamily: fonts.bold, color: colors.textPrimary, marginBottom: 6 }}>
+                Chat with {friendFirstName}
+              </Text>
+              <Text style={{ fontSize: 14, fontFamily: fonts.regular, color: colors.textTertiary, textAlign: 'center', maxWidth: 240 }}>
+                Send a message, share notes, or plan a study session together.
+              </Text>
             </View>
           )}
           {messages.map((message, idx) => {
-            const isLatestMe = message.from === 'me' && idx === messages.length - 1;
+            const isMe = message.from === 'me';
+            const isJustSent = message.id === justSentMessageId;
+            const showTime = idx === 0 || messages[idx - 1]?.from !== message.from;
+
             const bubble = (
-              <View style={[styles.messageBubble, message.from === 'me' && styles.messageBubbleMe]}>
-                <Text style={[styles.messageText, message.from === 'me' && styles.messageTextMe]}>{message.text}</Text>
-                <Text style={[styles.messageTime, message.from === 'me' && styles.messageTimeMe]}>{message.time}</Text>
+              <View style={{
+                maxWidth: '78%',
+                backgroundColor: isMe ? colors.maroon : 'white',
+                borderRadius: 20,
+                borderBottomRightRadius: isMe ? 6 : 20,
+                borderBottomLeftRadius: isMe ? 20 : 6,
+                paddingHorizontal: 16, paddingVertical: 11,
+                borderWidth: isMe ? 0 : 1.5, borderColor: '#F0E0D0',
+                shadowColor: isMe ? colors.maroon : '#000',
+                shadowOpacity: isMe ? 0.15 : 0.04,
+                shadowRadius: 8, shadowOffset: { width: 0, height: 3 },
+                elevation: isMe ? 3 : 1,
+              }}>
+                <Text style={{
+                  fontSize: 15, fontFamily: fonts.regular, lineHeight: 21,
+                  color: isMe ? 'white' : colors.textPrimary,
+                }}>{message.text}</Text>
+                <Text style={{
+                  fontSize: 10, fontFamily: fonts.medium, marginTop: 4,
+                  color: isMe ? 'rgba(255,255,255,0.6)' : colors.textTertiary,
+                  alignSelf: isMe ? 'flex-end' : 'flex-start',
+                }}>{message.time}</Text>
               </View>
             );
+
             return (
-              <View key={message.id} style={[styles.messageRow, message.from === 'me' && styles.messageRowMe]}>
-                {isLatestMe ? (
+              <View key={message.id} style={{
+                alignSelf: isMe ? 'flex-end' : 'flex-start',
+                marginBottom: showTime ? 10 : 4,
+              }}>
+                {isJustSent ? (
                   <Animated.View style={{ opacity: messageSwooshOpacity, transform: [{ translateX: messageSwoosh }] }}>
                     {bubble}
                   </Animated.View>
@@ -622,17 +786,41 @@ export function FriendsScreen({
           })}
         </ScrollView>
 
-        <View style={styles.chatComposer}>
-          <TextInput
-            style={styles.chatInput}
-            value={draftMessage}
-            onChangeText={setDraftMessage}
-            placeholder="Message"
-            placeholderTextColor={colors.textTertiary}
-          />
-          <AnimatedPressable style={styles.sendBtn} onPress={sendMessage} scaleDown={0.85}>
-            <Ionicons name="send" size={16} color="white" />
-          </AnimatedPressable>
+        {/* Polished Composer */}
+        <View style={{
+          paddingHorizontal: 16, paddingVertical: 12, paddingBottom: 34,
+          backgroundColor: '#FFF8F2', borderTopWidth: 1, borderTopColor: '#F0E0D0',
+        }}>
+          <View style={{
+            flexDirection: 'row', alignItems: 'center', gap: 10,
+            backgroundColor: 'white', borderRadius: 24, borderWidth: 1.5, borderColor: '#F0E0D0',
+            paddingHorizontal: 6, paddingVertical: 4,
+          }}>
+            <TouchableOpacity style={{ width: 36, height: 36, borderRadius: 12, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' }}>
+              <Ionicons name="add" size={20} color={colors.textSecondary} />
+            </TouchableOpacity>
+            <TextInput
+              style={{
+                flex: 1, fontSize: 15, fontFamily: fonts.regular,
+                color: colors.textPrimary, paddingVertical: 8,
+              }}
+              value={draftMessage}
+              onChangeText={setDraftMessage}
+              placeholder={`Message ${friendFirstName}...`}
+              placeholderTextColor={colors.textTertiary}
+            />
+            <AnimatedPressable
+              style={{
+                width: 36, height: 36, borderRadius: 12,
+                backgroundColor: draftMessage.trim() ? colors.maroon : '#E5E7EB',
+                alignItems: 'center', justifyContent: 'center',
+              }}
+              onPress={sendMessage}
+              scaleDown={0.85}
+            >
+              <Ionicons name="send" size={14} color={draftMessage.trim() ? 'white' : colors.textTertiary} />
+            </AnimatedPressable>
+          </View>
         </View>
       </KeyboardAvoidingView>
     );
@@ -649,13 +837,13 @@ export function FriendsScreen({
             <Text style={styles.title}>Friends</Text>
             <Text style={styles.subtitle}>Connect, chat, and study together</Text>
           </View>
-          <View style={styles.avatarWrap}>
+          <TouchableOpacity style={styles.avatarWrap} onPress={onProfileOpen}>
             {profilePicture ? (
               <Image source={{ uri: profilePicture }} style={styles.avatar} />
             ) : (
-              <Ionicons name="person" size={24} color={colors.textTertiary} />
+              <Ionicons name="person" size={28} color={colors.textTertiary} />
             )}
-          </View>
+          </TouchableOpacity>
         </View>
 
         {/* Search + Add Friend */}
@@ -670,15 +858,33 @@ export function FriendsScreen({
               onChangeText={setSearchQuery}
             />
           </View>
-          <AnimatedPressable style={styles.addFriendBtn} onPress={() => { setShowAddFriendModal(true); setSendResult(null); setFriendSearchUsername(''); }} scaleDown={0.88}>
+          <AnimatedPressable style={styles.addFriendBtn} onPress={() => openAddFriendModal()} scaleDown={0.88}>
             <Ionicons name="person-add" size={18} color="white" />
           </AnimatedPressable>
         </View>
 
         {/* Tabs */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs}>
-          {(['friends', 'requests', 'sessions', 'discover'] as Tab[]).map((tab) => (
-            <TouchableOpacity key={tab} style={[styles.tab, activeTab === tab && styles.tabActive]} onPress={() => setActiveTab(tab)}>
+        <ScrollView
+          ref={tabsScrollRef}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.tabs}
+        >
+          {(['friends', 'requests', 'invites', 'sessions', 'discover'] as Tab[]).map((tab) => (
+            <TouchableOpacity
+              key={tab}
+              style={[
+                styles.tab,
+                activeTab === tab && styles.tabActive,
+                tutorialStep === 6 && tab === 'discover' && styles.tutorialTargetTab,
+              ]}
+              onPress={() => {
+                setActiveTab(tab);
+                if (tutorialStep === 6 && tab === 'discover') {
+                  onTutorialNext();
+                }
+              }}
+            >
               <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>{tab[0].toUpperCase() + tab.slice(1)}</Text>
               {tab === 'friends' && friends.length > 0 && (
                 <View style={[styles.tabBadge, activeTab === tab && styles.tabBadgeActive]}>
@@ -690,6 +896,11 @@ export function FriendsScreen({
                   <Text style={[styles.tabBadgeText, { color: '#dc2626' }, activeTab === tab && styles.tabBadgeTextActive]}>{pendingRequests.length}</Text>
                 </View>
               )}
+              {tab === 'invites' && classInvites.length > 0 && (
+                <View style={[styles.tabBadge, { backgroundColor: '#FFF5ED' }, activeTab === tab && styles.tabBadgeActive]}>
+                  <Text style={[styles.tabBadgeText, { color: colors.maroon }, activeTab === tab && styles.tabBadgeTextActive]}>{classInvites.length}</Text>
+                </View>
+              )}
               {tab === 'sessions' && upcomingSessions.length > 0 && (
                 <View style={[styles.tabBadge, activeTab === tab && styles.tabBadgeActive]}>
                   <Text style={[styles.tabBadgeText, activeTab === tab && styles.tabBadgeTextActive]}>{upcomingSessions.length}</Text>
@@ -698,6 +909,19 @@ export function FriendsScreen({
             </TouchableOpacity>
           ))}
         </ScrollView>
+
+        {tutorialGuide && (
+          <InlineTutorialCard
+            step={tutorialGuide.step}
+            totalSteps={TUTORIAL_TOTAL_STEPS}
+            title={tutorialGuide.title}
+            body={tutorialGuide.body}
+            onDismiss={onTutorialSkip}
+            onPrevious={onTutorialBack}
+            onNext={tutorialStep === 7 ? onTutorialFinish : onTutorialNext}
+            nextLabel={tutorialStep === 7 ? 'Finish' : 'Next'}
+          />
+        )}
 
         {/* Feedback toast */}
         {feedbackText && (
@@ -717,8 +941,16 @@ export function FriendsScreen({
                 </View>
                 <Text style={styles.emptyCardTitle}>No friends yet</Text>
                 <Text style={styles.emptyCardSub}>
-                  Tap the <Text style={{ fontFamily: fonts.bold, color: colors.maroon }}>+</Text> button above to add friends by their username. You can also share your username so others can find you!
+                  Add friends by their username to start chatting, studying together, and sharing class materials!
                 </Text>
+                <TouchableOpacity
+                  style={styles.emptyActionBtn}
+                  onPress={() => openAddFriendModal()}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="person-add" size={16} color="white" />
+                  <Text style={styles.emptyActionText}>Add Your First Friend</Text>
+                </TouchableOpacity>
                 <View style={styles.usernameShareCard}>
                   <Text style={styles.usernameShareLabel}>Your Username</Text>
                   <Text style={styles.usernameShareValue}>@{userUsername || 'not set'}</Text>
@@ -726,53 +958,26 @@ export function FriendsScreen({
               </View>
             ) : (
               <>
-                {/* Active Now */}
-                {filteredFriends.filter((f) => f.status !== 'offline').length > 0 && (
-                  <>
-                    <Text style={styles.sectionLabel}>Active Now</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalList}>
-                      {filteredFriends
-                        .filter((f) => f.status !== 'offline')
-                        .map((friend) => (
-                          <TouchableOpacity key={friend.id} style={styles.friendChip} onPress={() => setActiveChatId(friend.id)}>
-                            <View style={[styles.friendChipAvatar, { backgroundColor: friend.color }]}>
-                              <Ionicons name="person" size={24} color="#6366f1" />
-                            </View>
-                            <View style={[styles.statusDot, friend.status === 'online' && styles.statusOnline, friend.status === 'studying' && styles.statusStudying]} />
-                            <Text style={styles.friendChipName} numberOfLines={1}>{friend.name.split(' ')[0]}</Text>
-                          </TouchableOpacity>
-                        ))}
-                    </ScrollView>
-                  </>
-                )}
-
                 {/* All Friends */}
-                <Text style={[styles.sectionLabel, { marginTop: 20 }]}>All Friends</Text>
+                <Text style={[styles.sectionLabel, { marginTop: 0 }]}>All Friends</Text>
                 {filteredFriends.map((friend) => (
                   <TouchableOpacity key={friend.id} style={styles.friendRow} onPress={() => onPersonOpen?.(friend)} activeOpacity={0.7}>
-                    <View style={[styles.friendAvatar, { backgroundColor: friend.color }]}>
-                      <Ionicons name="person" size={20} color="#6366f1" />
+                    <View style={[styles.friendAvatar, { backgroundColor: friend.color, overflow: 'hidden' }]}>
+                      {friend.avatarUrl ? (
+                        <Image source={{ uri: friend.avatarUrl }} style={{ width: 44, height: 44, borderRadius: 16 }} />
+                      ) : (
+                        <Ionicons name="person" size={20} color="#6366f1" />
+                      )}
                     </View>
-                    <Animated.View
-                      style={[
-                        styles.statusDotSmall,
-                        friend.status === 'online' && styles.statusOnline,
-                        friend.status === 'studying' && styles.statusStudying,
-                        (friend.status === 'online' || friend.status === 'studying') && { transform: [{ scale: onlinePulse }] },
-                      ]}
-                    />
                     <View style={styles.friendInfo}>
                       <Text style={styles.friendName}>{friend.name}</Text>
-                      <Text style={[styles.friendStatus, friend.status === 'online' && styles.friendStatusOnline, friend.status === 'studying' && styles.friendStatusStudying]}>
-                        {friend.status === 'online' ? 'Online' : friend.status === 'studying' ? 'Studying' : 'Offline'}
+                      <Text style={styles.friendStatus}>
+                        {friend.school || 'Citadel member'}
                       </Text>
                     </View>
                     <View style={styles.friendActions}>
                       <TouchableOpacity style={styles.actionBtn} onPress={() => setActiveChatId(friend.id)}>
                         <Ionicons name="chatbubble-outline" size={18} color={colors.maroon} />
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.actionBtn} onPress={() => startFriendCall(friend.name, 'voice')}>
-                        <Ionicons name="call-outline" size={18} color={colors.maroon} />
                       </TouchableOpacity>
                     </View>
                   </TouchableOpacity>
@@ -841,6 +1046,7 @@ export function FriendsScreen({
                 setSessionDraftTitle('');
                 setSessionDraftCourse('');
                 setSessionDraftTime('');
+                setSessionDraftLocation('');
               }}>
                 <Ionicons name="add" size={14} color="white" />
                 <Text style={styles.createSessionText}>Create</Text>
@@ -850,59 +1056,177 @@ export function FriendsScreen({
             {upcomingSessions.length === 0 ? (
               <View style={styles.emptyCard}>
                 <View style={styles.emptyIconLarge}>
-                  <Ionicons name="videocam-outline" size={36} color={colors.maroon} />
+                  <Ionicons name="people-outline" size={36} color={colors.maroon} />
                 </View>
                 <Text style={styles.emptyCardTitle}>No study sessions</Text>
                 <Text style={styles.emptyCardSub}>
-                  Create a study session to invite friends for a live video review. Perfect for group studying and exam prep!
+                  Create an in-person study session to meet up with classmates. Perfect for group studying and exam prep!
                 </Text>
                 <TouchableOpacity style={styles.emptyActionBtn} onPress={() => {
                   setSessionEditor({ mode: 'create' });
                   setSessionDraftTitle('');
                   setSessionDraftCourse('');
                   setSessionDraftTime('');
+                  setSessionDraftLocation('');
                 }}>
                   <Ionicons name="add" size={16} color="white" />
                   <Text style={styles.emptyActionText}>Create Your First Session</Text>
                 </TouchableOpacity>
               </View>
             ) : (
-              upcomingSessions.map((s) => (
-                <View key={s.id} style={styles.sessionCard}>
-                  <Text style={styles.sessionCourse}>{s.course}</Text>
-                  <Text style={styles.sessionTitle}>{s.title}</Text>
-                  <Text style={styles.sessionMeta}>{s.time}</Text>
-                  <Text style={styles.sessionParticipants} numberOfLines={1}>{s.participants.join(', ')}</Text>
-                  <View style={styles.sessionActionsRow}>
-                    <TouchableOpacity
-                      style={[styles.rsvpBtn, s.rsvped && styles.rsvpBtnActive]}
-                      onPress={() => setUpcomingSessions((prev) => prev.map((x) => x.id === s.id ? { ...x, rsvped: !x.rsvped } : x))}
-                    >
-                      <Text style={[styles.rsvpText, s.rsvped && styles.rsvpTextActive]}>{s.rsvped ? '\u2713 Going' : 'RSVP'}</Text>
-                    </TouchableOpacity>
-                    {s.createdByMe && (
-                      <View style={styles.ownerActions}>
-                        <TouchableOpacity style={styles.ownerActionBtn} onPress={() => {
-                          setSessionEditor({ mode: 'edit', id: s.id });
-                          setSessionDraftTitle(s.title);
-                          setSessionDraftCourse(s.course);
-                          setSessionDraftTime(s.time);
-                        }}>
-                          <Ionicons name="pencil" size={12} color={colors.maroon} />
-                          <Text style={styles.ownerActionText}>Edit</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.ownerActionBtn} onPress={async () => {
-                          await supabase.from('study_sessions').delete().eq('id', s.id);
-                          setUpcomingSessions((prev) => prev.filter((x) => x.id !== s.id));
-                        }}>
-                          <Ionicons name="trash" size={12} color="#b91c1c" />
-                          <Text style={styles.ownerActionDangerText}>Delete</Text>
-                        </TouchableOpacity>
+              upcomingSessions.map((s) => {
+                const handleRsvp = async () => {
+                  try {
+                    const { data: authData } = await supabase.auth.getUser();
+                    const userId = authData?.user?.id;
+                    if (!userId) return;
+                    const nowRsvped = !s.rsvped;
+                    const newAttendees = nowRsvped
+                      ? [...s.attendees.filter(a => a !== userId), userId]
+                      : s.attendees.filter(a => a !== userId);
+                    const myName = userName || 'You';
+                    const newNames = nowRsvped
+                      ? [...s.attendee_names.filter(n => n !== myName), myName]
+                      : s.attendee_names.filter(n => n !== myName);
+                    setUpcomingSessions(prev => prev.map(x => x.id === s.id ? { ...x, rsvped: nowRsvped, attendees: newAttendees, attendee_names: newNames } : x));
+                    await supabase.from('study_sessions').update({ attendees: newAttendees, attendee_names: newNames }).eq('id', s.id);
+                  } catch (e) { console.log('RSVP error:', e); }
+                };
+                return (
+                  <View key={s.id} style={styles.sessionCard}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Text style={styles.sessionCourse}>{s.course}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#D1FAE5', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
+                        <Ionicons name="location" size={10} color="#059669" />
+                        <Text style={{ fontSize: 10, fontFamily: fonts.bold, color: '#059669' }}>IN PERSON</Text>
                       </View>
-                    )}
+                    </View>
+                    <Text style={styles.sessionTitle}>{s.title}</Text>
+                    {s.location ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6 }}>
+                        <Ionicons name="location-outline" size={14} color={colors.maroon} />
+                        <Text style={{ fontSize: 12, fontFamily: fonts.medium, color: colors.maroon }}>{s.location}</Text>
+                      </View>
+                    ) : null}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4 }}>
+                      <Ionicons name="calendar-outline" size={13} color={colors.textSecondary} />
+                      <Text style={styles.sessionMeta}>{s.time || 'TBD'}</Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6 }}>
+                      <Ionicons name="people-outline" size={13} color={colors.textSecondary} />
+                      <Text style={styles.sessionParticipants} numberOfLines={1}>
+                        {s.attendee_names.length > 0 ? `${s.attendee_names.join(', ')} (${s.attendee_names.length} going)` : 'No one yet — be the first!'}
+                      </Text>
+                    </View>
+                    <View style={styles.sessionActionsRow}>
+                      <TouchableOpacity
+                        style={[styles.rsvpBtn, s.rsvped && styles.rsvpBtnActive]}
+                        onPress={handleRsvp}
+                      >
+                        <Text style={[styles.rsvpText, s.rsvped && styles.rsvpTextActive]}>{s.rsvped ? '\u2713 Going' : 'RSVP'}</Text>
+                      </TouchableOpacity>
+                      {s.createdByMe && (
+                        <View style={styles.ownerActions}>
+                          <TouchableOpacity style={styles.ownerActionBtn} onPress={() => {
+                            setSessionEditor({ mode: 'edit', id: s.id });
+                            setSessionDraftTitle(s.title);
+                            setSessionDraftCourse(s.course);
+                            setSessionDraftTime(s.time);
+                            setSessionDraftLocation(s.location || '');
+                          }}>
+                            <Ionicons name="pencil" size={12} color={colors.maroon} />
+                            <Text style={styles.ownerActionText}>Edit</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity style={styles.ownerActionBtn} onPress={async () => {
+                            await supabase.from('study_sessions').delete().eq('id', s.id);
+                            setUpcomingSessions((prev) => prev.filter((x) => x.id !== s.id));
+                          }}>
+                            <Ionicons name="trash" size={12} color="#b91c1c" />
+                            <Text style={styles.ownerActionDangerText}>Delete</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                    </View>
                   </View>
+                );
+              })
+            )}
+          </View>
+        )}
+
+        {/* ================== INVITES TAB ================== */}
+        {activeTab === 'invites' && (
+          <View style={styles.section}>
+            {classInvites.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <View style={styles.emptyIconLarge}>
+                  <Ionicons name="mail-open-outline" size={36} color={colors.maroon} />
                 </View>
-              ))
+                <Text style={styles.emptyCardTitle}>No class invites</Text>
+                <Text style={styles.emptyCardSub}>
+                  When a friend invites you to join their class, it will appear here. You can accept to instantly join!
+                </Text>
+              </View>
+            ) : (
+              <>
+                <Text style={[styles.sectionLabel, { marginTop: 0 }]}>Pending Class Invites</Text>
+                {classInvites.map((invite) => (
+                  <View key={invite.id} style={{
+                    backgroundColor: 'white', borderRadius: 20, padding: 16,
+                    borderWidth: 2, borderColor: '#F0E0D0', marginBottom: 10,
+                  }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                      <View style={{
+                        width: 44, height: 44, borderRadius: 15,
+                        backgroundColor: (invite.class_data?.color || colors.maroon) + '14',
+                        alignItems: 'center', justifyContent: 'center',
+                      }}>
+                        <Ionicons name="book" size={20} color={invite.class_data?.color || colors.maroon} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontSize: 15, fontFamily: fonts.bold, color: colors.textPrimary }}>{invite.class_title}</Text>
+                        <Text style={{ fontSize: 12, fontFamily: fonts.regular, color: colors.textTertiary, marginTop: 2 }}>
+                          {invite.from_display_name} invited you{invite.class_data?.block ? ` • ${invite.class_data.block}` : ''}
+                        </Text>
+                      </View>
+                    </View>
+                    {invite.class_data?.description ? (
+                      <Text style={{ fontSize: 12, fontFamily: fonts.regular, color: colors.textSecondary, marginBottom: 12, lineHeight: 18 }}>
+                        {invite.class_data.description}
+                      </Text>
+                    ) : null}
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <TouchableOpacity
+                        style={{
+                          flex: 1, height: 42, borderRadius: 16,
+                          backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center',
+                          flexDirection: 'row', gap: 6,
+                        }}
+                        onPress={() => {
+                          onAcceptClassInvite?.(invite.id);
+                          showFeedback(`Joined ${invite.class_title}!`, '#166534');
+                        }}
+                      >
+                        <Ionicons name="checkmark" size={16} color="white" />
+                        <Text style={{ fontSize: 14, fontFamily: fonts.bold, color: 'white' }}>Join Class</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={{
+                          height: 42, paddingHorizontal: 18, borderRadius: 16,
+                          backgroundColor: '#FFF5ED', alignItems: 'center', justifyContent: 'center',
+                          borderWidth: 1.5, borderColor: '#F0E0D0',
+                        }}
+                        onPress={() => {
+                          onDeclineClassInvite?.(invite.id);
+                          showFeedback('Invite declined.', '#991b1b');
+                        }}
+                      >
+                        <Text style={{ fontSize: 13, fontFamily: fonts.bold, color: colors.textSecondary }}>Decline</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))}
+              </>
             )}
           </View>
         )}
@@ -911,12 +1235,15 @@ export function FriendsScreen({
         {activeTab === 'discover' && (
           <DiscoverSection
             userSchool={userSchool}
+            userSchools={userSchools}
             onSchoolOpen={onSchoolOpen}
             onPersonOpen={onPersonOpen}
             onSendRequest={onSendRequest}
+            onInvitePeople={shareSchoolInvite}
             showFeedback={showFeedback}
             friends={friends}
             userUsername={userUsername}
+            tutorialStep={tutorialStep}
           />
         )}
       </ScrollView>
@@ -990,9 +1317,9 @@ export function FriendsScreen({
                   <Ionicons name="close" size={22} color={colors.textPrimary} />
                 </TouchableOpacity>
               </View>
-              <Text style={styles.modalSub}>Set up your live study room details.</Text>
+              <Text style={styles.modalSub}>Plan an in-person study session with your classmates.</Text>
               <Text style={styles.editorLabel}>Session Title</Text>
-              <TextInput style={styles.editorInput} value={sessionDraftTitle} onChangeText={setSessionDraftTitle} placeholder="Ex: Unit 7 Blitz" placeholderTextColor={colors.textTertiary} />
+              <TextInput style={styles.editorInput} value={sessionDraftTitle} onChangeText={setSessionDraftTitle} placeholder="Ex: Unit 7 Review Blitz" placeholderTextColor={colors.textTertiary} />
               <Text style={styles.editorLabel}>Course</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 16 }}>
                 {classes.map(c => (
@@ -1008,13 +1335,25 @@ export function FriendsScreen({
                   </TouchableOpacity>
                 ))}
               </ScrollView>
-              <Text style={styles.editorLabel}>Time</Text>
+              <Text style={styles.editorLabel}>Location</Text>
+              <View style={[styles.editorInput, { flexDirection: 'row', alignItems: 'center', gap: 8 }]}>
+                <Ionicons name="location-outline" size={18} color={colors.textTertiary} />
+                <TextInput
+                  style={{ flex: 1, fontSize: 14, color: colors.textPrimary, fontFamily: fonts.medium, paddingVertical: 0 }}
+                  value={sessionDraftLocation}
+                  onChangeText={setSessionDraftLocation}
+                  placeholder="Ex: Library Room 204"
+                  placeholderTextColor={colors.textTertiary}
+                />
+              </View>
+              <Text style={styles.editorLabel}>Date & Time</Text>
               <TouchableOpacity
-                style={styles.editorInput}
+                style={[styles.editorInput, { flexDirection: 'row', alignItems: 'center', gap: 8 }]}
                 onPress={() => setDatePickerVisibility(true)}
               >
-                <Text style={{ color: sessionDraftTime ? colors.textPrimary : colors.textTertiary, fontSize: 14 }}>
-                  {sessionDraftTime || 'Ex: Saturday \u2022 7:00 PM'}
+                <Ionicons name="calendar-outline" size={18} color={colors.textTertiary} />
+                <Text style={{ color: sessionDraftTime ? colors.textPrimary : colors.textTertiary, fontSize: 14, fontFamily: fonts.medium }}>
+                  {sessionDraftTime || 'Select date & time'}
                 </Text>
               </TouchableOpacity>
               <DateTimePickerModal
@@ -1027,34 +1366,40 @@ export function FriendsScreen({
                 onCancel={() => setDatePickerVisibility(false)}
               />
               <TouchableOpacity style={styles.modalSendBtn} onPress={async () => {
-                const title = sessionDraftTitle.trim() || 'New Study Session';
+                const title = sessionDraftTitle.trim() || 'Study Session';
                 const course = sessionDraftCourse.trim() || 'Custom Session';
                 const time = sessionDraftTime.trim() || 'TBD';
+                const location = sessionDraftLocation.trim() || '';
 
                 try {
                   const { data: userData } = await supabase.auth.getUser();
                   const userId = userData?.user?.id;
+                  const myName = userName || 'You';
 
                   if (sessionEditor?.mode === 'create') {
-                    const { error } = await supabase.from('study_sessions').insert({
+                    const { data: inserted, error } = await supabase.from('study_sessions').insert({
                       title,
                       course,
                       time,
+                      location,
                       user_id: userId,
-                      participants: [userName || 'You']
-                    });
+                      participants: [myName],
+                      attendees: [userId],
+                      attendee_names: [myName],
+                    }).select().maybeSingle();
                     if (error) console.log('Error saving session:', error);
-                    
-                    setUpcomingSessions((prev) => [{ id: `session-${Date.now()}`, title, course, time, participants: [userName || 'You'], rsvped: true, createdByMe: true }, ...prev]);
+                    const sessionId = inserted?.id?.toString() || `session-${Date.now()}`;
+                    setUpcomingSessions((prev) => [{ id: sessionId, title, course, time, location, participants: [myName], attendees: [userId || ''], attendee_names: [myName], rsvped: true, createdByMe: true }, ...prev]);
                   } else {
                     const { error } = await supabase.from('study_sessions').update({
                       title,
                       course,
-                      time
-                    }).eq('title', title);
+                      time,
+                      location,
+                    }).eq('id', sessionEditor?.id);
                     if (error) console.log('Error updating session:', error);
 
-                    setUpcomingSessions((prev) => prev.map((s) => s.id === sessionEditor?.id ? { ...s, title, course, time } : s));
+                    setUpcomingSessions((prev) => prev.map((s) => s.id === sessionEditor?.id ? { ...s, title, course, time, location } : s));
                   }
                 } catch (e) {
                   console.log(e);
@@ -1079,21 +1424,38 @@ export function FriendsScreen({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFF8F2' },
   scroll: { flex: 1 },
-  scrollContent: { paddingTop: 56, paddingHorizontal: 20, paddingBottom: 120 },
+  scrollContent: { paddingTop: 56, paddingHorizontal: 24, paddingBottom: 120 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  title: { fontSize: 28, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.5 },
-  subtitle: { fontSize: 13, color: colors.textSecondary, marginTop: 4, fontFamily: fonts.regular },
-  avatarWrap: { width: 48, height: 48, borderRadius: 18, backgroundColor: 'white', overflow: 'hidden', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#F0E0D0' },
+  title: { fontSize: 30, fontFamily: fonts.bold, color: colors.textPrimary, letterSpacing: -0.5 },
+  subtitle: { fontSize: 14, color: colors.textSecondary, marginTop: 4, fontFamily: fonts.regular },
+  avatarWrap: { width: 52, height: 52, borderRadius: 20, backgroundColor: 'white', overflow: 'hidden', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#F0E0D0' },
   avatar: { width: '100%', height: '100%' },
 
-  searchRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 16 },
-  searchBox: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 18, paddingHorizontal: 16, height: 48, gap: 10, borderWidth: 2, borderColor: '#F0E0D0' },
+  searchRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 14 },
+  searchBox: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 20, paddingHorizontal: 20, height: 54, gap: 12, borderWidth: 2, borderColor: '#F0E0D0' },
   searchInput: { flex: 1, fontSize: 14, color: colors.textPrimary, paddingVertical: 0, fontFamily: fonts.medium },
-  addFriendBtn: { width: 48, height: 48, borderRadius: 18, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
+  addFriendBtn: { width: 54, height: 54, borderRadius: 20, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
+  tutorialTargetButton: {
+    borderWidth: 2,
+    borderColor: '#F3D3A7',
+    shadowColor: '#B45309',
+    shadowOpacity: 0.24,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+  },
 
   tabs: { flexDirection: 'row', gap: 10, marginTop: 16 },
   tab: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 18, backgroundColor: 'white', borderWidth: 2, borderColor: '#F0E0D0' },
   tabActive: { backgroundColor: colors.maroon, borderColor: colors.maroon },
+  tutorialTargetTab: {
+    borderColor: '#C0761E',
+    shadowColor: '#C0761E',
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
   tabText: { fontSize: 14, fontFamily: fonts.medium, color: colors.textSecondary },
   tabTextActive: { color: 'white' },
   tabBadge: { backgroundColor: `${colors.maroon}18`, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10 },
@@ -1106,6 +1468,48 @@ const styles = StyleSheet.create({
 
   section: { marginTop: 20 },
   sectionLabel: { fontSize: 12, fontFamily: fonts.semiBold, color: colors.textSecondary, marginBottom: 12, letterSpacing: 0.5, textTransform: 'uppercase' },
+  discoverInviteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    backgroundColor: 'white',
+    borderRadius: 22,
+    padding: 18,
+    borderWidth: 2,
+    borderColor: '#F0D2B6',
+    marginBottom: 18,
+  },
+  discoverInviteButtonTutorial: {
+    borderColor: '#C0761E',
+    shadowColor: '#C0761E',
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  discoverInviteIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: '#FFF5ED',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  discoverInviteTextWrap: {
+    flex: 1,
+  },
+  discoverInviteTitle: {
+    fontSize: 15,
+    fontFamily: fonts.bold,
+    color: colors.textPrimary,
+  },
+  discoverInviteSub: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 18,
+    fontFamily: fonts.regular,
+    color: colors.textSecondary,
+  },
   horizontalList: { gap: 12, paddingBottom: 8 },
 
   // Empty states
@@ -1171,27 +1575,7 @@ const styles = StyleSheet.create({
   chatInput: { flex: 1, height: 44, borderRadius: 18, backgroundColor: '#FFF5ED', paddingHorizontal: 14, fontSize: 13, color: colors.textPrimary, fontFamily: fonts.medium, borderWidth: 2, borderColor: '#F0E0D0' },
   sendBtn: { width: 44, height: 44, borderRadius: 18, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
 
-  // Call
-  callScreen: { flex: 1, backgroundColor: '#140709', paddingTop: 56, paddingHorizontal: 18, paddingBottom: 24 },
-  callGlowOne: { position: 'absolute', top: -80, right: -60, width: 220, height: 220, borderRadius: 110, backgroundColor: 'rgba(127,29,29,0.45)' },
-  callGlowTwo: { position: 'absolute', bottom: 120, left: -90, width: 260, height: 260, borderRadius: 130, backgroundColor: 'rgba(30,64,175,0.22)' },
-  callTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  callTopBtn: { width: 42, height: 42, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.12)', alignItems: 'center', justifyContent: 'center' },
-  callTitleWrap: { alignItems: 'center', flex: 1, paddingHorizontal: 12 },
-  callTypeLabel: { fontSize: 10, letterSpacing: 1, color: 'rgba(255,255,255,0.7)', fontFamily: fonts.bold },
-  callTitleText: { fontSize: 18, color: 'white', fontFamily: fonts.bold, marginTop: 4 },
-  callClock: { fontSize: 12, color: 'rgba(255,255,255,0.75)', marginTop: 3, fontFamily: fonts.medium },
-  videoStage: { flex: 1, marginTop: 16 },
-  videoFocusTile: { flex: 1, borderRadius: 28, backgroundColor: 'rgba(255,255,255,0.14)', borderWidth: 2, borderColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: 280 },
-  videoFocusName: { color: 'white', fontSize: 20, fontFamily: fonts.bold },
-  voiceStage: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
-  voiceAvatarOuter: { width: 190, height: 190, borderRadius: 95, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.12)' },
-  voiceAvatarInner: { width: 142, height: 142, borderRadius: 71, alignItems: 'center', justifyContent: 'center', backgroundColor: `${colors.maroon}95` },
-  voiceName: { color: 'white', fontSize: 24, fontFamily: fonts.bold },
-  callControlsDock: { marginTop: 12, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 12, paddingBottom: 4 },
-  callControlBtn: { width: 56, height: 56, borderRadius: 22, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center' },
-  callControlBtnActive: { backgroundColor: colors.maroon },
-  callEndBtn: { backgroundColor: '#dc2626' },
+
 
   // Modal
   modalKeyboard: { flex: 1 },

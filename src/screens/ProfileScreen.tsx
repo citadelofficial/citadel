@@ -10,8 +10,8 @@ import {
     Alert,
     Animated,
     Easing,
-    Switch,
     ActivityIndicator,
+    Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -20,6 +20,7 @@ import { AnimatedPressable } from '../components/AnimatedPressable';
 import { friendsDirectory } from '../data/friends';
 import { supabase } from '../lib/supabase';
 import { uploadAvatar } from '../lib/storage';
+import { normalizeSchoolName } from '../lib/schoolUtils';
 import type { UserData, ClassData, FriendData } from '../types';
 import { Session } from '@supabase/supabase-js';
 
@@ -34,6 +35,7 @@ interface Props {
     onInfoPage?: (page: 'help' | 'terms' | 'privacy') => void;
     onRateApp?: () => void;
     onShareApp?: () => void;
+    onReplayTutorial?: () => void;
     onSchoolOpen?: (schoolName: string) => void;
 }
 
@@ -144,23 +146,21 @@ export function ProfileScreen({
     onInfoPage,
     onRateApp,
     onShareApp,
+    onReplayTutorial,
     onSchoolOpen
 }: Props) {
     const [editName, setEditName] = useState(userData.name || '');
     const [editUsername, setEditUsername] = useState(userData.username || '');
     const [editEmail, setEditEmail] = useState(userData.email || '');
     const [editGrade, setEditGrade] = useState(userData.grade || '');
-    const [editSchool, setEditSchool] = useState(userData.school || '');
+    const [editSchool, setEditSchool] = useState('');
     const [editingField, setEditingField] = useState<string | null>(null);
 
     const [uploadingAvatar, setUploadingAvatar] = useState(false);
     const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
     const usernameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    // Settings
-    const [darkMode, setDarkMode] = useState(false);
-    const [notifications, setNotifications] = useState(true);
-    const [studyReminders, setStudyReminders] = useState(true);
+
 
     // Entrance animation
     const headerFade = useRef(new Animated.Value(0)).current;
@@ -169,15 +169,11 @@ export function ProfileScreen({
     const contentSlide = useRef(new Animated.Value(20)).current;
 
     useEffect(() => {
-        Animated.sequence([
-            Animated.parallel([
-                Animated.timing(headerFade, { toValue: 1, duration: 400, useNativeDriver: true }),
-                Animated.spring(headerSlide, { toValue: 0, useNativeDriver: true, speed: 14, bounciness: 8 }),
-            ]),
-            Animated.parallel([
-                Animated.timing(contentFade, { toValue: 1, duration: 350, useNativeDriver: true }),
-                Animated.spring(contentSlide, { toValue: 0, useNativeDriver: true, speed: 14, bounciness: 6 }),
-            ]),
+        Animated.parallel([
+            Animated.timing(headerFade, { toValue: 1, duration: 250, useNativeDriver: true }),
+            Animated.spring(headerSlide, { toValue: 0, useNativeDriver: true, speed: 20, bounciness: 4 }),
+            Animated.timing(contentFade, { toValue: 1, duration: 250, useNativeDriver: true }),
+            Animated.spring(contentSlide, { toValue: 0, useNativeDriver: true, speed: 20, bounciness: 4 }),
         ]).start();
     }, [headerFade, headerSlide, contentFade, contentSlide]);
 
@@ -225,29 +221,67 @@ export function ProfileScreen({
         };
     }, [editUsername, editingField, userData.username]);
 
-    const pickProfilePicture = async () => {
+    const handlePickedImage = async (uri: string) => {
+        if (session?.user?.id) {
+            setUploadingAvatar(true);
+            const publicUrl = await uploadAvatar(session.user.id, uri);
+            setUploadingAvatar(false);
+
+            if (publicUrl) {
+                onUpdateProfile({ profilePicture: publicUrl });
+            } else {
+                Alert.alert('Upload Failed', 'There was an error uploading your profile picture.');
+            }
+        } else {
+            onUpdateProfile({ profilePicture: uri });
+        }
+    };
+
+    const pickFromLibrary = async () => {
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== 'granted') {
+            Alert.alert('Permission Needed', 'Please allow access to your photo library in Settings.');
+            return;
+        }
         const result = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ['images'],
             allowsEditing: true,
             aspect: [1, 1],
-            quality: 0.8,
+            quality: 0.7,
+            allowsMultipleSelection: false,
         });
         if (!result.canceled && result.assets[0]?.uri) {
-            if (session?.user?.id) {
-                setUploadingAvatar(true);
-                const publicUrl = await uploadAvatar(session.user.id, result.assets[0].uri);
-                setUploadingAvatar(false);
-
-                if (publicUrl) {
-                    onUpdateProfile({ profilePicture: publicUrl });
-                } else {
-                    Alert.alert('Upload Failed', 'There was an error uploading your profile picture.');
-                }
-            } else {
-                // Fallback if not logged into Supabase (demo purposes)
-                onUpdateProfile({ profilePicture: result.assets[0].uri });
-            }
+            await handlePickedImage(result.assets[0].uri);
         }
+    };
+
+    const takePhoto = async () => {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== 'granted') {
+            Alert.alert('Permission Needed', 'Please allow camera access in Settings to take a photo.');
+            return;
+        }
+        const result = await ImagePicker.launchCameraAsync({
+            allowsEditing: true,
+            aspect: [1, 1],
+            quality: 0.7,
+            cameraType: ImagePicker.CameraType.front,
+        });
+        if (!result.canceled && result.assets[0]?.uri) {
+            await handlePickedImage(result.assets[0].uri);
+        }
+    };
+
+    const pickProfilePicture = () => {
+        Alert.alert(
+            'Profile Photo',
+            'How would you like to add your photo?',
+            [
+                { text: 'Take Photo', onPress: takePhoto },
+                { text: 'Choose from Library', onPress: pickFromLibrary },
+                { text: 'Cancel', style: 'cancel' },
+            ]
+        );
     };
 
     // === Save field microinteraction ===
@@ -269,7 +303,15 @@ export function ProfileScreen({
         if (field === 'username') updates.username = editUsername.trim().toLowerCase();
         if (field === 'email') updates.email = editEmail.trim().toLowerCase();
         if (field === 'grade') updates.grade = editGrade.trim();
-        if (field === 'school') updates.school = editSchool.trim();
+        if (field === 'school') {
+            const newSchool = normalizeSchoolName(editSchool);
+            // Replace the school being edited, or add if new
+            const existingSchools = userData.schools || [];
+            if (!existingSchools.includes(newSchool) && newSchool) {
+                updates.schools = [...existingSchools, newSchool];
+                if (!userData.primarySchool) updates.primarySchool = newSchool;
+            }
+        }
 
         setEditingField(null);
         await onUpdateProfile(updates);
@@ -311,17 +353,18 @@ export function ProfileScreen({
     };
 
     // Fetch real schoolmates from Supabase
-    const [schoolmates, setSchoolmates] = useState<{id: string; name: string; color: string; status: 'online' | 'studying' | 'offline'; school?: string}[]>([]);
+    const [schoolmates, setSchoolmates] = useState<{id: string; name: string; color: string; status: 'online' | 'studying' | 'offline'; school?: string; avatarUrl?: string | null}[]>([]);
     useEffect(() => {
-        if (!userData.school || !session?.user?.id) return;
+        if (!userData.schools || userData.schools.length === 0 || !session?.user?.id) return;
         (async () => {
             try {
+                // Query schoolmates across all schools
                 const { data } = await supabase
                     .from('profiles')
-                    .select('id, username, display_name, school')
-                    .eq('school', userData.school)
+                    .select('id, username, display_name, school, avatar_url')
+                    .in('school', userData.schools)
                     .neq('id', session.user.id)
-                    .limit(5);
+                    .limit(10);
                 if (data) {
                     setSchoolmates(data.map((p: any) => ({
                         id: p.id,
@@ -329,13 +372,14 @@ export function ProfileScreen({
                         color: '#E0E7FF',
                         status: 'offline' as const,
                         school: p.school || '',
+                        avatarUrl: p.avatar_url || null,
                     })));
                 }
             } catch (e) {
                 console.log('Error fetching schoolmates:', e);
             }
         })();
-    }, [userData.school, session?.user?.id]);
+    }, [userData.schools, session?.user?.id]);
 
     const totalDocs = classes.reduce((a, c) => a + c.documents, 0);
     const totalFiles = classes.reduce((a, c) => a + c.files.length, 0);
@@ -376,7 +420,7 @@ export function ProfileScreen({
                         </TouchableOpacity>
                         <Text style={styles.displayName}>{userData.name || 'Student'}</Text>
                         <Text style={styles.displaySub}>
-                            {userData.username ? `${userData.username} • ` : ''}{userData.school || 'Add your school'}
+                            {userData.username ? `${userData.username} • ` : ''}{userData.primarySchool || 'Add your school'}
                         </Text>
                     </View>
 
@@ -523,116 +567,136 @@ export function ProfileScreen({
 
                         <View style={styles.separator} />
 
-                        {/* School */}
-                        <TouchableOpacity style={styles.infoRow} onPress={() => setEditingField('school')}>
+                        {/* Schools (Multi-School) */}
+                        <View style={styles.infoRow}>
                             <View style={styles.infoIcon}><Ionicons name="business-outline" size={18} color={colors.maroon} /></View>
-                            <View style={styles.infoContent}>
-                                <Text style={styles.infoLabel}>School</Text>
-                                {editingField === 'school' ? (
-                                    <SchoolEditField
-                                        value={editSchool}
-                                        onChange={setEditSchool}
-                                        onSave={() => saveField('school')}
-                                        saveScale={saveScale}
-                                        saveSpinInterp={saveSpinInterp}
-                                    />
+                            <View style={[styles.infoContent, { flex: 1 }]}>
+                                <Text style={styles.infoLabel}>Schools</Text>
+                                {userData.schools && userData.schools.length > 0 ? (
+                                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+                                        {userData.schools.map((s, i) => (
+                                            <TouchableOpacity
+                                                key={s}
+                                                onLongPress={() => {
+                                                    Alert.alert(s, 'What would you like to do?', [
+                                                        { text: 'Set as Primary', onPress: () => onUpdateProfile({ primarySchool: s, schools: [s, ...userData.schools.filter(x => x !== s)] }) },
+                                                        { text: 'Remove', style: 'destructive', onPress: () => {
+                                                            const newSchools = userData.schools.filter(x => x !== s);
+                                                            onUpdateProfile({
+                                                                schools: newSchools,
+                                                                primarySchool: newSchools[0] || '',
+                                                            });
+                                                        }},
+                                                        { text: 'Cancel', style: 'cancel' },
+                                                    ]);
+                                                }}
+                                                onPress={() => onSchoolOpen?.(s)}
+                                                style={{
+                                                    flexDirection: 'row', alignItems: 'center', gap: 6,
+                                                    backgroundColor: s === userData.primarySchool ? `${colors.maroon}14` : '#F3F4F6',
+                                                    borderRadius: 12, paddingHorizontal: 12, paddingVertical: 7,
+                                                    borderWidth: 1.5, borderColor: s === userData.primarySchool ? colors.maroon : '#E5E7EB',
+                                                }}
+                                            >
+                                                <Ionicons name="school" size={13} color={s === userData.primarySchool ? colors.maroon : '#6B7280'} />
+                                                <Text style={{ fontSize: 13, fontFamily: fonts.semiBold, color: s === userData.primarySchool ? colors.maroon : '#374151' }}>{s}</Text>
+                                                {s === userData.primarySchool && (
+                                                    <View style={{ backgroundColor: colors.maroon, borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1 }}>
+                                                        <Text style={{ fontSize: 8, fontFamily: fonts.bold, color: 'white' }}>PRIMARY</Text>
+                                                    </View>
+                                                )}
+                                            </TouchableOpacity>
+                                        ))}
+                                    </View>
                                 ) : (
-                                    <Text style={styles.infoValue}>{userData.school || 'Not set'}</Text>
+                                    <Text style={styles.infoValue}>No schools added</Text>
                                 )}
-                            </View>
-                            {editingField !== 'school' && <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />}
-                        </TouchableOpacity>
-                    </View>
-
-                    {/* People at your school */}
-                    {userData.school ? (
-                        <>
-                            <TouchableOpacity
-                                style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 24, marginTop: 24, marginBottom: 10 }}
-                                onPress={() => onSchoolOpen?.(userData.school)}
-                                activeOpacity={0.7}
-                            >
-                                <Text style={styles.sectionTitle}>People at {userData.school}</Text>
-                                <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
-                            </TouchableOpacity>
-                            <View style={styles.card}>
-                                {schoolmates.length > 0 ? (
-                                    schoolmates.slice(0, 5).map((person) => (
-                                        <TouchableOpacity
-                                            key={person.id}
-                                            style={styles.personRow}
-                                            onPress={() => onPersonOpen?.(person)}
-                                            activeOpacity={0.7}
-                                        >
-                                            <View style={[styles.personAvatar, { backgroundColor: person.color }]}>
-                                                <Ionicons name="person" size={16} color="#6366f1" />
-                                            </View>
-                                            <View style={styles.personInfo}>
-                                                <Text style={styles.personName}>{person.name}</Text>
-                                                <Text style={styles.personStatus}>
-                                                    {person.status === 'online' ? '🟢 Online' : person.status === 'studying' ? '🟡 Studying' : '⚫ Offline'}
-                                                </Text>
-                                            </View>
-                                        </TouchableOpacity>
-                                    ))
-                                ) : (
-                                    <View style={styles.emptySchool}>
-                                        <Ionicons name="people-outline" size={28} color={colors.textTertiary} />
-                                        <Text style={styles.emptySchoolText}>No classmates found yet</Text>
-                                        <Text style={styles.emptySchoolSub}>Invite friends from your school!</Text>
+                                {/* Add school button */}
+                                <TouchableOpacity
+                                    onPress={() => setEditingField('school')}
+                                    style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 }}
+                                >
+                                    <Ionicons name="add-circle-outline" size={18} color={colors.maroon} />
+                                    <Text style={{ fontSize: 13, fontFamily: fonts.semiBold, color: colors.maroon }}>Add School</Text>
+                                </TouchableOpacity>
+                                {editingField === 'school' && (
+                                    <View style={{ marginTop: 8 }}>
+                                        <SchoolEditField
+                                            value={editSchool}
+                                            onChange={setEditSchool}
+                                            onSave={() => saveField('school')}
+                                            saveScale={saveScale}
+                                            saveSpinInterp={saveSpinInterp}
+                                        />
                                     </View>
                                 )}
-                                {schoolmates.length > 0 && (
-                                    <TouchableOpacity
-                                        style={{ alignItems: 'center', paddingVertical: 12 }}
-                                        onPress={() => onSchoolOpen?.(userData.school)}
-                                    >
-                                        <Text style={{ fontSize: 13, fontFamily: fonts.bold, color: colors.maroon }}>View All →</Text>
-                                    </TouchableOpacity>
-                                )}
+                                <Text style={{ fontSize: 11, fontFamily: fonts.regular, color: colors.textTertiary, marginTop: 6 }}>Long press a school to set as primary or remove</Text>
                             </View>
+                        </View>
+                    </View>
+
+                    {/* People at your schools — Redesigned */}
+                    {userData.schools && userData.schools.length > 0 ? (
+                        <>
+                            <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Your Schools</Text>
+                            {userData.schools.map((schoolName) => {
+                                const membersAtSchool = schoolmates.filter(p => p.school === schoolName);
+                                return (
+                                    <TouchableOpacity
+                                        key={schoolName}
+                                        style={{
+                                            backgroundColor: 'white', borderRadius: 20, padding: 16,
+                                            marginHorizontal: 24, marginBottom: 10,
+                                            borderWidth: 1.5, borderColor: schoolName === userData.primarySchool ? colors.maroon : '#F0E0D0',
+                                            flexDirection: 'row', alignItems: 'center', gap: 14,
+                                        }}
+                                        onPress={() => onSchoolOpen?.(schoolName)}
+                                        activeOpacity={0.7}
+                                    >
+                                        <View style={{
+                                            width: 48, height: 48, borderRadius: 16,
+                                            backgroundColor: schoolName === userData.primarySchool ? `${colors.maroon}18` : '#F3F4F6',
+                                            alignItems: 'center', justifyContent: 'center',
+                                        }}>
+                                            <Ionicons name="school" size={22} color={schoolName === userData.primarySchool ? colors.maroon : '#6B7280'} />
+                                        </View>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={{ fontSize: 15, fontFamily: fonts.bold, color: colors.textPrimary, marginBottom: 2 }}>{schoolName}</Text>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                                {membersAtSchool.slice(0, 3).map((m, idx) => (
+                                                    <View key={m.id} style={{
+                                                        width: 22, height: 22, borderRadius: 11,
+                                                        backgroundColor: '#E0E7FF', alignItems: 'center', justifyContent: 'center',
+                                                        marginLeft: idx > 0 ? -8 : 0, borderWidth: 2, borderColor: 'white',
+                                                        overflow: 'hidden',
+                                                    }}>
+                                                        {m.avatarUrl ? (
+                                                            <Image source={{ uri: m.avatarUrl }} style={{ width: 22, height: 22, borderRadius: 11 }} />
+                                                        ) : (
+                                                            <Ionicons name="person" size={10} color="#6366f1" />
+                                                        )}
+                                                    </View>
+                                                ))}
+                                                <Text style={{ fontSize: 12, fontFamily: fonts.medium, color: colors.textSecondary }}>
+                                                    {membersAtSchool.length > 0 ? `${membersAtSchool.length} member${membersAtSchool.length > 1 ? 's' : ''}` : 'No members yet'}
+                                                </Text>
+                                            </View>
+                                        </View>
+                                        <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+                                    </TouchableOpacity>
+                                );
+                            })}
                         </>
                     ) : null}
 
                     {/* Settings */}
                     <Text style={styles.sectionTitle}>Settings</Text>
                     <View style={styles.card}>
-                        <View style={styles.settingRow}>
-                            <View style={styles.infoIcon}><Ionicons name="notifications-outline" size={18} color={colors.maroon} /></View>
-                            <Text style={styles.settingLabel}>Push Notifications</Text>
-                            <Switch
-                                value={notifications}
-                                onValueChange={setNotifications}
-                                trackColor={{ false: '#e0d8d8', true: `${colors.maroon}50` }}
-                                thumbColor={notifications ? colors.maroon : '#ccc'}
-                            />
-                        </View>
-
-                        <View style={styles.separator} />
-
-                        <View style={styles.settingRow}>
-                            <View style={styles.infoIcon}><Ionicons name="alarm-outline" size={18} color={colors.maroon} /></View>
-                            <Text style={styles.settingLabel}>Study Reminders</Text>
-                            <Switch
-                                value={studyReminders}
-                                onValueChange={setStudyReminders}
-                                trackColor={{ false: '#e0d8d8', true: `${colors.maroon}50` }}
-                                thumbColor={studyReminders ? colors.maroon : '#ccc'}
-                            />
-                        </View>
-
-                        <View style={styles.separator} />
-
-                        <View style={styles.settingRow}>
-                            <View style={styles.infoIcon}><Ionicons name="moon-outline" size={18} color={colors.maroon} /></View>
-                            <Text style={styles.settingLabel}>Dark Mode</Text>
-                            <Switch
-                                value={darkMode}
-                                onValueChange={setDarkMode}
-                                trackColor={{ false: '#e0d8d8', true: `${colors.maroon}50` }}
-                                thumbColor={darkMode ? colors.maroon : '#ccc'}
-                            />
-                        </View>
+                        <TouchableOpacity style={styles.menuRow} onPress={onReplayTutorial}>
+                            <View style={styles.infoIcon}><Ionicons name="play-circle-outline" size={18} color={colors.maroon} /></View>
+                            <Text style={styles.menuLabel}>Replay Tutorial</Text>
+                            <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+                        </TouchableOpacity>
                     </View>
 
                     {/* More Options */}
@@ -896,13 +960,7 @@ const styles = StyleSheet.create({
     emptySchoolText: { fontSize: 14, fontFamily: fonts.bold, color: colors.textPrimary },
     emptySchoolSub: { fontSize: 12, fontFamily: fonts.regular, color: colors.textSecondary },
 
-    settingRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-    },
-    settingLabel: { flex: 1, fontSize: 15, fontFamily: fonts.medium, color: colors.textPrimary, marginLeft: 12 },
+
 
     menuRow: {
         flexDirection: 'row',

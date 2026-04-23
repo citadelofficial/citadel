@@ -4,6 +4,7 @@ import {
     Text,
     TouchableOpacity,
     ScrollView,
+    Image,
     StyleSheet,
     Animated,
     Share,
@@ -14,6 +15,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts } from '../theme';
 import { AnimatedPressable } from '../components/AnimatedPressable';
 import type { FriendData, ClassData } from '../types';
+import { supabase } from '../lib/supabase';
+import { Session } from '@supabase/supabase-js';
 
 interface Props {
     person: FriendData;
@@ -24,9 +27,11 @@ interface Props {
     onAddFriend: (personId: string) => void;
     onRemoveFriend: (personId: string) => void;
     onSchoolOpen?: (schoolName: string) => void;
+    onSendClassInvite?: (toUserId: string, classes: ClassData[]) => void;
+    session?: Session | null;
 }
 
-export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend, onAddFriend, onRemoveFriend, onSchoolOpen }: Props) {
+export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend, onAddFriend, onRemoveFriend, onSchoolOpen, onSendClassInvite, session }: Props) {
     const headerFade = useRef(new Animated.Value(0)).current;
     const headerSlide = useRef(new Animated.Value(-30)).current;
     const contentFade = useRef(new Animated.Value(0)).current;
@@ -35,7 +40,35 @@ export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend,
     const [showInviteModal, setShowInviteModal] = useState(false);
     const [selectedClassIds, setSelectedClassIds] = useState<Set<string>>(new Set());
 
-    const firstName = person.name.split(' ')[0];
+    // Live profile data — fetched from Supabase on mount to ensure freshness
+    const [livePerson, setLivePerson] = useState<FriendData>(person);
+
+    useEffect(() => {
+        // Fetch the latest profile data from Supabase
+        (async () => {
+            try {
+                const { data, error } = await supabase
+                    .from('profiles')
+                    .select('id, username, display_name, school, grade, avatar_url')
+                    .eq('id', person.id)
+                    .maybeSingle();
+
+                if (data && !error) {
+                    setLivePerson(prev => ({
+                        ...prev,
+                        name: data.display_name || data.username || prev.name,
+                        school: data.school || prev.school,
+                        grade: data.grade || prev.grade,
+                        avatarUrl: data.avatar_url || prev.avatarUrl,
+                    }));
+                }
+            } catch (err) {
+                console.log('Error fetching live profile:', err);
+            }
+        })();
+    }, [person.id]);
+
+    const firstName = livePerson.name.split(' ')[0];
 
     const toggleClass = (id: string) => {
         setSelectedClassIds(prev => {
@@ -52,13 +85,19 @@ export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend,
             Alert.alert('Select Classes', 'Pick at least one class to invite to.');
             return;
         }
-        const classList = selected.map(c => `• ${c.title} (${c.block})`).join('\n');
         setShowInviteModal(false);
-        try {
-            await Share.share({
-                message: `Hey ${firstName}! I'd love for you to join ${selected.length === 1 ? 'my class' : 'my classes'} on Citadel:\n\n${classList}\n\nDownload Citadel to get started!`,
-            });
-        } catch {}
+        if (onSendClassInvite) {
+            onSendClassInvite(person.id, selected);
+            Alert.alert('Invite Sent!', `${firstName} will see your class invite${selected.length > 1 ? 's' : ''} in their notifications.`);
+        } else {
+            // Fallback to Share sheet if handler not provided
+            const classList = selected.map(c => `• ${c.title} (${c.block}) — Code: ${c.classCode}`).join('\n');
+            try {
+                await Share.share({
+                    message: `Hey ${firstName}! I'd love for you to join ${selected.length === 1 ? 'my class' : 'my classes'} on Citadel:\n\n${classList}\n\nOpen Citadel → tap "Join Existing Class" → enter the code above to join!`,
+                });
+            } catch {}
+        }
         setSelectedClassIds(new Set());
     };
 
@@ -72,20 +111,15 @@ export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend,
     };
 
     useEffect(() => {
-        Animated.sequence([
-            Animated.parallel([
-                Animated.timing(headerFade, { toValue: 1, duration: 350, useNativeDriver: true }),
-                Animated.spring(headerSlide, { toValue: 0, useNativeDriver: true, speed: 14, bounciness: 8 }),
-            ]),
-            Animated.parallel([
-                Animated.timing(contentFade, { toValue: 1, duration: 300, useNativeDriver: true }),
-                Animated.spring(contentSlide, { toValue: 0, useNativeDriver: true, speed: 14, bounciness: 6 }),
-            ]),
+        Animated.parallel([
+            Animated.timing(headerFade, { toValue: 1, duration: 250, useNativeDriver: true }),
+            Animated.spring(headerSlide, { toValue: 0, useNativeDriver: true, speed: 20, bounciness: 4 }),
+            Animated.timing(contentFade, { toValue: 1, duration: 250, useNativeDriver: true }),
+            Animated.spring(contentSlide, { toValue: 0, useNativeDriver: true, speed: 20, bounciness: 4 }),
         ]).start();
     }, [headerFade, headerSlide, contentFade, contentSlide]);
 
-    const statusLabel = person.status === 'online' ? 'Online now' : person.status === 'studying' ? 'Studying' : 'Offline';
-    const statusColor = person.status === 'online' ? '#059669' : person.status === 'studying' ? '#d97706' : '#6b7280';
+
 
     // Find shared classes by checking if person.name is in classmateNames
     const sharedClasses = useMemo(() => {
@@ -111,14 +145,14 @@ export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend,
 
                     {/* Avatar */}
                     <View style={styles.avatarSection}>
-                        <View style={[styles.avatarCircle, { backgroundColor: person.color }]}>
-                            <Ionicons name="person" size={44} color={colors.maroon} />
+                        <View style={[styles.avatarCircle, { backgroundColor: livePerson.color, overflow: 'hidden' }]}>
+                            {livePerson.avatarUrl ? (
+                                <Image source={{ uri: livePerson.avatarUrl }} style={{ width: 96, height: 96, borderRadius: 36 }} />
+                            ) : (
+                                <Ionicons name="person" size={44} color={colors.maroon} />
+                            )}
                         </View>
-                        <Text style={styles.displayName}>{person.name}</Text>
-                        <View style={styles.statusBadge}>
-                            <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-                            <Text style={[styles.statusText, { color: statusColor }]}>{statusLabel}</Text>
-                        </View>
+                        <Text style={styles.displayName}>{livePerson.name}</Text>
                     </View>
 
                     {/* Quick Actions */}
@@ -131,9 +165,9 @@ export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend,
                             if (friendActionLoading) return;
                             setFriendActionLoading(true);
                             if (isFriend) {
-                                onRemoveFriend(person.id);
+                                onRemoveFriend(livePerson.id);
                             } else {
-                                onAddFriend(person.id);
+                                onAddFriend(livePerson.id);
                             }
                             setTimeout(() => setFriendActionLoading(false), 600);
                         }} scaleDown={0.92}>
@@ -153,7 +187,7 @@ export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend,
                             <View style={styles.infoIcon}><Ionicons name="person-outline" size={18} color={colors.maroon} /></View>
                             <View style={styles.infoContent}>
                                 <Text style={styles.infoLabel}>Full Name</Text>
-                                <Text style={styles.infoValue}>{person.name}</Text>
+                                <Text style={styles.infoValue}>{livePerson.name}</Text>
                             </View>
                         </View>
 
@@ -163,7 +197,7 @@ export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend,
                             <View style={styles.infoIcon}><Ionicons name="school-outline" size={18} color={colors.maroon} /></View>
                             <View style={styles.infoContent}>
                                 <Text style={styles.infoLabel}>Grade</Text>
-                                <Text style={styles.infoValue}>{person.grade || 'Not shared'}</Text>
+                                <Text style={styles.infoValue}>{livePerson.grade || 'Not shared'}</Text>
                             </View>
                         </View>
 
@@ -171,25 +205,25 @@ export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend,
 
                         <TouchableOpacity
                             style={styles.infoRow}
-                            onPress={() => person.school && onSchoolOpen?.(person.school)}
-                            activeOpacity={person.school ? 0.7 : 1}
+                            onPress={() => livePerson.school && onSchoolOpen?.(livePerson.school)}
+                            activeOpacity={livePerson.school ? 0.7 : 1}
                         >
                             <View style={styles.infoIcon}><Ionicons name="business-outline" size={18} color={colors.maroon} /></View>
                             <View style={styles.infoContent}>
                                 <Text style={styles.infoLabel}>School</Text>
-                                <Text style={[styles.infoValue, person.school && { color: colors.maroon }]}>{person.school || 'Not shared'}</Text>
+                                <Text style={[styles.infoValue, livePerson.school && { color: colors.maroon }]}>{livePerson.school || 'Not shared'}</Text>
                             </View>
-                            {person.school ? <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} /> : null}
+                            {livePerson.school ? <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} /> : null}
                         </TouchableOpacity>
 
-                        {person.course ? (
+                        {livePerson.course ? (
                             <>
                                 <View style={styles.separator} />
                                 <View style={styles.infoRow}>
                                     <View style={styles.infoIcon}><Ionicons name="book-outline" size={18} color={colors.maroon} /></View>
                                     <View style={styles.infoContent}>
                                         <Text style={styles.infoLabel}>Studying</Text>
-                                        <Text style={styles.infoValue}>{person.course}</Text>
+                                        <Text style={styles.infoValue}>{livePerson.course}</Text>
                                     </View>
                                 </View>
                             </>
@@ -243,9 +277,7 @@ export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend,
                             <View style={styles.infoIcon}><Ionicons name="time-outline" size={18} color={colors.maroon} /></View>
                             <View style={styles.infoContent}>
                                 <Text style={styles.infoLabel}>Last Active</Text>
-                                <Text style={styles.infoValue}>
-                                    {person.status === 'online' ? 'Active now' : person.status === 'studying' ? 'Studying right now' : 'Last seen recently'}
-                                </Text>
+                                <Text style={styles.infoValue}>Last seen recently</Text>
                             </View>
                         </View>
 

@@ -3,7 +3,8 @@ export interface UserData {
   username: string;
   email: string;
   grade: string;
-  school: string;
+  schools: string[];
+  primarySchool: string;
   profilePicture: string | null;
 }
 
@@ -16,6 +17,8 @@ export interface FriendData {
   lastMessage?: string;
   grade?: string;
   school?: string;
+  schools?: string[];
+  avatarUrl?: string | null;
 }
 
 export interface FileData {
@@ -40,6 +43,13 @@ export interface SubUnitNote {
   content: string;
 }
 
+export interface QuizQuestion {
+  question: string;
+  options: [string, string, string, string];
+  correctIndex: number; // 0-3
+  selectedIndex?: number; // user's answer
+}
+
 export interface Quiz {
   id: number;
   title: string;
@@ -47,6 +57,7 @@ export interface Quiz {
   score?: number; // percentage 0-100 if taken
   date: string;
   status?: 'generating' | 'ready' | 'grading' | 'graded';
+  questionData?: QuizQuestion[];
 }
 
 export interface SubUnit {
@@ -79,6 +90,20 @@ export interface ClassData {
   description: string;
   files: FileData[];
   units: UnitData[];
+  school?: string;
+  teacher?: string;
+}
+
+export interface ClassInvite {
+  id: string;
+  from_user_id: string;
+  to_user_id: string;
+  from_display_name: string;
+  class_title: string;
+  class_code: string;
+  class_data: ClassData;
+  status: 'pending' | 'accepted' | 'declined';
+  created_at: string;
 }
 
 export type Screen =

@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
@@ -18,7 +18,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "app.citadel",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "Allow Citadel to access your camera to take profile photos and scan notes.",
+        "NSPhotoLibraryUsageDescription": "Allow Citadel to access your photos for profile and class images."
       }
     },
     "android": {
@@ -28,8 +30,8 @@
       },
       "package": "app.citadel",
       "permissions": [
-        "android.permission.RECORD_AUDIO",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE"
       ]
     },
     "plugins": [
@@ -37,7 +39,7 @@
         "expo-image-picker",
         {
           "photosPermission": "Allow Citadel to access your photos for profile and class images.",
-          "cameraPermission": "Allow Citadel to access your camera to scan notes."
+          "cameraPermission": "Allow Citadel to access your camera to take profile photos and scan notes."
         }
       ],
       "expo-font"

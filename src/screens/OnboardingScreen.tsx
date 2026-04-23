@@ -16,9 +16,10 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts, spacing } from '../theme';
 import { supabase } from '../lib/supabase';
+import { normalizeSchoolName, findBestMatch, capitalizeSchoolName } from '../lib/schoolUtils';
 
 interface Props {
-  onGetStarted: (userData: { name: string; username: string; grade: string; school: string }) => void;
+  onGetStarted: (userData: { name: string; username: string; grade: string; schools: string[] }) => void;
   onSignIn?: () => void;
 }
 
@@ -48,13 +49,17 @@ export function OnboardingScreen({ onGetStarted, onSignIn }: Props) {
   const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
   const [grade, setGrade] = useState('');
   const [school, setSchool] = useState('');
+  const [selectedSchools, setSelectedSchools] = useState<string[]>([]);
   const [showGradePicker, setShowGradePicker] = useState(false);
   const [customSchools, setCustomSchools] = useState<string[]>([]);
   const [dbSchools, setDbSchools] = useState<string[]>([]);
   const [hasTypedSchool, setHasTypedSchool] = useState(false);
   const [inviteCode, setInviteCode] = useState('');
 
-  // Fetch existing schools from Supabase
+  // "Did you mean?" state
+  const [suggestedMatch, setSuggestedMatch] = useState<{ match: string; score: number } | null>(null);
+
+  // Fetch existing schools from profiles
   useEffect(() => {
     (async () => {
       try {
@@ -227,7 +232,7 @@ export function OnboardingScreen({ onGetStarted, onSignIn }: Props) {
 
   const goNext = () => {
     if (step === TOTAL_STEPS) {
-      onGetStarted({ name: name.trim(), username: username.trim().toLowerCase(), grade, school: school.trim() });
+      onGetStarted({ name: name.trim(), username: username.trim().toLowerCase(), grade, schools: selectedSchools });
     } else {
       setStep((s) => s + 1);
     }
@@ -240,39 +245,95 @@ export function OnboardingScreen({ onGetStarted, onSignIn }: Props) {
     if (step === 1) return name.trim().length > 0;
     if (step === 2) return username.trim().length >= 3 && usernameStatus === 'available';
     if (step === 3) return grade.length > 0;
-    if (step === 4) return school.trim().length > 1;
+    if (step === 4) return selectedSchools.length > 0;
     return false;
   };
 
-  const addCustomSchool = () => {
-    const trimmed = school.trim();
-    if (!trimmed) return;
-
-    if (!allSchools.some((item) => item.toLowerCase() === trimmed.toLowerCase())) {
-      setCustomSchools((prev) => [...prev, trimmed]);
+  const addSchoolToList = (schoolName: string) => {
+    const normalized = normalizeSchoolName(schoolName);
+    if (!normalized) return;
+    if (!selectedSchools.some(s => s.toLowerCase() === normalized.toLowerCase())) {
+      setSelectedSchools(prev => [...prev, normalized]);
     }
-
-    setSchool(trimmed);
-    setHasTypedSchool(true);
+    setSchool('');
+    setHasTypedSchool(false);
+    setSuggestedMatch(null);
   };
 
-  const applyInviteCode = () => {
-    const code = inviteCode.trim();
+  const removeSchoolFromList = (schoolName: string) => {
+    setSelectedSchools(prev => prev.filter(s => s !== schoolName));
+  };
+
+  const addCustomSchool = () => {
+    const normalized = normalizeSchoolName(school);
+    if (!normalized) return;
+    if (!allSchools.some((item) => item.toLowerCase() === normalized.toLowerCase())) {
+      setCustomSchools((prev) => [...prev, normalized]);
+    }
+    addSchoolToList(normalized);
+  };
+
+  // Handle selecting an existing school from suggestions
+  const handleSelectExistingSchool = (schoolName: string) => {
+    addSchoolToList(schoolName);
+  };
+
+  // Handle school input change with "Did you mean?" matching
+  const handleSchoolInputChange = (text: string) => {
+    setSchool(text);
+    setHasTypedSchool(true);
+
+    // Check for fuzzy match
+    const trimmed = text.trim();
+    if (trimmed.length >= 3) {
+      const match = findBestMatch(trimmed, allSchools);
+      setSuggestedMatch(match);
+    } else {
+      setSuggestedMatch(null);
+    }
+  };
+
+  const applyInviteCode = async () => {
+    const code = inviteCode.trim().toUpperCase();
     if (!code) return;
+    // Guard against excessively large payloads
+    if (code.length > 500) {
+      Alert.alert('Invalid Code', 'That invite code is too long.');
+      return;
+    }
+
+    // Try looking up as a short invite code in schools_meta (optional table)
     try {
-      // Pad base64 if needed
-      const padded = code + '='.repeat((4 - (code.length % 4)) % 4);
-      const decoded = atob(padded);
-      if (decoded && decoded.length > 0) {
-        setSchool(decoded);
-        setHasTypedSchool(true);
+      const { data } = await supabase
+        .from('schools_meta')
+        .select('school_name')
+        .eq('invite_code', code)
+        .maybeSingle();
+      if (data?.school_name) {
+        addSchoolToList(data.school_name);
         setInviteCode('');
-        Alert.alert('School Set!', `You've been invited to ${decoded}. Welcome!`);
-      } else {
-        Alert.alert('Invalid Code', 'That invite code doesn\'t seem to be valid. Please check and try again.');
+        Alert.alert('School Added!', `You've been invited to ${data.school_name}. Welcome!`);
+        return;
       }
     } catch {
-      Alert.alert('Invalid Code', 'That invite code doesn\'t seem to be valid. Please check and try again.');
+      // Table may not exist, fall through to legacy decode
+    }
+
+    // Fallback: try decoding as legacy base64 code
+    try {
+      const padded = code + '='.repeat((4 - (code.length % 4)) % 4);
+      const decoded = atob(padded);
+      // Sanitize: limit length, strip control characters
+      const sanitized = decoded.replace(/[\x00-\x1F\x7F]/g, '').trim().slice(0, 200);
+      if (sanitized && sanitized.length > 0) {
+        addSchoolToList(sanitized);
+        setInviteCode('');
+        Alert.alert('School Added!', `You've been invited to ${sanitized}. Welcome!`);
+      } else {
+        Alert.alert('Invalid Code', 'That invite code doesn\'t seem to be valid.');
+      }
+    } catch {
+      Alert.alert('Invalid Code', 'That invite code doesn\'t seem to be valid.');
     }
   };
 
@@ -406,19 +467,21 @@ export function OnboardingScreen({ onGetStarted, onSignIn }: Props) {
               <Text style={styles.h2}>What should we call you?</Text>
               <Text style={styles.p}>Your workspace gets personalized from the start.</Text>
               <Text style={styles.label}>Display Name</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Type your name"
-                placeholderTextColor={colors.textTertiary}
-                value={name}
-                onChangeText={setName}
-                autoCapitalize="words"
-              />
-              {name.trim().length > 0 && (
-                <View style={styles.checkWrap}>
-                  <Ionicons name="checkmark-circle" size={26} color="#059669" />
-                </View>
-              )}
+              <View style={styles.inputWithCheck}>
+                <TextInput
+                  style={[styles.input, { flex: 1 }]}
+                  placeholder="Type your name"
+                  placeholderTextColor={colors.textTertiary}
+                  value={name}
+                  onChangeText={setName}
+                  autoCapitalize="words"
+                />
+                {name.trim().length > 0 && (
+                  <View style={styles.checkWrap}>
+                    <Ionicons name="checkmark-circle" size={26} color="#059669" />
+                  </View>
+                )}
+              </View>
             </View>
           )}
 
@@ -503,32 +566,46 @@ export function OnboardingScreen({ onGetStarted, onSignIn }: Props) {
                 <Ionicons name="school" size={30} color={colors.maroon} />
               </View>
               <Text style={styles.h2}>Where do you study?</Text>
-              <Text style={styles.p}>Search your high school or college. If it is missing, add it instantly.</Text>
+              <Text style={styles.p}>Add one or more schools. Include your city to help others find the right one (e.g. "Lincoln High School, Dallas").</Text>
 
-              <View style={styles.schoolTagRow}>
-                <View style={styles.schoolTag}><Text style={styles.schoolTagText}>High School</Text></View>
-                <View style={styles.schoolTag}><Text style={styles.schoolTagText}>College</Text></View>
-                <View style={styles.schoolTag}><Text style={styles.schoolTagText}>University</Text></View>
-              </View>
+              {/* Selected schools chips */}
+              {selectedSchools.length > 0 && (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+                  {selectedSchools.map((s, i) => (
+                    <View key={s} style={{
+                      flexDirection: 'row', alignItems: 'center', gap: 6,
+                      backgroundColor: i === 0 ? `${colors.maroon}18` : '#EEF2FF',
+                      borderRadius: 14, paddingHorizontal: 14, paddingVertical: 8,
+                      borderWidth: 1.5, borderColor: i === 0 ? colors.maroon : '#C7D2FE',
+                    }}>
+                      <Ionicons name="school" size={14} color={i === 0 ? colors.maroon : '#6366f1'} />
+                      <Text style={{ fontSize: 13, fontFamily: fonts.semiBold, color: i === 0 ? colors.maroon : '#4338CA' }}>{s}</Text>
+                      {i === 0 && <Text style={{ fontSize: 10, fontFamily: fonts.bold, color: colors.maroon, marginLeft: 2 }}>PRIMARY</Text>}
+                      <TouchableOpacity onPress={() => removeSchoolFromList(s)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                        <Ionicons name="close-circle" size={16} color={i === 0 ? colors.maroon : '#6366f1'} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              )}
 
               <Text style={styles.label}>School Name</Text>
               <View style={styles.searchInputWrap}>
                 <Ionicons name="search" size={18} color={colors.textTertiary} />
                 <TextInput
                   style={styles.searchInput}
-                  placeholder="Search school name"
+                  placeholder="e.g. Lincoln High School, Dallas"
                   placeholderTextColor={colors.textTertiary}
                   value={school}
-                  onChangeText={(text) => {
-                    setSchool(text);
-                    setHasTypedSchool(true);
-                  }}
+                  onChangeText={handleSchoolInputChange}
+                  autoCapitalize="words"
                 />
                 {school.length > 0 && (
                   <TouchableOpacity
                     onPress={() => {
                       setSchool('');
                       setHasTypedSchool(false);
+                      setSuggestedMatch(null);
                     }}
                   >
                     <Ionicons name="close-circle" size={18} color={colors.textTertiary} />
@@ -536,35 +613,63 @@ export function OnboardingScreen({ onGetStarted, onSignIn }: Props) {
                 )}
               </View>
 
+              {/* "Did you mean?" suggestion banner */}
+              {suggestedMatch && school.trim().length >= 3 && (
+                <View style={styles.didYouMeanBanner}>
+                  <Ionicons name="help-circle" size={18} color={colors.maroon} />
+                  <Text style={styles.didYouMeanText}>
+                    Did you mean <Text style={{ fontFamily: fonts.bold }}>{suggestedMatch.match}</Text>?
+                  </Text>
+                  <View style={{ flexDirection: 'row', gap: 8 }}>
+                    <TouchableOpacity
+                      style={styles.didYouMeanYes}
+                      onPress={() => {
+                        setSuggestedMatch(null);
+                        handleSelectExistingSchool(suggestedMatch.match);
+                      }}
+                    >
+                      <Text style={{ fontSize: 12, fontFamily: fonts.bold, color: 'white' }}>Yes</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.didYouMeanNo}
+                      onPress={() => setSuggestedMatch(null)}
+                    >
+                      <Text style={{ fontSize: 12, fontFamily: fonts.bold, color: colors.textSecondary }}>No</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+
+              {/* Suggestions list */}
               {(hasTypedSchool || school.trim().length > 0) && (filteredSchools.length > 0 || canAddNewSchool) && (
                 <View style={styles.suggestionsWrap}>
                   {filteredSchools.map((item) => (
                     <TouchableOpacity
                       key={item}
                       style={styles.suggestionItem}
-                      onPress={() => {
-                        setSchool(item);
-                        setHasTypedSchool(true);
-                      }}
+                      onPress={() => handleSelectExistingSchool(item)}
                     >
                       <Ionicons name="school-outline" size={16} color={colors.textSecondary} />
-                      <Text style={styles.suggestionText}>{item}</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.suggestionText}>{item}</Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={14} color={colors.textTertiary} />
                     </TouchableOpacity>
                   ))}
 
                   {canAddNewSchool && (
                     <TouchableOpacity style={styles.addSchoolItem} onPress={addCustomSchool}>
                       <Ionicons name="add-circle" size={18} color={colors.maroon} />
-                      <Text style={styles.addSchoolText}>Add a new school: "{school.trim()}"</Text>
+                      <Text style={styles.addSchoolText}>Add a new school: "{normalizeSchoolName(school.trim())}"</Text>
                     </TouchableOpacity>
                   )}
                 </View>
               )}
 
-              {school.trim().length > 0 && (
+              {selectedSchools.length > 0 && (
                 <View style={styles.checkWrapSchool}>
                   <Ionicons name="checkmark-circle" size={22} color="#059669" />
-                  <Text style={styles.checkSchoolText}>School saved</Text>
+                  <Text style={styles.checkSchoolText}>{selectedSchools.length} school{selectedSchools.length > 1 ? 's' : ''} added</Text>
                 </View>
               )}
 
@@ -575,8 +680,11 @@ export function OnboardingScreen({ onGetStarted, onSignIn }: Props) {
                 borderTopWidth: 1,
                 borderTopColor: '#F0E0D0',
               }}>
-                <Text style={{ fontSize: 13, fontFamily: fonts.bold, color: colors.textSecondary, marginBottom: 8 }}>
+                <Text style={{ fontSize: 13, fontFamily: fonts.bold, color: colors.textSecondary, marginBottom: 4 }}>
                   Have an invite code?
+                </Text>
+                <Text style={{ fontSize: 11, fontFamily: fonts.regular, color: colors.textTertiary, marginBottom: 8 }}>
+                  If someone shared a code with you, paste it here. Otherwise, just skip this.
                 </Text>
                 <View style={{
                   flexDirection: 'row',
@@ -611,6 +719,7 @@ export function OnboardingScreen({ onGetStarted, onSignIn }: Props) {
                   </TouchableOpacity>
                 </View>
               </View>
+
             </View>
           )}
         </Animated.View>
@@ -775,7 +884,8 @@ const styles = StyleSheet.create({
   },
   inputText: { color: colors.textPrimary, fontFamily: fonts.medium },
   inputPlaceholder: { color: colors.textTertiary },
-  checkWrap: { position: 'absolute', right: 24, bottom: 24 },
+  inputWithCheck: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  checkWrap: { justifyContent: 'center', alignItems: 'center' },
 
   // Username step
   usernameInputWrap: {
@@ -841,16 +951,7 @@ const styles = StyleSheet.create({
   },
   pickerText: { fontSize: 14, color: colors.textPrimary, fontFamily: fonts.medium },
   pickerTextActive: { fontFamily: fonts.bold, color: colors.maroon },
-  schoolTagRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
-  schoolTag: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 14,
-    backgroundColor: '#FFF5ED',
-    borderWidth: 2,
-    borderColor: '#F0E0D0',
-  },
-  schoolTagText: { fontSize: 11, color: colors.textSecondary, fontFamily: fonts.semiBold },
+  // Removed: schoolTag styles (High School/College/University pills removed)
   searchInputWrap: {
     height: 56,
     borderRadius: 18,
@@ -918,4 +1019,109 @@ const styles = StyleSheet.create({
   btnText: { fontSize: 16, fontFamily: fonts.bold },
   btnTextWhite: { color: 'white' },
   btnTextDisabled: { color: colors.textTertiary },
+
+  // "Did you mean?" banner
+  didYouMeanBanner: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    backgroundColor: `${colors.maroon}0C`,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1.5,
+    borderColor: `${colors.maroon}25`,
+  },
+  didYouMeanText: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: fonts.medium,
+    color: colors.textPrimary,
+  },
+  didYouMeanYes: {
+    backgroundColor: colors.maroon,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  didYouMeanNo: {
+    backgroundColor: '#F0E0D0',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+
+  // School confirmation card
+  confirmCard: {
+    marginTop: 12,
+    backgroundColor: 'white',
+    borderRadius: 20,
+    padding: 18,
+    borderWidth: 2,
+    borderColor: colors.maroon,
+    shadowColor: colors.maroon,
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  confirmIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: `${colors.maroon}14`,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmName: {
+    fontSize: 16,
+    fontFamily: fonts.bold,
+    color: colors.textPrimary,
+    letterSpacing: -0.3,
+  },
+  confirmLocation: {
+    fontSize: 12,
+    fontFamily: fonts.medium,
+    color: colors.textSecondary,
+  },
+  confirmYes: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: colors.maroon,
+    borderRadius: 14,
+    paddingVertical: 12,
+  },
+  confirmNo: {
+    flex: 0.7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F0E0D0',
+    borderRadius: 14,
+    paddingVertical: 12,
+  },
+
+  // Suggestion location sub-text
+  suggestionLocation: {
+    fontSize: 11,
+    fontFamily: fonts.regular,
+    color: colors.textTertiary,
+    marginTop: 2,
+  },
+
+  // Location prompt overlay
+  locationOverlay: {
+    marginTop: 16,
+    borderRadius: 22,
+    overflow: 'hidden',
+  },
+  locationCard: {
+    backgroundColor: '#FFF8F2',
+    borderRadius: 22,
+    padding: 20,
+    borderWidth: 2,
+    borderColor: colors.maroon,
+  },
 });
