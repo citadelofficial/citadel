@@ -63,6 +63,7 @@ interface Props {
   classes: ClassData[];
   onAddClass: (cls: ClassData) => void;
   onRemoveClass: (id: string) => void;
+  onUpdateClass?: (cls: ClassData) => void;
   shortcuts: ShortcutItem[];
   onUpdateShortcuts: (shortcuts: ShortcutItem[]) => void;
   onSchoolOpen?: (schoolName: string) => void;
@@ -330,6 +331,7 @@ export function HomeScreen({
   classes,
   onAddClass,
   onRemoveClass,
+  onUpdateClass,
   shortcuts,
   onUpdateShortcuts,
   onSchoolOpen,
@@ -361,6 +363,7 @@ export function HomeScreen({
   const [selectedAPCourse, setSelectedAPCourse] = useState<string | null>(null);
   const [showAPPicker, setShowAPPicker] = useState(false);
   const [apSearchQuery, setApSearchQuery] = useState('');
+  const [includeAPUnits, setIncludeAPUnits] = useState(true);
   const [showJoinClassModal, setShowJoinClassModal] = useState(false);
   const [joinClassCode, setJoinClassCode] = useState('');
   const [joinClassStatus, setJoinClassStatus] = useState('');
@@ -369,6 +372,11 @@ export function HomeScreen({
   const [newClassTeacher, setNewClassTeacher] = useState('');
   const [showNotificationTray, setShowNotificationTray] = useState(false);
   const [tutorialFocusClassId, setTutorialFocusClassId] = useState<string | null>(null);
+
+  // === Block Manager ===
+  const [activeBlock, setActiveBlock] = useState<string | null>(null);
+  const [editingBlockClassId, setEditingBlockClassId] = useState<string | null>(null);
+  const [editingBlockNewBlock, setEditingBlockNewBlock] = useState('');
 
   // === Tasks ===
   interface TaskItem { id: number; title: string; classId: string | null; done: boolean; date: string; dueDate: string | null; supaId?: string; }
@@ -850,7 +858,7 @@ export function HomeScreen({
       color: newClassColor,
       description: `${newClassTemplate} setup • Focus: ${newClassGoal}`,
       files: [],
-      units: buildStarterUnits(newClassTemplate, selectedAPCourse || undefined),
+      units: (newClassTemplate === 'AP Class' && !includeAPUnits) ? [] : buildStarterUnits(newClassTemplate, selectedAPCourse || undefined),
       school: newClassSchool || school || undefined,
       teacher: newClassTeacher.trim() || undefined,
     };
@@ -1409,7 +1417,12 @@ export function HomeScreen({
             {blocks.map((block) => {
               const blockClasses = classes.filter((c) => c.block === block);
               return (
-                <View key={block} style={[styles.blockCard, blockClasses.length > 0 && { borderColor: blockClasses[0].color }]}>
+                <TouchableOpacity
+                  key={block}
+                  activeOpacity={0.7}
+                  onPress={() => setActiveBlock(block)}
+                  style={[styles.blockCard, blockClasses.length > 0 && { borderColor: blockClasses[0].color }]}
+                >
                   <Text style={[styles.blockLabel, blockClasses.length > 0 && { color: blockClasses[0].color }]}>{block}</Text>
                   {blockClasses.length === 0 ? (
                     <Text style={styles.blockClass} numberOfLines={1}>Free</Text>
@@ -1422,10 +1435,98 @@ export function HomeScreen({
                       ))}
                     </View>
                   )}
-                </View>
+                </TouchableOpacity>
               );
             })}
           </ScrollView>
+
+          {/* Block Manager Modal */}
+          <Modal visible={!!activeBlock} transparent animationType="slide" onRequestClose={() => { setActiveBlock(null); setEditingBlockClassId(null); }}>
+            <TouchableOpacity style={styles.blockModalOverlay} activeOpacity={1} onPress={() => { setActiveBlock(null); setEditingBlockClassId(null); }}>
+              <TouchableOpacity activeOpacity={1} onPress={() => {}} style={styles.blockModalContent}>
+                <View style={styles.blockModalHandle} />
+                <Text style={styles.blockModalTitle}>{activeBlock}</Text>
+                <Text style={styles.blockModalSub}>{(() => {
+                  const bc = classes.filter(c => c.block === activeBlock);
+                  return bc.length === 0 ? 'No classes in this block' : `${bc.length} class${bc.length > 1 ? 'es' : ''}`;
+                })()}</Text>
+
+                {activeBlock && classes.filter(c => c.block === activeBlock).map((cls) => (
+                  <View key={cls.id} style={styles.blockModalClassRow}>
+                    <View style={[styles.blockModalClassDot, { backgroundColor: cls.color }]} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.blockModalClassName}>{cls.title}</Text>
+                      {cls.teacher ? <Text style={styles.blockModalClassTeacher}>{cls.teacher}</Text> : null}
+                    </View>
+
+                    {editingBlockClassId === cls.id ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <Text style={{ fontSize: 11, fontFamily: fonts.semiBold, color: colors.textTertiary }}>Move to:</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 4 }}>
+                          {blocks.filter(b => b !== activeBlock).map((b) => (
+                            <TouchableOpacity
+                              key={b}
+                              style={[styles.blockMoveBtn, editingBlockNewBlock === b && styles.blockMoveBtnActive]}
+                              onPress={() => setEditingBlockNewBlock(b)}
+                            >
+                              <Text style={[styles.blockMoveBtnText, editingBlockNewBlock === b && styles.blockMoveBtnTextActive]}>{b.replace('Block ', '')}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </ScrollView>
+                        <TouchableOpacity
+                          style={[styles.blockMoveConfirm, !editingBlockNewBlock && { opacity: 0.4 }]}
+                          disabled={!editingBlockNewBlock}
+                          onPress={() => {
+                            if (editingBlockNewBlock && onUpdateClass) {
+                              onUpdateClass({ ...cls, block: editingBlockNewBlock });
+                              setEditingBlockClassId(null);
+                              setEditingBlockNewBlock('');
+                            }
+                          }}
+                        >
+                          <Ionicons name="checkmark" size={14} color="white" />
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => { setEditingBlockClassId(null); setEditingBlockNewBlock(''); }}>
+                          <Ionicons name="close" size={18} color={colors.textTertiary} />
+                        </TouchableOpacity>
+                      </View>
+                    ) : (
+                      <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <TouchableOpacity onPress={() => onCourseOpen(cls.id)} hitSlop={8}>
+                          <Ionicons name="open-outline" size={18} color={colors.maroon} />
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => { setEditingBlockClassId(cls.id); setEditingBlockNewBlock(''); }} hitSlop={8}>
+                          <Ionicons name="swap-horizontal-outline" size={18} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => {
+                          Alert.alert('Remove Class', `Remove "${cls.title}" from ${activeBlock}?`, [
+                            { text: 'Cancel', style: 'cancel' },
+                            { text: 'Remove', style: 'destructive', onPress: () => onRemoveClass(cls.id) },
+                          ]);
+                        }} hitSlop={8}>
+                          <Ionicons name="trash-outline" size={18} color="#dc2626" />
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                ))}
+
+                <TouchableOpacity
+                  style={styles.blockModalAddBtn}
+                  onPress={() => {
+                    setActiveBlock(null);
+                    setEditingBlockClassId(null);
+                    setNewClassBlock(activeBlock || 'Block 1');
+                    setShowClassModal(true);
+                    setClassStep(1);
+                  }}
+                >
+                  <Ionicons name="add-circle-outline" size={18} color={colors.maroon} />
+                  <Text style={styles.blockModalAddBtnText}>Add Class to {activeBlock}</Text>
+                </TouchableOpacity>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </Modal>
 
           {/* Tasks */}
           <View style={{ marginTop: 20 }}>
@@ -1951,6 +2052,24 @@ export function HomeScreen({
                         )}
                       </View>
 
+                      {newClassTemplate === 'AP Class' && selectedAPCourse && (
+                        <View style={styles.apUnitsToggle}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.apUnitsToggleTitle}>Include starter units?</Text>
+                            <Text style={styles.apUnitsToggleSub}>
+                              {includeAPUnits
+                                ? `3 units with sections will be added from ${selectedAPCourse}`
+                                : 'Class will start empty — add units later'}
+                            </Text>
+                          </View>
+                          <TouchableOpacity
+                            style={[styles.apUnitsToggleBtn, includeAPUnits && styles.apUnitsToggleBtnActive]}
+                            onPress={() => setIncludeAPUnits(!includeAPUnits)}
+                          >
+                            <View style={[styles.apUnitsToggleDot, includeAPUnits && styles.apUnitsToggleDotActive]} />
+                          </TouchableOpacity>
+                        </View>
+                      )}
                       <Text style={styles.modalLabel}>Class Name</Text>
                       <TextInput
                         style={styles.modalInput}
@@ -2160,6 +2279,12 @@ export function HomeScreen({
                           <Text style={styles.wizardPreviewLabel}>Template</Text>
                           <Text style={styles.wizardPreviewValue}>{newClassTemplate}{selectedAPCourse ? ` • ${selectedAPCourse}` : ''}</Text>
                         </View>
+                        {newClassTemplate === 'AP Class' && selectedAPCourse && (
+                          <View style={[styles.wizardPreviewRow, { marginTop: 12 }]}>
+                            <Text style={styles.wizardPreviewLabel}>Starter Units</Text>
+                            <Text style={styles.wizardPreviewValue}>{includeAPUnits ? '3 units included' : 'None (empty class)'}</Text>
+                          </View>
+                        )}
                         <View style={[styles.wizardPreviewRow, { marginTop: 12 }]}>
                           <Text style={styles.wizardPreviewLabel}>Block</Text>
                           <Text style={styles.wizardPreviewValue}>{newClassBlock}</Text>
@@ -2699,6 +2824,155 @@ const styles = StyleSheet.create({
     borderColor: '#F0E0D0',
   },
   emptyTasksText: { fontSize: 13, color: colors.textTertiary, fontFamily: fonts.medium, textAlign: 'center' },
+
+  // Block Manager Modal
+  blockModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+  },
+  blockModalContent: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 24,
+    paddingBottom: 40,
+    minHeight: 200,
+  },
+  blockModalHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#E0D0C8',
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  blockModalTitle: {
+    fontSize: 20,
+    fontFamily: fonts.bold,
+    color: colors.textPrimary,
+  },
+  blockModalSub: {
+    fontSize: 13,
+    fontFamily: fonts.medium,
+    color: colors.textTertiary,
+    marginTop: 2,
+    marginBottom: 16,
+  },
+  blockModalClassRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F5F0EB',
+  },
+  blockModalClassDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  blockModalClassName: {
+    fontSize: 15,
+    fontFamily: fonts.semiBold,
+    color: colors.textPrimary,
+  },
+  blockModalClassTeacher: {
+    fontSize: 12,
+    fontFamily: fonts.regular,
+    color: colors.textSecondary,
+    marginTop: 1,
+  },
+  blockMoveBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#E8E0D8',
+    backgroundColor: '#FAFAF8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  blockMoveBtnActive: {
+    borderColor: colors.maroon,
+    backgroundColor: `${colors.maroon}12`,
+  },
+  blockMoveBtnText: {
+    fontSize: 12,
+    fontFamily: fonts.bold,
+    color: colors.textTertiary,
+  },
+  blockMoveBtnTextActive: {
+    color: colors.maroon,
+  },
+  blockMoveConfirm: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: colors.maroon,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  blockModalAddBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 20,
+    paddingVertical: 14,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: `${colors.maroon}25`,
+    backgroundColor: `${colors.maroon}06`,
+  },
+  blockModalAddBtnText: {
+    fontSize: 14,
+    fontFamily: fonts.semiBold,
+    color: colors.maroon,
+  },
+  apUnitsToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 12,
+    marginBottom: 4,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: '#FFF5ED',
+    borderWidth: 1.5,
+    borderColor: '#F0E0D0',
+  },
+  apUnitsToggleTitle: {
+    fontSize: 14,
+    fontFamily: fonts.semiBold,
+    color: colors.textPrimary,
+  },
+  apUnitsToggleSub: {
+    fontSize: 11,
+    fontFamily: fonts.regular,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  apUnitsToggleBtn: {
+    width: 48,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#D9D0C8',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  apUnitsToggleBtnActive: {
+    backgroundColor: colors.maroon,
+  },
+  apUnitsToggleDot: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'white',
+  },
+  apUnitsToggleDotActive: {
+    alignSelf: 'flex-end',
+  },
   taskRow: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -42,6 +42,8 @@ interface Props {
   onUpdateProgress: (progress: Record<string, boolean>) => void;
   userName?: string;
   onSendClassInvite?: (toUserId: string, classes: ClassData[]) => void;
+  pendingScanNote?: { title: string; content: string; thumbnail: string } | null;
+  onClearPendingScanNote?: () => void;
   tutorialStep?: number;
   onTutorialNext?: () => void;
   onTutorialBack?: () => void;
@@ -96,6 +98,8 @@ export function CourseDetailScreen({
   onUpdateProgress,
   userName,
   onSendClassInvite,
+  pendingScanNote,
+  onClearPendingScanNote,
   tutorialStep = 0,
   onTutorialNext = () => { },
   onTutorialBack = () => { },
@@ -127,6 +131,81 @@ export function CourseDetailScreen({
   const [draftCode, setDraftCode] = useState(classData.classCode);
   const [draftImage, setDraftImage] = useState(classData.image);
   const [draftColor, setDraftColor] = useState(classData.color || colors.maroon);
+
+  // === Scan-to-Unit Picker ===
+  const [showScanUnitPicker, setShowScanUnitPicker] = useState(false);
+  const [scanPickerUnitId, setScanPickerUnitId] = useState<number | null>(null);
+  const [scanPickerSubUnitId, setScanPickerSubUnitId] = useState<string | null>(null);
+  const [scanNewUnitTitle, setScanNewUnitTitle] = useState('');
+
+  useEffect(() => {
+    if (pendingScanNote) {
+      if (classData.units.length === 0) {
+        // No units — auto-show create unit flow
+        setShowScanUnitPicker(true);
+        setScanPickerUnitId(null);
+        setScanPickerSubUnitId(null);
+      } else {
+        // Has units — show picker
+        setShowScanUnitPicker(true);
+        setScanPickerUnitId(classData.units[0].id);
+        const firstSub = classData.units[0].subUnits[0];
+        setScanPickerSubUnitId(firstSub?.id || null);
+      }
+    }
+  }, [pendingScanNote]);
+
+  const confirmScanToUnit = () => {
+    if (!pendingScanNote) return;
+
+    let updatedClass = { ...classData };
+
+    // If no unit selected, we need to create one
+    if (!scanPickerUnitId && scanNewUnitTitle.trim()) {
+      const newUnitId = Date.now();
+      const newUnit: UnitData = {
+        id: newUnitId,
+        title: scanNewUnitTitle.trim(),
+        pages: 0,
+        collaborators: 0,
+        examDate: 'TBD',
+        daysLeft: 0,
+        subUnits: [
+          { id: '1.1', title: '1.1', notes: [{ id: Date.now() + 1, title: pendingScanNote.title, author: userName || 'You', date: formatToday(), pages: 1, content: pendingScanNote.content }] },
+          { id: '1.2', title: '1.2', notes: [] },
+          { id: '1.3', title: '1.3', notes: [] },
+        ],
+      };
+      updatedClass = { ...updatedClass, units: [...updatedClass.units, newUnit] };
+    } else if (scanPickerUnitId && scanPickerSubUnitId) {
+      // Add to existing unit/subunit
+      updatedClass = {
+        ...updatedClass,
+        units: updatedClass.units.map((unit) =>
+          unit.id === scanPickerUnitId
+            ? {
+              ...unit,
+              subUnits: unit.subUnits.map((sub) =>
+                sub.id === scanPickerSubUnitId
+                  ? {
+                    ...sub,
+                    notes: [...sub.notes, { id: Date.now() + 1, title: pendingScanNote.title, author: userName || 'You', date: formatToday(), pages: 1, content: pendingScanNote.content }],
+                  }
+                  : sub
+              ),
+            }
+            : unit
+        ),
+      };
+    }
+
+    onUpdateClass(updatedClass);
+    setShowScanUnitPicker(false);
+    setScanPickerUnitId(null);
+    setScanPickerSubUnitId(null);
+    setScanNewUnitTitle('');
+    onClearPendingScanNote?.();
+  };
 
   const [showUnitEditModal, setShowUnitEditModal] = useState(false);
   const [editingUnitId, setEditingUnitId] = useState<number | null>(null);
@@ -2409,6 +2488,84 @@ export function CourseDetailScreen({
           </View>
         </View>
       </Modal>
+
+      {/* Scan-to-Unit Picker Modal */}
+      <Modal visible={showScanUnitPicker && !!pendingScanNote} transparent animationType="slide" onRequestClose={() => { setShowScanUnitPicker(false); onClearPendingScanNote?.(); }}>
+        <View style={scanToUnitStyles.overlay}>
+          <View style={scanToUnitStyles.sheet}>
+            <View style={scanToUnitStyles.handle} />
+            <Text style={scanToUnitStyles.title}>Add Note to Unit</Text>
+            <Text style={scanToUnitStyles.sub}>"{pendingScanNote?.title}" — choose where to save it</Text>
+
+            {classData.units.length > 0 ? (
+              <View>
+                <Text style={scanToUnitStyles.label}>Unit</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                  {classData.units.map((unit) => (
+                    <TouchableOpacity
+                      key={unit.id}
+                      style={[scanToUnitStyles.chip, scanPickerUnitId === unit.id && scanToUnitStyles.chipActive]}
+                      onPress={() => {
+                        setScanPickerUnitId(unit.id);
+                        setScanPickerSubUnitId(unit.subUnits[0]?.id || null);
+                      }}
+                    >
+                      <Text style={[scanToUnitStyles.chipText, scanPickerUnitId === unit.id && scanToUnitStyles.chipTextActive]}>{unit.title}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+
+                {scanPickerUnitId && (() => {
+                  const unit = classData.units.find(u => u.id === scanPickerUnitId);
+                  if (!unit || unit.subUnits.length === 0) return null;
+                  return (
+                    <View style={{ marginTop: 14 }}>
+                      <Text style={scanToUnitStyles.label}>Section</Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                        {unit.subUnits.map((sub) => (
+                          <TouchableOpacity
+                            key={sub.id}
+                            style={[scanToUnitStyles.chip, scanPickerSubUnitId === sub.id && scanToUnitStyles.chipActive]}
+                            onPress={() => setScanPickerSubUnitId(sub.id)}
+                          >
+                            <Text style={[scanToUnitStyles.chipText, scanPickerSubUnitId === sub.id && scanToUnitStyles.chipTextActive]}>{sub.title}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    </View>
+                  );
+                })()}
+              </View>
+            ) : (
+              <View>
+                <Text style={scanToUnitStyles.label}>No units yet — create one</Text>
+                <TextInput
+                  style={scanToUnitStyles.input}
+                  placeholder="Unit name (e.g. Unit 1: Basics)"
+                  placeholderTextColor="#B8A090"
+                  value={scanNewUnitTitle}
+                  onChangeText={setScanNewUnitTitle}
+                  autoFocus
+                />
+              </View>
+            )}
+
+            <View style={scanToUnitStyles.actions}>
+              <TouchableOpacity style={scanToUnitStyles.cancelBtn} onPress={() => { setShowScanUnitPicker(false); onClearPendingScanNote?.(); }}>
+                <Text style={scanToUnitStyles.cancelBtnText}>Skip</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[scanToUnitStyles.confirmBtn, (!scanPickerSubUnitId && !scanNewUnitTitle.trim()) && { opacity: 0.4 }]}
+                disabled={!scanPickerSubUnitId && !scanNewUnitTitle.trim()}
+                onPress={confirmScanToUnit}
+              >
+                <Ionicons name="checkmark" size={16} color="white" />
+                <Text style={scanToUnitStyles.confirmBtnText}>Add to Unit</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -3344,4 +3501,112 @@ const styles = StyleSheet.create({
   viewerScroll: { maxHeight: 380, marginBottom: 16 },
   viewerBody: { fontSize: 15, fontFamily: fonts.regular, color: colors.textPrimary, lineHeight: 24 },
   viewerActions: { flexDirection: 'row', gap: 8 },
+});
+
+const scanToUnitStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  handle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#E0D0C8',
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  title: {
+    fontSize: 20,
+    fontFamily: fonts.bold,
+    color: colors.textPrimary,
+  },
+  sub: {
+    fontSize: 13,
+    fontFamily: fonts.regular,
+    color: colors.textSecondary,
+    marginTop: 4,
+    marginBottom: 20,
+  },
+  label: {
+    fontSize: 12,
+    fontFamily: fonts.bold,
+    color: colors.textTertiary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  chip: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#E8E0D8',
+    backgroundColor: '#FAFAF8',
+  },
+  chipActive: {
+    borderColor: colors.maroon,
+    backgroundColor: `${colors.maroon}0D`,
+  },
+  chipText: {
+    fontSize: 13,
+    fontFamily: fonts.medium,
+    color: colors.textSecondary,
+  },
+  chipTextActive: {
+    color: colors.maroon,
+    fontFamily: fonts.bold,
+  },
+  input: {
+    height: 48,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#E8E0D8',
+    backgroundColor: '#FAFAF8',
+    paddingHorizontal: 14,
+    fontSize: 15,
+    fontFamily: fonts.medium,
+    color: colors.textPrimary,
+  },
+  actions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 24,
+  },
+  cancelBtn: {
+    flex: 1,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: '#FFF5ED',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelBtnText: {
+    fontSize: 14,
+    fontFamily: fonts.bold,
+    color: colors.textSecondary,
+  },
+  confirmBtn: {
+    flex: 2,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: colors.maroon,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  confirmBtnText: {
+    fontSize: 14,
+    fontFamily: fonts.bold,
+    color: 'white',
+  },
 });

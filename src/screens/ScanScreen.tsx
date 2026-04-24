@@ -3,14 +3,17 @@ import {
   View,
   Text,
   TouchableOpacity,
+  TextInput,
   StyleSheet,
   ScrollView,
   Image,
   Modal,
+  Alert,
   Dimensions,
   PanResponder,
   GestureResponderEvent,
   PanResponderGestureState,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,6 +25,7 @@ import { AnimatedPressable } from '../components/AnimatedPressable';
 import { InlineTutorialCard } from '../components/InlineTutorialCard';
 import { colors, fonts } from '../theme';
 import type { ClassData, FileData } from '../types';
+import { extractTextFromImage } from '../lib/gemini';
 
 interface Props {
   onHome: () => void;
@@ -29,6 +33,7 @@ interface Props {
   onFriends: () => void;
   classes: ClassData[];
   onSaveScan: (classId: string, file: FileData) => void;
+  onAddClass?: (newClass: ClassData) => void;
   tutorialStep?: number;
   onTutorialNext?: () => void;
   onTutorialBack?: () => void;
@@ -43,6 +48,9 @@ type PendingScan = {
   source: 'camera' | 'library' | 'document';
   pages: number;
   sizeBytes?: number;
+  base64?: string;
+  ocrTitle?: string;
+  ocrText?: string;
 };
 
 function formatDate(date = new Date()) {
@@ -87,6 +95,7 @@ export function ScanScreen({
   onFriends,
   classes,
   onSaveScan,
+  onAddClass,
   tutorialStep = 0,
   onTutorialNext = () => { },
   onTutorialBack = () => { },
@@ -97,6 +106,10 @@ export function ScanScreen({
   const [saving, setSaving] = useState(false);
   const [pending, setPending] = useState<PendingScan | null>(null);
   const [destinationClassId, setDestinationClassId] = useState(classes[0]?.id || '');
+  const [showCreateClass, setShowCreateClass] = useState(false);
+  const [newClassName, setNewClassName] = useState('');
+  const [newClassTeacher, setNewClassTeacher] = useState('');
+  const [newClassBlock, setNewClassBlock] = useState('');
   const tutorialGuide = tutorialStep === 5 ? {
     step: 5,
     title: 'Smart Scan builds your materials',
@@ -109,7 +122,7 @@ export function ScanScreen({
         .flatMap((cls) =>
           cls.files.map((file) => ({
             id: `${cls.id}-${file.id}`,
-            title: file.name,
+            title: file.previewTitle || file.name,
             date: file.date,
             pages: file.pages,
             course: cls.title,
@@ -121,6 +134,19 @@ export function ScanScreen({
     [classes]
   );
 
+  const runOcrOnImage = async (base64: string) => {
+    setOcrProcessing(true);
+    try {
+      const result = await extractTextFromImage(base64, 'image/jpeg');
+      if (result.success) {
+        setPending(prev => prev ? { ...prev, ocrTitle: result.title, ocrText: result.text } : null);
+      }
+    } catch (e) {
+      console.log('OCR error:', e);
+    }
+    setOcrProcessing(false);
+  };
+
   const handleCameraCapture = async () => {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) return;
@@ -128,17 +154,21 @@ export function ScanScreen({
     const result = await ImagePicker.launchCameraAsync({
       quality: 0.9,
       mediaTypes: ['images'],
+      base64: true,
     });
 
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
-      setPending({
+      const newPending: PendingScan = {
         uri: asset.uri,
         name: `${MODE_PREFIX[scanMode]}_${Date.now()}.jpg`,
         source: 'camera',
         pages: 1,
         sizeBytes: asset.fileSize,
-      });
+        base64: asset.base64 || undefined,
+      };
+      setPending(newPending);
+      if (asset.base64) runOcrOnImage(asset.base64);
     }
   };
 
@@ -149,17 +179,21 @@ export function ScanScreen({
     const result = await ImagePicker.launchImageLibraryAsync({
       quality: 0.9,
       mediaTypes: ['images'],
+      base64: true,
     });
 
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
-      setPending({
+      const newPending: PendingScan = {
         uri: asset.uri,
         name: asset.fileName || `Library_${Date.now()}.jpg`,
         source: 'library',
         pages: 1,
         sizeBytes: asset.fileSize,
-      });
+        base64: asset.base64 || undefined,
+      };
+      setPending(newPending);
+      if (asset.base64) runOcrOnImage(asset.base64);
     }
   };
 
@@ -224,10 +258,10 @@ export function ScanScreen({
     if (!pending || !imageLayout.naturalW) return;
     const scaleX = imageLayout.naturalW / imageLayout.w;
     const scaleY = imageLayout.naturalH / imageLayout.h;
-    const originX = Math.round(cropRegion.x * scaleX);
-    const originY = Math.round(cropRegion.y * scaleY);
-    const width = Math.round(cropRegion.w * scaleX);
-    const height = Math.round(cropRegion.h * scaleY);
+    const originX = Math.max(0, Math.round(cropRegion.x * scaleX));
+    const originY = Math.max(0, Math.round(cropRegion.y * scaleY));
+    const width = Math.min(imageLayout.naturalW - originX, Math.max(1, Math.round(cropRegion.w * scaleX)));
+    const height = Math.min(imageLayout.naturalH - originY, Math.max(1, Math.round(cropRegion.h * scaleY)));
 
     try {
       const result = await ImageManipulator.manipulateAsync(
@@ -262,10 +296,29 @@ export function ScanScreen({
     }
   };
 
-  const saveScan = () => {
-    if (!pending || !destinationClassId) return;
+  const [ocrProcessing, setOcrProcessing] = useState(false);
+
+  const saveScan = async () => {
+    if (!pending) return;
+
+    // If no class is selected, prompt to create one
+    if (!destinationClassId) {
+      if (onAddClass) {
+        setShowCreateClass(true);
+        Alert.alert(
+          'No Class Selected',
+          'Create a class first so your scan has a home.',
+        );
+      }
+      return;
+    }
 
     setSaving(true);
+
+    // Use pre-analyzed OCR results if available
+    const previewTitle = pending.ocrTitle || pending.name.replace(/\.[^/.]+$/, '');
+    const previewText = pending.ocrText || 'Scanned content is ready. Add tags, move to a unit, and share with your study group to collaborate faster.';
+
     const file: FileData = {
       id: Date.now(),
       name: pending.name,
@@ -277,9 +330,8 @@ export function ScanScreen({
       pages: pending.pages,
       size: formatSize(pending.sizeBytes),
       readTime: `${Math.max(2, pending.pages * 2)} Min Read`,
-      previewTitle: pending.name.replace(/\.[^/.]+$/, ''),
-      previewText:
-        'Scanned content is ready. Add tags, move to a unit, and share with your study group to collaborate faster.',
+      previewTitle,
+      previewText,
       source: pending.source,
     };
 
@@ -385,36 +437,141 @@ export function ScanScreen({
           <View style={styles.pendingPanel}>
             <View style={styles.pendingHeader}>
               <View style={styles.pendingCheckIcon}>
-                <Ionicons name="checkmark-circle" size={20} color="#059669" />
+                <Ionicons name={ocrProcessing ? 'sparkles' : 'checkmark-circle'} size={20} color={ocrProcessing ? colors.maroon : '#059669'} />
               </View>
-              <Text style={styles.pendingTitle}>Ready to Save</Text>
+              <Text style={styles.pendingTitle}>{ocrProcessing ? 'AI Analyzing...' : 'Ready to Save'}</Text>
             </View>
             <View style={styles.modeBadge}>
               <Ionicons name={modeIcon(scanMode)} size={12} color={colors.maroon} />
               <Text style={styles.modeBadgeText}>{MODE_CONFIG[scanMode].badge}</Text>
             </View>
-            <Text style={styles.pendingFileName}>{pending.name}</Text>
+            <Text style={styles.pendingFileName}>{pending.ocrTitle || pending.name}</Text>
             <Text style={styles.pendingMeta}>
               Source: {pending.source} • {pending.pages} page{pending.pages > 1 ? 's' : ''}
+              {ocrProcessing ? ' • extracting text…' : pending.ocrText ? ' • text extracted ✓' : ''}
             </Text>
 
             <Text style={styles.destinationTitle}>Choose Destination Class</Text>
             {classes.length > 0 ? (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.destinationRow}>
+              <View style={styles.destinationRow}>
                 {classes.map((cls) => (
                   <TouchableOpacity
                     key={cls.id}
                     style={[styles.destinationChip, destinationClassId === cls.id && styles.destinationChipActive]}
                     onPress={() => setDestinationClassId(cls.id)}
                   >
+                    <Ionicons
+                      name={destinationClassId === cls.id ? 'book' : 'book-outline'}
+                      size={13}
+                      color={destinationClassId === cls.id ? colors.maroon : colors.textTertiary}
+                    />
                     <Text style={[styles.destinationChipText, destinationClassId === cls.id && styles.destinationChipTextActive]}>
                       {cls.title}
                     </Text>
                   </TouchableOpacity>
                 ))}
-              </ScrollView>
-            ) : (
-              <Text style={styles.noClassesHint}>Create a class first to save scans.</Text>
+                {onAddClass && (
+                  <TouchableOpacity
+                    style={styles.destinationChipNew}
+                    onPress={() => setShowCreateClass(true)}
+                  >
+                    <Ionicons name="add-circle-outline" size={14} color={colors.maroon} />
+                    <Text style={styles.destinationChipNewText}>New Class</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            ) : showCreateClass ? null : (
+              <TouchableOpacity
+                style={scanExtraStyles.createClassPrompt}
+                onPress={() => setShowCreateClass(true)}
+              >
+                <View style={scanExtraStyles.createClassIcon}>
+                  <Ionicons name="add-circle" size={22} color={colors.maroon} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={scanExtraStyles.createClassPromptTitle}>Create Your First Class</Text>
+                  <Text style={scanExtraStyles.createClassPromptSub}>Add a class to save this scan into</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+              </TouchableOpacity>
+            )}
+
+            {showCreateClass && (
+              <View style={scanExtraStyles.inlineCreateCard}>
+                <Text style={scanExtraStyles.inlineCreateTitle}>Quick Create Class</Text>
+                <TextInput
+                  style={scanExtraStyles.inlineCreateInput}
+                  placeholder="Class name (e.g. AP World)"
+                  placeholderTextColor={colors.textTertiary}
+                  value={newClassName}
+                  onChangeText={setNewClassName}
+                  autoFocus
+                />
+                <TextInput
+                  style={scanExtraStyles.inlineCreateInput}
+                  placeholder="Teacher (e.g. Mr. Smith)"
+                  placeholderTextColor={colors.textTertiary}
+                  value={newClassTeacher}
+                  onChangeText={setNewClassTeacher}
+                />
+                <Text style={scanExtraStyles.inlineCreateLabel}>Block</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((num) => {
+                    const blockVal = `Block ${num}`;
+                    const selected = newClassBlock === blockVal;
+                    return (
+                      <TouchableOpacity
+                        key={num}
+                        style={[scanExtraStyles.blockPickerBtn, selected && scanExtraStyles.blockPickerBtnActive]}
+                        onPress={() => setNewClassBlock(selected ? '' : blockVal)}
+                      >
+                        <Text style={[scanExtraStyles.blockPickerBtnText, selected && scanExtraStyles.blockPickerBtnTextActive]}>{num}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+                <View style={scanExtraStyles.inlineCreateActions}>
+                  <TouchableOpacity
+                    style={scanExtraStyles.inlineCreateCancel}
+                    onPress={() => { setShowCreateClass(false); setNewClassName(''); setNewClassTeacher(''); setNewClassBlock(''); }}
+                  >
+                    <Text style={scanExtraStyles.inlineCreateCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[scanExtraStyles.inlineCreateBtn, (!newClassName.trim() || !newClassTeacher.trim()) && { opacity: 0.5 }]}
+                    disabled={!newClassName.trim() || !newClassTeacher.trim()}
+                    onPress={() => {
+                      if (onAddClass && newClassName.trim() && newClassTeacher.trim()) {
+                        const classId = Date.now().toString();
+                        const classCode = newClassName.trim().replace(/\s+/g, '').toUpperCase().slice(0, 6) + Math.floor(Math.random() * 900 + 100);
+                        const newClass: ClassData = {
+                          id: classId,
+                          title: newClassName.trim(),
+                          block: newClassBlock.trim(),
+                          classCode,
+                          image: 'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?w=600&h=500&fit=crop',
+                          classmates: 1,
+                          documents: 0,
+                          color: colors.maroon,
+                          description: newClassName.trim(),
+                          files: [],
+                          units: [],
+                          teacher: newClassTeacher.trim(),
+                        };
+                        onAddClass(newClass);
+                        setDestinationClassId(classId);
+                        setShowCreateClass(false);
+                        setNewClassName('');
+                        setNewClassTeacher('');
+                        setNewClassBlock('');
+                      }
+                    }}
+                  >
+                    <Ionicons name="checkmark" size={16} color="white" />
+                    <Text style={scanExtraStyles.inlineCreateBtnText}>Create & Select</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
             )}
 
             <View style={styles.pendingActions}>
@@ -425,9 +582,10 @@ export function ScanScreen({
                 <Ionicons name="crop" size={16} color={colors.maroon} />
                 <Text style={styles.cropBtnText}>Crop</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.primaryBtn} onPress={saveScan} disabled={saving || !destinationClassId}>
+              <TouchableOpacity style={[styles.primaryBtn, (saving || ocrProcessing) && { opacity: 0.6 }]} onPress={saveScan} disabled={saving || ocrProcessing}>
+                {saving && <ActivityIndicator size="small" color="white" style={{ marginRight: 4 }} />}
                 <Text style={styles.primaryBtnText}>{saving ? 'Saving...' : 'Save'}</Text>
-                <Ionicons name="arrow-forward" size={16} color="white" />
+                {!saving && <Ionicons name="arrow-forward" size={16} color="white" />}
               </TouchableOpacity>
             </View>
           </View>
@@ -660,19 +818,38 @@ const styles = StyleSheet.create({
   modeBadgeText: { fontSize: 11, fontFamily: fonts.semiBold, color: colors.maroon },
   pendingFileName: { fontSize: 15, fontFamily: fonts.bold, color: colors.textPrimary, marginTop: 8 },
   pendingMeta: { fontSize: 12, color: colors.textSecondary, marginTop: 3, fontFamily: fonts.regular },
-  destinationTitle: { fontSize: 12, fontFamily: fonts.bold, color: colors.textSecondary, marginTop: 16, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
-  destinationRow: { gap: 8 },
+  destinationTitle: { fontSize: 11, fontFamily: fonts.bold, color: colors.textTertiary, marginTop: 16, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.8 },
+  destinationRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   destinationChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 14,
-    borderWidth: 2,
-    borderColor: '#F0E0D0',
-    backgroundColor: 'white',
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: '#E8E0D8',
+    backgroundColor: '#FAFAF8',
   },
-  destinationChipActive: { borderColor: colors.maroon, backgroundColor: `${colors.maroon}10` },
-  destinationChipText: { fontSize: 12, color: colors.textSecondary, fontFamily: fonts.semiBold },
-  destinationChipTextActive: { color: colors.maroon },
+  destinationChipActive: {
+    borderColor: colors.maroon,
+    backgroundColor: `${colors.maroon}0D`,
+  },
+  destinationChipText: { fontSize: 13, color: colors.textSecondary, fontFamily: fonts.medium },
+  destinationChipTextActive: { color: colors.maroon, fontFamily: fonts.bold },
+  destinationChipNew: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: `${colors.maroon}30`,
+    borderStyle: 'dashed' as any,
+    backgroundColor: `${colors.maroon}06`,
+  },
+  destinationChipNewText: { fontSize: 13, color: colors.maroon, fontFamily: fonts.semiBold },
   noClassesHint: { fontSize: 12, color: colors.textTertiary, fontFamily: fonts.regular },
   pendingActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
   secondaryBtn: {
@@ -850,3 +1027,124 @@ const cropStyles = StyleSheet.create({
     color: 'white',
   },
 });
+
+const scanExtraStyles = StyleSheet.create({
+  createClassPrompt: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: `${colors.maroon}08`,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: `${colors.maroon}25`,
+    padding: 14,
+    marginTop: 4,
+  },
+  createClassIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: `${colors.maroon}12`,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  createClassPromptTitle: {
+    fontSize: 14,
+    fontFamily: fonts.semiBold,
+    color: colors.textPrimary,
+  },
+  createClassPromptSub: {
+    fontSize: 11,
+    fontFamily: fonts.regular,
+    color: colors.textSecondary,
+    marginTop: 1,
+  },
+  inlineCreateCard: {
+    backgroundColor: '#FFF8F3',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#F0E0D0',
+    padding: 16,
+    marginTop: 8,
+    gap: 10,
+  },
+  inlineCreateTitle: {
+    fontSize: 14,
+    fontFamily: fonts.bold,
+    color: colors.textPrimary,
+  },
+  inlineCreateInput: {
+    fontSize: 14,
+    fontFamily: fonts.medium,
+    color: colors.textPrimary,
+    backgroundColor: 'white',
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E8D8D0',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  inlineCreateActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+  inlineCreateCancel: {
+    flex: 1,
+    height: 42,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E0D0C8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  inlineCreateCancelText: {
+    fontSize: 13,
+    fontFamily: fonts.semiBold,
+    color: colors.textSecondary,
+  },
+  inlineCreateBtn: {
+    flex: 2,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: colors.maroon,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  inlineCreateBtnText: {
+    fontSize: 13,
+    fontFamily: fonts.bold,
+    color: 'white',
+  },
+  inlineCreateLabel: {
+    fontSize: 12,
+    fontFamily: fonts.bold,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  blockPickerBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E8E0D8',
+    backgroundColor: '#FAFAF8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  blockPickerBtnActive: {
+    borderColor: colors.maroon,
+    backgroundColor: `${colors.maroon}12`,
+  },
+  blockPickerBtnText: {
+    fontSize: 14,
+    fontFamily: fonts.bold,
+    color: colors.textTertiary,
+  },
+  blockPickerBtnTextActive: {
+    color: colors.maroon,
+  },
+});
+

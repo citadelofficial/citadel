@@ -1,8 +1,7 @@
-import React, { useRef, useEffect, useCallback } from 'react';
-import { View, TouchableOpacity, StyleSheet, Animated } from 'react-native';
+import React from 'react';
+import { View, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BlurView } from 'expo-blur';
 import { colors } from '../theme';
 
 type TabId = 'home' | 'scan' | 'people' | 'files';
@@ -24,119 +23,8 @@ const items: { id: TabId; icon: keyof typeof Ionicons.glyphMap; label: string }[
   { id: 'files', icon: 'folder', label: 'Files' },
 ];
 
-function BouncyTab({
-  item,
-  isActive,
-  onPress,
-  onLayout,
-  isHighlighted,
-}: {
-  item: (typeof items)[number];
-  isActive: boolean;
-  onPress?: () => void;
-  onLayout?: (rect: { x: number; y: number; width: number; height: number }) => void;
-  isHighlighted?: boolean;
-}) {
-  const scale = useRef(new Animated.Value(1)).current;
-  const wiggle = useRef(new Animated.Value(0)).current;
-  const glowOpacity = useRef(new Animated.Value(isActive ? 1 : 0)).current;
-
-  useEffect(() => {
-    if (isActive) {
-      Animated.sequence([
-        Animated.timing(wiggle, { toValue: 1, duration: 100, useNativeDriver: true }),
-        Animated.timing(wiggle, { toValue: -1, duration: 100, useNativeDriver: true }),
-        Animated.timing(wiggle, { toValue: 0.5, duration: 80, useNativeDriver: true }),
-        Animated.timing(wiggle, { toValue: 0, duration: 80, useNativeDriver: true }),
-      ]).start();
-      Animated.timing(glowOpacity, { toValue: 1, duration: 250, useNativeDriver: true }).start();
-    } else {
-      Animated.timing(glowOpacity, { toValue: 0, duration: 200, useNativeDriver: true }).start();
-    }
-  }, [isActive, wiggle, glowOpacity]);
-
-  const handlePressIn = useCallback(() => {
-    Animated.spring(scale, {
-      toValue: 0.82,
-      useNativeDriver: true,
-      speed: 50,
-      bounciness: 4,
-    }).start();
-  }, [scale]);
-
-  const handlePressOut = useCallback(() => {
-    Animated.spring(scale, {
-      toValue: 1,
-      useNativeDriver: true,
-      speed: 14,
-      bounciness: 16,
-    }).start();
-  }, [scale]);
-
-  const rotate = wiggle.interpolate({
-    inputRange: [-1, 0, 1],
-    outputRange: ['-12deg', '0deg', '12deg'],
-  });
-
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      onPressIn={handlePressIn}
-      onPressOut={handlePressOut}
-      activeOpacity={1}
-      onLayout={(e) => {
-        if (onLayout) {
-          e.target.measureInWindow((x: number, y: number, width: number, height: number) => {
-            onLayout({ x, y, width, height });
-          });
-        }
-      }}
-    >
-      <Animated.View
-        style={[
-          styles.item,
-          isHighlighted && styles.highlightedItem,
-          { transform: [{ scale }, { rotate }] },
-        ]}
-      >
-        {isHighlighted && <View style={styles.highlightHalo} />}
-        {/* Active glow pill behind icon */}
-        <Animated.View
-          style={[
-            styles.activePill,
-            { opacity: glowOpacity },
-          ]}
-        />
-        <Ionicons
-          name={item.icon}
-          size={22}
-          color={isActive ? colors.maroon : 'rgba(255,255,255,0.7)'}
-        />
-      </Animated.View>
-    </TouchableOpacity>
-  );
-}
-
 export function BottomNav({ active, onHome, onScan, onFriends, onFiles, onTabLayout, highlightedTab }: Props) {
   const insets = useSafeAreaInsets();
-  const barScale = useRef(new Animated.Value(0.9)).current;
-  const barOpacity = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.spring(barScale, {
-        toValue: 1,
-        useNativeDriver: true,
-        speed: 12,
-        bounciness: 14,
-      }),
-      Animated.timing(barOpacity, {
-        toValue: 1,
-        duration: 300,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [barScale, barOpacity]);
 
   const actions: Record<TabId, (() => void) | undefined> = {
     home: onHome,
@@ -147,34 +35,40 @@ export function BottomNav({ active, onHome, onScan, onFriends, onFiles, onTabLay
 
   return (
     <View style={[styles.container, { paddingBottom: Math.max(insets.bottom, 12) + 12 }]}>
-      <Animated.View
-        style={[
-          styles.barOuter,
-          {
-            opacity: barOpacity,
-            transform: [{ scale: barScale }],
-          },
-        ]}
-      >
-        {/* Glass layers */}
-        <BlurView intensity={40} tint="dark" style={styles.blurLayer} />
-        <View style={styles.glassOverlay} />
-        <View style={styles.innerGlow} />
-
+      <View style={styles.barOuter}>
         {/* Tabs */}
         <View style={styles.tabRow}>
           {items.map((item) => (
-            <BouncyTab
+            <TouchableOpacity
               key={item.id}
-              item={item}
-              isActive={active === item.id}
-              isHighlighted={highlightedTab === item.id}
               onPress={actions[item.id]}
-              onLayout={onTabLayout ? (rect) => onTabLayout(item.id, rect) : undefined}
-            />
+              activeOpacity={0.7}
+              onLayout={(e) => {
+                if (onTabLayout) {
+                  e.target.measureInWindow((x: number, y: number, width: number, height: number) => {
+                    onTabLayout(item.id, { x, y, width, height });
+                  });
+                }
+              }}
+            >
+              <View
+                style={[
+                  styles.item,
+                  highlightedTab === item.id && styles.highlightedItem,
+                ]}
+              >
+                {highlightedTab === item.id && <View style={styles.highlightHalo} />}
+                {active === item.id && <View style={styles.activePill} />}
+                <Ionicons
+                  name={item.icon}
+                  size={22}
+                  color={active === item.id ? colors.maroon : 'rgba(255,255,255,0.7)'}
+                />
+              </View>
+            </TouchableOpacity>
           ))}
         </View>
-      </Animated.View>
+      </View>
     </View>
   );
 }
@@ -190,25 +84,12 @@ const styles = StyleSheet.create({
   barOuter: {
     borderRadius: 32,
     overflow: 'hidden',
-    // Outer shadow — soft maroon glow
+    backgroundColor: colors.maroon,
     shadowColor: '#000',
     shadowOpacity: 0.35,
     shadowRadius: 20,
     shadowOffset: { width: 0, height: 10 },
     elevation: 12,
-  },
-  blurLayer: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  glassOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(61, 12, 17, 0.55)',
-  },
-  innerGlow: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: 32,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 255, 255, 0.18)',
   },
   tabRow: {
     flexDirection: 'row',
@@ -238,9 +119,5 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     borderRadius: 26,
     backgroundColor: 'rgba(255, 255, 255, 0.92)',
-    shadowColor: '#fff',
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 0 },
   },
 });

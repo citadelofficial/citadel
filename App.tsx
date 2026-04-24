@@ -843,6 +843,7 @@ export default function App() {
   // HANDLERS
   // ═══════════════════════════════════════════
   const navigate = (screen: Screen) => setCurrentScreen(screen);
+  const [pendingScanNote, setPendingScanNote] = useState<{ title: string; content: string; thumbnail: string } | null>(null);
   const goToTutorialStep = useCallback((step: number) => {
     const clampedStep = Math.max(1, Math.min(step, TUTORIAL_TOTAL_STEPS));
     const tutorialClassId = classes.some((cls) => cls.id === selectedClassId)
@@ -1042,7 +1043,13 @@ export default function App() {
       )
     );
     setSelectedClassId(classId);
-    navigate('files');
+    // Set pending note for unit assignment
+    setPendingScanNote({
+      title: file.previewTitle || file.name,
+      content: file.previewText || '',
+      thumbnail: file.thumbnail || '',
+    });
+    navigate('course-detail');
   };
 
   const selectedClass = classes.find((c) => c.id === selectedClassId) || classes[0];
@@ -1091,6 +1098,7 @@ export default function App() {
             classes={classes}
             onAddClass={handleAddClass}
             onRemoveClass={handleRemoveClass}
+            onUpdateClass={handleUpdateClass}
             shortcuts={shortcuts}
             onUpdateShortcuts={handleUpdateShortcuts}
             onSchoolOpen={(schoolName: string) => openSchool(schoolName, 'home')}
@@ -1185,6 +1193,8 @@ export default function App() {
             onUpdateProgress={handleUpdateProgress}
             userName={userData.name}
             onSendClassInvite={(toUserId: string, cls: ClassData[]) => handleSendClassInvite(toUserId, cls)}
+            pendingScanNote={pendingScanNote}
+            onClearPendingScanNote={() => setPendingScanNote(null)}
             tutorialStep={tutorialStep}
             onTutorialNext={advanceTutorial}
             onTutorialBack={retreatTutorial}
@@ -1213,6 +1223,7 @@ export default function App() {
             onFriends={openFriends}
             classes={classes}
             onSaveScan={handleSaveScan}
+            onAddClass={handleAddClass}
             tutorialStep={tutorialStep}
             onTutorialNext={advanceTutorial}
             onTutorialBack={retreatTutorial}
