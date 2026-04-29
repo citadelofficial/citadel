@@ -41,6 +41,9 @@ type FriendRequest = {
   from_school?: string;
   status: 'pending' | 'accepted' | 'declined';
   created_at: string;
+  direction: 'incoming' | 'outgoing';
+  to_username?: string;
+  to_display_name?: string;
 };
 
 const TUTORIAL_TOTAL_STEPS = 7;
@@ -80,16 +83,36 @@ export default function App() {
   // AUTH
   // ═══════════════════════════════════════════
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
+    supabase.auth.getSession().then(({ data: { session: currentSession }, error }) => {
+      if (error) {
+        // Invalid or expired refresh token — sign out and start fresh
+        console.warn('Auth session error, signing out:', error.message);
+        supabase.auth.signOut().catch(() => {});
+        setSession(null);
+        setAuthInitialized(true);
+        return;
+      }
       setSession(currentSession);
       if (currentSession?.user) {
         fetchProfile(currentSession.user.id);
       } else {
         setAuthInitialized(true);
       }
+    }).catch((err) => {
+      console.warn('Auth getSession exception:', err);
+      setSession(null);
+      setAuthInitialized(true);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, currentSession) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, currentSession) => {
+      if (event === 'TOKEN_REFRESHED' && !currentSession) {
+        // Refresh token was invalid — sign out cleanly
+        console.warn('Token refresh failed, signing out');
+        supabase.auth.signOut().catch(() => {});
+        setSession(null);
+        setCurrentScreen('onboarding');
+        return;
+      }
       setSession(currentSession);
       if (currentSession?.user) {
         fetchProfile(currentSession.user.id);
@@ -399,11 +422,12 @@ export default function App() {
           description: cls.description,
           school: cls.school || '',
           units: cls.units,
-          files: [],
-          documents: 0,
+          files: cls.files,
+          documents: cls.documents,
           classmates: cls.classmates,
           classmateNames: cls.classmateNames,
           image: cls.image,
+          teacher: cls.teacher || '',
         };
         return acc;
       }, {});
@@ -572,28 +596,36 @@ export default function App() {
   // ═══════════════════════════════════════════
   const loadFriendRequests = async (userId: string) => {
     try {
-      const { data } = await supabase
+      // Fetch INCOMING requests (sent to me)
+      const { data: incomingData } = await supabase
         .from('friend_requests')
         .select('*')
         .eq('to_user_id', userId)
         .eq('status', 'pending');
 
-      if (data && data.length > 0) {
-        // Fetch sender profiles
-        const fromIds = data.map((r: any) => r.from_user_id);
+      // Fetch OUTGOING requests (sent by me)
+      const { data: outgoingData } = await supabase
+        .from('friend_requests')
+        .select('*')
+        .eq('from_user_id', userId)
+        .eq('status', 'pending');
+
+      const allRequests: FriendRequest[] = [];
+
+      // Process incoming
+      if (incomingData && incomingData.length > 0) {
+        const fromIds = incomingData.map((r: any) => r.from_user_id);
         const { data: profiles } = await supabase
           .from('profiles')
           .select('id, username, display_name, school')
           .in('id', fromIds);
-
         const profileMap = (profiles || []).reduce((acc: any, p: any) => {
           acc[p.id] = p;
           return acc;
         }, {});
-
-        const requests: FriendRequest[] = data.map((r: any) => {
+        for (const r of incomingData as any[]) {
           const profile = profileMap[r.from_user_id] || {};
-          return {
+          allRequests.push({
             id: r.id,
             from_user_id: r.from_user_id,
             to_user_id: r.to_user_id,
@@ -602,12 +634,41 @@ export default function App() {
             from_school: profile.school || '',
             status: r.status,
             created_at: r.created_at,
-          };
-        });
-        setFriendRequests(requests);
-      } else {
-        setFriendRequests([]);
+            direction: 'incoming',
+          });
+        }
       }
+
+      // Process outgoing
+      if (outgoingData && outgoingData.length > 0) {
+        const toIds = outgoingData.map((r: any) => r.to_user_id);
+        const { data: profiles } = await supabase
+          .from('profiles')
+          .select('id, username, display_name, school')
+          .in('id', toIds);
+        const profileMap = (profiles || []).reduce((acc: any, p: any) => {
+          acc[p.id] = p;
+          return acc;
+        }, {});
+        for (const r of outgoingData as any[]) {
+          const profile = profileMap[r.to_user_id] || {};
+          allRequests.push({
+            id: r.id,
+            from_user_id: r.from_user_id,
+            to_user_id: r.to_user_id,
+            from_username: profile.username || 'unknown',
+            from_display_name: profile.display_name || profile.username || 'User',
+            from_school: profile.school || '',
+            to_username: profile.username || 'unknown',
+            to_display_name: profile.display_name || profile.username || 'User',
+            status: r.status,
+            created_at: r.created_at,
+            direction: 'outgoing',
+          });
+        }
+      }
+
+      setFriendRequests(allRequests);
     } catch (err) {
       console.error('Error loading friend requests:', err);
     }
@@ -823,6 +884,15 @@ export default function App() {
     }
   };
 
+  const handleCancelRequest = async (requestId: string) => {
+    try {
+      await supabase.from('friend_requests').delete().eq('id', requestId);
+      setFriendRequests((prev) => prev.filter((r) => r.id !== requestId));
+    } catch (err) {
+      console.error('Error cancelling request:', err);
+    }
+  };
+
   // ═══════════════════════════════════════════
   // SPLASH TIMER
   // ═══════════════════════════════════════════
@@ -1018,8 +1088,11 @@ export default function App() {
     navigate('course-detail');
   };
 
-  const openFiles = (classId?: string) => {
+  const [initialFileId, setInitialFileId] = useState<number | null>(null);
+
+  const openFiles = (classId?: string, fileId?: number) => {
     if (classId) setSelectedClassId(classId);
+    setInitialFileId(fileId ?? null);
     if (tutorialStep === 3) advanceTutorial();
     navigate('files');
   };
@@ -1118,6 +1191,7 @@ export default function App() {
             onBack={() => navigate('home')}
             onLogout={handleLogout}
             classes={classes}
+            friends={friends}
             onPersonOpen={(person) => openPersonProfile(person, 'profile')}
             onInfoPage={openInfoPage}
             onRateApp={handleRateApp}
@@ -1205,10 +1279,11 @@ export default function App() {
           <FilesScreen
             classes={classes}
             initialClassId={selectedClassId}
-            onBack={() => navigate('course-detail')}
-            onHome={() => navigate('home')}
-            onScan={openScan}
-            onFriends={openFriends}
+            initialFileId={initialFileId}
+            onBack={() => { setInitialFileId(null); navigate('course-detail'); }}
+            onHome={() => { setInitialFileId(null); navigate('home'); }}
+            onScan={() => { setInitialFileId(null); openScan(); }}
+            onFriends={() => { setInitialFileId(null); openFriends(); }}
             onUpdateClass={handleUpdateClass}
             tutorialStep={tutorialStep}
             onTutorialNext={advanceTutorial}
@@ -1224,6 +1299,7 @@ export default function App() {
             classes={classes}
             onSaveScan={handleSaveScan}
             onAddClass={handleAddClass}
+            onOpenFile={(classId, fileId) => openFiles(classId, fileId)}
             tutorialStep={tutorialStep}
             onTutorialNext={advanceTutorial}
             onTutorialBack={retreatTutorial}
@@ -1245,6 +1321,7 @@ export default function App() {
             onSendRequest={handleSendRequest}
             onAcceptRequest={handleAcceptRequest}
             onDeclineRequest={handleDeclineRequest}
+            onCancelRequest={handleCancelRequest}
             classes={classes}
             userSchool={userData.primarySchool}
             userSchools={userData.schools}

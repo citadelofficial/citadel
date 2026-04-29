@@ -100,3 +100,52 @@ export async function getSignedUrl(
 
     return data.signedUrl;
 }
+
+/**
+ * Upload a scanned note image to Supabase Storage (public bucket)
+ * so that other users in the same class can view it.
+ * Returns the public URL on success, or null on failure.
+ */
+export async function uploadScanImage(
+    localUri: string,
+    fileName?: string
+): Promise<string | null> {
+    try {
+        // Get the authenticated user's ID — required by RLS policies
+        const { data: userData } = await supabase.auth.getUser();
+        const userId = userData?.user?.id;
+        if (!userId) {
+            console.error('uploadScanImage: no authenticated user');
+            return null;
+        }
+
+        const fileExt = localUri.split('.').pop()?.toLowerCase() || 'jpg';
+        const name = fileName || `scan_${Date.now()}`;
+        const filePath = `${userId}/scans/${name}.${fileExt}`;
+
+        const base64 = await FileSystem.readAsStringAsync(localUri, {
+            encoding: 'base64',
+        });
+
+        const contentType = fileExt === 'png' ? 'image/png' : 'image/jpeg';
+
+        // Use 'avatars' bucket — it already has working RLS policies
+        const { error } = await supabase.storage
+            .from('avatars')
+            .upload(filePath, decode(base64), {
+                contentType,
+                upsert: true,
+            });
+
+        if (error) {
+            console.error('Scan image upload error:', error.message);
+            return null;
+        }
+
+        const { data } = supabase.storage.from('avatars').getPublicUrl(filePath);
+        return `${data.publicUrl}?t=${Date.now()}`;
+    } catch (err) {
+        console.error('Scan image upload exception:', err);
+        return null;
+    }
+}

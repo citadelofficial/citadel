@@ -25,7 +25,8 @@ import { AnimatedPressable } from '../components/AnimatedPressable';
 import { InlineTutorialCard } from '../components/InlineTutorialCard';
 import { colors, fonts } from '../theme';
 import type { ClassData, FileData } from '../types';
-import { extractTextFromImage } from '../lib/gemini';
+import { extractTextFromImage, extractTextFromMultipleImages } from '../lib/gemini';
+import * as FileSystem from 'expo-file-system/legacy';
 
 interface Props {
   onHome: () => void;
@@ -34,6 +35,7 @@ interface Props {
   classes: ClassData[];
   onSaveScan: (classId: string, file: FileData) => void;
   onAddClass?: (newClass: ClassData) => void;
+  onOpenFile?: (classId: string, fileId: number) => void;
   tutorialStep?: number;
   onTutorialNext?: () => void;
   onTutorialBack?: () => void;
@@ -51,6 +53,12 @@ type PendingScan = {
   base64?: string;
   ocrTitle?: string;
   ocrText?: string;
+};
+
+type ScannedPage = {
+  uri: string;
+  base64: string;
+  mimeType: string;
 };
 
 function formatDate(date = new Date()) {
@@ -96,6 +104,7 @@ export function ScanScreen({
   classes,
   onSaveScan,
   onAddClass,
+  onOpenFile,
   tutorialStep = 0,
   onTutorialNext = () => { },
   onTutorialBack = () => { },
@@ -105,6 +114,7 @@ export function ScanScreen({
   const [scanMode, setScanMode] = useState<ScanMode>('notes');
   const [saving, setSaving] = useState(false);
   const [pending, setPending] = useState<PendingScan | null>(null);
+  const [scannedPages, setScannedPages] = useState<ScannedPage[]>([]);
   const [destinationClassId, setDestinationClassId] = useState(classes[0]?.id || '');
   const [showCreateClass, setShowCreateClass] = useState(false);
   const [newClassName, setNewClassName] = useState('');
@@ -112,8 +122,8 @@ export function ScanScreen({
   const [newClassBlock, setNewClassBlock] = useState('');
   const tutorialGuide = tutorialStep === 5 ? {
     step: 5,
-    title: 'Smart Scan builds your materials',
-    body: 'Use Notes, Document, and Whiteboard modes to capture clean copies and save them straight into a class. Tap People below when you are ready to collaborate.',
+    title: 'Scan your notes',
+    body: 'Use Smart Scan to capture notes, documents, and whiteboards — they\'re saved straight into your class. Tap People below when you\'re ready to connect.',
   } : null;
 
   const recentScans = useMemo(
@@ -122,6 +132,8 @@ export function ScanScreen({
         .flatMap((cls) =>
           cls.files.map((file) => ({
             id: `${cls.id}-${file.id}`,
+            classId: cls.id,
+            fileId: file.id,
             title: file.previewTitle || file.name,
             date: file.date,
             pages: file.pages,
@@ -134,17 +146,105 @@ export function ScanScreen({
     [classes]
   );
 
-  const runOcrOnImage = async (base64: string) => {
+  const runOcrOnImage = async (base64: string, mimeType: string = 'image/jpeg') => {
     setOcrProcessing(true);
     try {
-      const result = await extractTextFromImage(base64, 'image/jpeg');
+      const result = await extractTextFromImage(base64, mimeType);
       if (result.success) {
         setPending(prev => prev ? { ...prev, ocrTitle: result.title, ocrText: result.text } : null);
+      } else {
+        Alert.alert('OCR Notice', result.text || 'Could not extract text from this image.');
       }
     } catch (e) {
       console.log('OCR error:', e);
+      Alert.alert('OCR Error', 'Failed to analyze the image. Please try again or use a clearer photo.');
     }
     setOcrProcessing(false);
+  };
+
+  const runOcrOnMultiplePages = async (pages: ScannedPage[]) => {
+    setOcrProcessing(true);
+    try {
+      const result = await extractTextFromMultipleImages(
+        pages.map(p => ({ base64: p.base64, mimeType: p.mimeType }))
+      );
+      if (result.success) {
+        setPending(prev => prev ? { ...prev, ocrTitle: result.title, ocrText: result.text } : null);
+      } else {
+        Alert.alert('OCR Notice', result.text || 'Could not extract text from these images.');
+      }
+    } catch (e) {
+      console.log('Multi-page OCR error:', e);
+      Alert.alert('OCR Error', 'Failed to analyze the pages. Please try again.');
+    }
+    setOcrProcessing(false);
+  };
+
+  const addPageFromCamera = async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) return;
+    const result = await ImagePicker.launchCameraAsync({
+      quality: 0.7,
+      mediaTypes: ['images'],
+      base64: true,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      let base64Data = asset.base64 || undefined;
+      if (!base64Data && asset.uri) {
+        try {
+          base64Data = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+        } catch { /* fallback */ }
+      }
+      if (base64Data) {
+        const mimeType = asset.uri?.toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg';
+        setScannedPages(prev => [...prev, { uri: asset.uri, base64: base64Data!, mimeType }]);
+      }
+    }
+  };
+
+  const addPageFromLibrary = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      quality: 0.7,
+      mediaTypes: ['images'],
+      base64: true,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      let base64Data = asset.base64 || undefined;
+      if (!base64Data && asset.uri) {
+        try {
+          base64Data = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+        } catch { /* fallback */ }
+      }
+      if (base64Data) {
+        const mimeType = asset.uri?.toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg';
+        setScannedPages(prev => [...prev, { uri: asset.uri, base64: base64Data!, mimeType }]);
+      }
+    }
+  };
+
+  const removePage = (index: number) => {
+    setScannedPages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const finalizeMultiPageScan = () => {
+    if (scannedPages.length === 0) return;
+    const newPending: PendingScan = {
+      uri: scannedPages[0].uri,
+      name: `${MODE_PREFIX[scanMode]}_${Date.now()}.jpg`,
+      source: 'camera',
+      pages: scannedPages.length,
+      base64: scannedPages[0].base64,
+    };
+    setPending(newPending);
+    if (scannedPages.length === 1) {
+      runOcrOnImage(scannedPages[0].base64, scannedPages[0].mimeType);
+    } else {
+      runOcrOnMultiplePages(scannedPages);
+    }
   };
 
   const handleCameraCapture = async () => {
@@ -152,23 +252,26 @@ export function ScanScreen({
     if (!permission.granted) return;
 
     const result = await ImagePicker.launchCameraAsync({
-      quality: 0.9,
+      quality: 0.7,
       mediaTypes: ['images'],
       base64: true,
     });
 
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
-      const newPending: PendingScan = {
-        uri: asset.uri,
-        name: `${MODE_PREFIX[scanMode]}_${Date.now()}.jpg`,
-        source: 'camera',
-        pages: 1,
-        sizeBytes: asset.fileSize,
-        base64: asset.base64 || undefined,
-      };
-      setPending(newPending);
-      if (asset.base64) runOcrOnImage(asset.base64);
+      let base64Data = asset.base64 || undefined;
+      if (!base64Data && asset.uri) {
+        try {
+          base64Data = await FileSystem.readAsStringAsync(asset.uri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+        } catch { /* fallback */ }
+      }
+      if (base64Data) {
+        const mimeType = asset.uri?.toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg';
+        // Add as first page of multi-page scan
+        setScannedPages([{ uri: asset.uri, base64: base64Data, mimeType }]);
+      }
     }
   };
 
@@ -177,23 +280,28 @@ export function ScanScreen({
     if (!permission.granted) return;
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      quality: 0.9,
+      quality: 0.7,
       mediaTypes: ['images'],
       base64: true,
     });
 
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
-      const newPending: PendingScan = {
-        uri: asset.uri,
-        name: asset.fileName || `Library_${Date.now()}.jpg`,
-        source: 'library',
-        pages: 1,
-        sizeBytes: asset.fileSize,
-        base64: asset.base64 || undefined,
-      };
-      setPending(newPending);
-      if (asset.base64) runOcrOnImage(asset.base64);
+      let base64Data = asset.base64 || undefined;
+      if (!base64Data && asset.uri) {
+        try {
+          base64Data = await FileSystem.readAsStringAsync(asset.uri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+        } catch (e) {
+          console.log('Failed to read base64 from URI:', e);
+        }
+      }
+      if (base64Data) {
+        const mimeType = asset.uri?.toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg';
+        // Add as first page of multi-page scan
+        setScannedPages([{ uri: asset.uri, base64: base64Data, mimeType }]);
+      }
     }
   };
 
@@ -338,6 +446,7 @@ export function ScanScreen({
     onSaveScan(destinationClassId, file);
     setSaving(false);
     setPending(null);
+    setScannedPages([]);
   };
 
   const modeIcon = (mode: ScanMode): keyof typeof Ionicons.glyphMap => {
@@ -388,7 +497,7 @@ export function ScanScreen({
           ))}
         </View>
 
-        {!pending ? (
+        {!pending && scannedPages.length === 0 ? (
           <View style={styles.capturePanel}>
             <Text style={styles.captureTitle}>{MODE_CONFIG[scanMode].title}</Text>
             <Text style={styles.captureSub}>{MODE_CONFIG[scanMode].subtitle}</Text>
@@ -433,7 +542,86 @@ export function ScanScreen({
               )}
             </View>
           </View>
-        ) : (
+        ) : !pending && scannedPages.length > 0 ? (
+          /* ── Multi-Page Staging ── */
+          <View style={styles.capturePanel}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <Text style={styles.captureTitle}>
+                {scannedPages.length} Page{scannedPages.length > 1 ? 's' : ''} Scanned
+              </Text>
+              <TouchableOpacity onPress={() => setScannedPages([])} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Text style={{ fontSize: 13, fontFamily: fonts.medium, color: colors.textTertiary }}>Clear All</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.captureSub}>Add more pages or tap "Analyze" when ready. AI will combine all pages into one note.</Text>
+
+            {/* Page thumbnails */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingVertical: 12 }}>
+              {scannedPages.map((page, idx) => (
+                <View key={idx} style={{ position: 'relative' }}>
+                  <Image source={{ uri: page.uri }} style={{ width: 80, height: 110, borderRadius: 10, backgroundColor: '#F3F4F6' }} />
+                  <TouchableOpacity
+                    onPress={() => removePage(idx)}
+                    style={{
+                      position: 'absolute', top: -6, right: -6,
+                      width: 22, height: 22, borderRadius: 11,
+                      backgroundColor: '#EF4444', alignItems: 'center', justifyContent: 'center',
+                      borderWidth: 2, borderColor: 'white',
+                    }}
+                  >
+                    <Ionicons name="close" size={12} color="white" />
+                  </TouchableOpacity>
+                  <View style={{
+                    position: 'absolute', bottom: 4, left: 4,
+                    backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 6,
+                    paddingHorizontal: 6, paddingVertical: 2,
+                  }}>
+                    <Text style={{ fontSize: 10, fontFamily: fonts.bold, color: 'white' }}>P{idx + 1}</Text>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+
+            {/* Add more pages */}
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
+              <TouchableOpacity
+                style={{
+                  flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  paddingVertical: 12, borderRadius: 12, borderWidth: 1.5, borderColor: '#E5E7EB', borderStyle: 'dashed',
+                }}
+                onPress={addPageFromCamera}
+              >
+                <Ionicons name="camera-outline" size={18} color={colors.maroon} />
+                <Text style={{ fontSize: 13, fontFamily: fonts.medium, color: colors.textPrimary }}>Add Page</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{
+                  flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  paddingVertical: 12, borderRadius: 12, borderWidth: 1.5, borderColor: '#E5E7EB', borderStyle: 'dashed',
+                }}
+                onPress={addPageFromLibrary}
+              >
+                <Ionicons name="images-outline" size={18} color={colors.maroon} />
+                <Text style={{ fontSize: 13, fontFamily: fonts.medium, color: colors.textPrimary }}>From Gallery</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Analyze button */}
+            <TouchableOpacity
+              style={{
+                marginTop: 16, backgroundColor: colors.maroon, borderRadius: 14,
+                paddingVertical: 14, alignItems: 'center', flexDirection: 'row',
+                justifyContent: 'center', gap: 8,
+              }}
+              onPress={finalizeMultiPageScan}
+            >
+              <Ionicons name="sparkles" size={18} color="white" />
+              <Text style={{ fontSize: 15, fontFamily: fonts.bold, color: 'white' }}>
+                Analyze {scannedPages.length} Page{scannedPages.length > 1 ? 's' : ''} as One Note
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : pending ? (
           <View style={styles.pendingPanel}>
             <View style={styles.pendingHeader}>
               <View style={styles.pendingCheckIcon}>
@@ -589,7 +777,7 @@ export function ScanScreen({
               </TouchableOpacity>
             </View>
           </View>
-        )}
+        ) : null}
 
         {/* Recent Scans */}
         <Text style={styles.recentSectionTitle}>Recent Scans</Text>
@@ -604,7 +792,12 @@ export function ScanScreen({
             </View>
           ) : (
             recentScans.map((scan) => (
-              <View key={scan.id} style={styles.recentItem}>
+              <TouchableOpacity
+                key={scan.id}
+                style={styles.recentItem}
+                onPress={() => onOpenFile?.(scan.classId, scan.fileId)}
+                activeOpacity={0.7}
+              >
                 <View style={styles.recentIcon}>
                   <Ionicons name={scan.source === 'document' ? 'document-text' : 'image'} size={16} color={colors.maroon} />
                 </View>
@@ -612,8 +805,11 @@ export function ScanScreen({
                   <Text style={styles.recentName}>{scan.title}</Text>
                   <Text style={styles.recentMeta}>{scan.date} • {scan.pages} pages</Text>
                 </View>
-                <Text style={styles.recentCourse}>{scan.course}</Text>
-              </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Text style={styles.recentCourse}>{scan.course}</Text>
+                  <Ionicons name="chevron-forward" size={14} color={colors.textTertiary} />
+                </View>
+              </TouchableOpacity>
             ))
           )}
         </View>

@@ -10,6 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Modal,
+  Alert,
   Animated,
   LayoutAnimation,
   UIManager,
@@ -35,6 +36,9 @@ interface FriendRequest {
   from_school?: string;
   status: 'pending' | 'accepted' | 'declined';
   created_at: string;
+  direction: 'incoming' | 'outgoing';
+  to_username?: string;
+  to_display_name?: string;
 }
 
 interface Props {
@@ -51,6 +55,7 @@ interface Props {
   onSendRequest: (username: string) => Promise<{ success: boolean; message: string }>;
   onAcceptRequest: (requestId: string) => void;
   onDeclineRequest: (requestId: string) => void;
+  onCancelRequest?: (requestId: string) => void;
   classes: ClassData[];
   userSchool?: string;
   userSchools?: string[];
@@ -83,9 +88,11 @@ interface StudySession {
 
 interface Message {
   id: number;
+  dbId?: string | number;  // Supabase row ID for deletion
   from: 'me' | 'them';
   text: string;
   time: string;
+  createdAt?: string;  // ISO timestamp for fallback delete
 }
 
 function currentTimeLabel() {
@@ -353,7 +360,7 @@ function DiscoverSection({
 export function FriendsScreen({
   onHome, onScan, onFiles, profilePicture, userName, userUsername,
   onPersonOpen, onProfileOpen, friends, friendRequests,
-  onSendRequest, onAcceptRequest, onDeclineRequest, classes,
+  onSendRequest, onAcceptRequest, onDeclineRequest, onCancelRequest, classes,
   userSchool, userSchools, onSchoolOpen,
   classInvites = [], onAcceptClassInvite, onDeclineClassInvite,
   onRefreshFriends,
@@ -459,14 +466,14 @@ export function FriendsScreen({
     tutorialStep === 6
       ? {
         step: 6,
-        title: 'People keeps your network together',
-        body: 'This page holds chats, requests, invites, and school discovery in one place. Tap the highlighted Discover tab to open your school network.',
+        title: 'Meet your people',
+        body: 'Chat with friends, manage requests, and discover classmates — all in one place. Tap the Discover tab to find your school network.',
       }
       : tutorialStep === 7
         ? {
           step: 7,
-          title: 'Grow your school network',
-          body: 'Discover is where you bring more people into your school network. Use the highlighted Invite People to Your School button to share an invite.',
+          title: 'Grow your network',
+          body: 'Almost done! Use the Invite button below to share Citadel with friends at your school. You\'re all set after this!',
         }
         : null;
 
@@ -568,7 +575,8 @@ export function FriendsScreen({
     ]).start();
 
     const msgId = Date.now();
-    const newMsg = { id: msgId, from: 'me' as const, text, time: currentTimeLabel() };
+    const createdAt = new Date().toISOString();
+    const newMsg: Message = { id: msgId, from: 'me' as const, text, time: currentTimeLabel(), createdAt };
     setJustSentMessageId(msgId);
     setMessagesByFriend((prev) => ({
       ...prev,
@@ -584,12 +592,22 @@ export function FriendsScreen({
         const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         if (!uuidRegex.test(activeChatId)) return;
         const sanitizedText = text.slice(0, 5000); // Limit message length
-        await supabase.from('messages').insert({
+        const { data: insertedData } = await supabase.from('messages').insert({
           sender_id: authData.user.id,
           receiver_id: activeChatId,
           text: sanitizedText,
-          created_at: new Date().toISOString(),
-        });
+          created_at: createdAt,
+        }).select('id').single();
+        // Store the Supabase row ID for potential unsend
+        if (insertedData?.id) {
+          setMessagesByFriend((prev) => {
+            const msgs = prev[activeChatId] || [];
+            return {
+              ...prev,
+              [activeChatId]: msgs.map((m) => m.id === msgId ? { ...m, dbId: insertedData.id } : m),
+            };
+          });
+        }
       }
     } catch (e) {
       console.log('Message save error (table may not exist yet):', e);
@@ -624,9 +642,11 @@ export function FriendsScreen({
         if (data && data.length > 0) {
           const loaded = data.map((m: any) => ({
             id: new Date(m.created_at).getTime(),
+            dbId: m.id,
             from: m.sender_id === userId ? 'me' as const : 'them' as const,
             text: m.text,
             time: new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            createdAt: m.created_at,
           }));
           setMessagesByFriend((prev) => ({ ...prev, [activeChatId]: loaded }));
         }
@@ -636,8 +656,64 @@ export function FriendsScreen({
     })();
   }, [activeChatId]);
 
+  const unsendMessage = (friendId: string, message: Message) => {
+    Alert.alert(
+      'Unsend Message',
+      'This message will be removed for both of you.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Unsend',
+          style: 'destructive',
+          onPress: async () => {
+            // Remove from local state immediately
+            setMessagesByFriend((prev) => ({
+              ...prev,
+              [friendId]: (prev[friendId] || []).filter((m) => m.id !== message.id),
+            }));
 
+            // Delete from Supabase
+            try {
+              const { data: authData } = await supabase.auth.getUser();
+              const userId = authData?.user?.id;
+              if (!userId) return;
 
+              if (message.dbId) {
+                // Try delete by row ID
+                const { error } = await supabase
+                  .from('messages')
+                  .delete()
+                  .eq('id', message.dbId);
+                if (error) {
+                  console.log('Delete by dbId failed, trying fallback:', error.message);
+                } else {
+                  return; // success
+                }
+              }
+
+              // Fallback: delete by matching sender + receiver + text + time
+              let fallbackQuery = supabase
+                .from('messages')
+                .delete()
+                .eq('sender_id', userId)
+                .eq('receiver_id', friendId)
+                .eq('text', message.text);
+              if (message.createdAt) {
+                fallbackQuery = fallbackQuery.eq('created_at', message.createdAt);
+              }
+              const { error: fallbackError } = await fallbackQuery;
+
+              if (fallbackError) {
+                console.log('Unsend fallback error:', fallbackError.message);
+              }
+            } catch (e) {
+              console.log('Unsend error:', e);
+            }
+          },
+        },
+      ]
+    );
+  };
   const handleSendFriendRequest = async () => {
     const un = friendSearchUsername.trim();
     if (!un) return;
@@ -666,6 +742,12 @@ export function FriendsScreen({
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     onDeclineRequest(reqId);
     showFeedback(`Declined ${name}.`, '#991b1b');
+  };
+
+  const handleCancel = (reqId: string, name: string) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    onCancelRequest?.(reqId);
+    showFeedback(`Cancelled request to ${name}.`, '#6B7280');
   };
 
 
@@ -746,19 +828,23 @@ export function FriendsScreen({
             const showTime = idx === 0 || messages[idx - 1]?.from !== message.from;
 
             const bubble = (
-              <View style={{
-                maxWidth: '78%',
-                backgroundColor: isMe ? colors.maroon : 'white',
-                borderRadius: 20,
-                borderBottomRightRadius: isMe ? 6 : 20,
-                borderBottomLeftRadius: isMe ? 20 : 6,
-                paddingHorizontal: 16, paddingVertical: 11,
-                borderWidth: isMe ? 0 : 1.5, borderColor: '#F0E0D0',
-                shadowColor: isMe ? colors.maroon : '#000',
-                shadowOpacity: isMe ? 0.15 : 0.04,
-                shadowRadius: 8, shadowOffset: { width: 0, height: 3 },
-                elevation: isMe ? 3 : 1,
-              }}>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onLongPress={isMe ? () => unsendMessage(activeChatFriend.id, message) : undefined}
+                delayLongPress={400}
+                style={{
+                  maxWidth: '78%',
+                  backgroundColor: isMe ? colors.maroon : 'white',
+                  borderRadius: 20,
+                  borderBottomRightRadius: isMe ? 6 : 20,
+                  borderBottomLeftRadius: isMe ? 20 : 6,
+                  paddingHorizontal: 16, paddingVertical: 11,
+                  borderWidth: isMe ? 0 : 1.5, borderColor: '#F0E0D0',
+                  shadowColor: isMe ? colors.maroon : '#000',
+                  shadowOpacity: isMe ? 0.15 : 0.04,
+                  shadowRadius: 8, shadowOffset: { width: 0, height: 3 },
+                  elevation: isMe ? 3 : 1,
+                }}>
                 <Text style={{
                   fontSize: 15, fontFamily: fonts.regular, lineHeight: 21,
                   color: isMe ? 'white' : colors.textPrimary,
@@ -768,7 +854,7 @@ export function FriendsScreen({
                   color: isMe ? 'rgba(255,255,255,0.6)' : colors.textTertiary,
                   alignSelf: isMe ? 'flex-end' : 'flex-start',
                 }}>{message.time}</Text>
-              </View>
+              </TouchableOpacity>
             );
 
             return (
@@ -828,6 +914,8 @@ export function FriendsScreen({
 
   // ==================== MAIN SCREEN ====================
   const pendingRequests = friendRequests.filter((r) => r.status === 'pending');
+  const incomingRequests = pendingRequests.filter((r) => r.direction === 'incoming');
+  const outgoingRequests = pendingRequests.filter((r) => r.direction === 'outgoing');
 
   return (
     <View style={styles.container}>
@@ -1006,31 +1094,71 @@ export function FriendsScreen({
               </View>
             ) : (
               <>
-                <Text style={styles.sectionLabel}>Incoming Requests</Text>
-                {pendingRequests.map((request, index) => (
-                  <Animated.View
-                    key={request.id}
-                    style={[styles.requestCardWrap, {
-                      opacity: requestReveal,
-                      transform: [{ translateY: requestReveal.interpolate({ inputRange: [0, 1], outputRange: [12 + index * 6, 0] }) }],
-                    }]}
-                  >
-                    <View style={styles.requestCard}>
-                      <Text style={styles.requestName}>{request.from_display_name}</Text>
-                      <Text style={styles.requestMeta}>@{request.from_username}{request.from_school ? ` • ${request.from_school}` : ''}</Text>
-                      <View style={styles.requestActions}>
-                        <AnimatedPressable style={styles.requestDecline} onPress={() => handleDecline(request.id, request.from_display_name)} scaleDown={0.92}>
-                          <Ionicons name="close" size={14} color={colors.textSecondary} />
-                          <Text style={styles.requestDeclineText}>Decline</Text>
-                        </AnimatedPressable>
-                        <AnimatedPressable style={styles.requestAccept} onPress={() => handleAccept(request.id, request.from_display_name)} scaleDown={0.92}>
-                          <Ionicons name="checkmark" size={14} color="white" />
-                          <Text style={styles.requestAcceptText}>Accept</Text>
-                        </AnimatedPressable>
-                      </View>
-                    </View>
-                  </Animated.View>
-                ))}
+                {/* Incoming Requests */}
+                {incomingRequests.length > 0 && (
+                  <>
+                    <Text style={styles.sectionLabel}>Incoming Requests</Text>
+                    {incomingRequests.map((request, index) => (
+                      <Animated.View
+                        key={request.id}
+                        style={[styles.requestCardWrap, {
+                          opacity: requestReveal,
+                          transform: [{ translateY: requestReveal.interpolate({ inputRange: [0, 1], outputRange: [12 + index * 6, 0] }) }],
+                        }]}
+                      >
+                        <View style={styles.requestCard}>
+                          <Text style={styles.requestName}>{request.from_display_name}</Text>
+                          <Text style={styles.requestMeta}>@{request.from_username}{request.from_school ? ` • ${request.from_school}` : ''}</Text>
+                          <View style={styles.requestActions}>
+                            <AnimatedPressable style={styles.requestDecline} onPress={() => handleDecline(request.id, request.from_display_name)} scaleDown={0.92}>
+                              <Ionicons name="close" size={14} color={colors.textSecondary} />
+                              <Text style={styles.requestDeclineText}>Decline</Text>
+                            </AnimatedPressable>
+                            <AnimatedPressable style={styles.requestAccept} onPress={() => handleAccept(request.id, request.from_display_name)} scaleDown={0.92}>
+                              <Ionicons name="checkmark" size={14} color="white" />
+                              <Text style={styles.requestAcceptText}>Accept</Text>
+                            </AnimatedPressable>
+                          </View>
+                        </View>
+                      </Animated.View>
+                    ))}
+                  </>
+                )}
+
+                {/* Sent Requests */}
+                {outgoingRequests.length > 0 && (
+                  <>
+                    <Text style={[styles.sectionLabel, incomingRequests.length > 0 && { marginTop: 20 }]}>Sent Requests</Text>
+                    {outgoingRequests.map((request, index) => (
+                      <Animated.View
+                        key={request.id}
+                        style={[styles.requestCardWrap, {
+                          opacity: requestReveal,
+                          transform: [{ translateY: requestReveal.interpolate({ inputRange: [0, 1], outputRange: [12 + index * 6, 0] }) }],
+                        }]}
+                      >
+                        <View style={[styles.requestCard, { borderColor: '#E5E7EB' }]}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <Ionicons name="arrow-up-circle" size={16} color={colors.textSecondary} />
+                            <Text style={styles.requestName}>{request.to_display_name || request.from_display_name}</Text>
+                          </View>
+                          <Text style={styles.requestMeta}>@{request.to_username || request.from_username}{request.from_school ? ` • ${request.from_school}` : ''}</Text>
+                          <Text style={{ fontSize: 11, fontFamily: fonts.regular, color: colors.textTertiary, marginTop: 2 }}>Waiting for response…</Text>
+                          <View style={styles.requestActions}>
+                            <AnimatedPressable
+                              style={[styles.requestDecline, { borderColor: '#E5E7EB' }]}
+                              onPress={() => handleCancel(request.id, request.to_display_name || request.from_display_name)}
+                              scaleDown={0.92}
+                            >
+                              <Ionicons name="close" size={14} color={colors.textSecondary} />
+                              <Text style={styles.requestDeclineText}>Cancel</Text>
+                            </AnimatedPressable>
+                          </View>
+                        </View>
+                      </Animated.View>
+                    ))}
+                  </>
+                )}
               </>
             )}
           </View>

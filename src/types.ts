@@ -48,16 +48,28 @@ export interface QuizQuestion {
   options: [string, string, string, string];
   correctIndex: number; // 0-3
   selectedIndex?: number; // user's answer
+  hint?: string; // AI-generated hint
+}
+
+export interface QuizAttempt {
+  userId: string;
+  userName: string;
+  score: number;           // percentage 0-100
+  correct: number;
+  total: number;
+  date: string;            // formatted date string
+  answers: (number | null)[];
 }
 
 export interface Quiz {
   id: number;
   title: string;
   questions: number;
-  score?: number; // percentage 0-100 if taken
+  score?: number; // best score for current user (percentage 0-100)
   date: string;
   status?: 'generating' | 'ready' | 'grading' | 'graded';
   questionData?: QuizQuestion[];
+  scoreHistory?: QuizAttempt[];
 }
 
 export interface SubUnit {

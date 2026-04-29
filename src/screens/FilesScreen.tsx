@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -25,6 +25,7 @@ import type { ClassData, FileData, UnitData } from '../types';
 interface Props {
   classes: ClassData[];
   initialClassId: string;
+  initialFileId?: number | null;
   onBack: () => void;
   onHome: () => void;
   onScan?: () => void;
@@ -51,9 +52,16 @@ interface ClassNoteRef {
   content: string;
 }
 
+/** Checks if a thumbnail URL is a remote (HTTP) URL that can be loaded on any device */
+function isRemoteUrl(uri?: string): boolean {
+  if (!uri) return false;
+  return uri.startsWith('http://') || uri.startsWith('https://');
+}
+
 export function FilesScreen({
   classes,
   initialClassId,
+  initialFileId,
   onBack,
   onHome,
   onScan,
@@ -99,6 +107,28 @@ export function FilesScreen({
   const [viewingImage, setViewingImage] = useState<string | null>(null);
   // View mode
   const [viewMode, setViewMode] = useState<ViewMode>('organized');
+  // Track broken thumbnails (e.g. local file:// URIs from other users' devices)
+  const [failedThumbnails, setFailedThumbnails] = useState<Set<number>>(new Set());
+
+  const onThumbnailError = useCallback((fileId: number) => {
+    setFailedThumbnails(prev => {
+      const next = new Set(prev);
+      next.add(fileId);
+      return next;
+    });
+  }, []);
+
+  // Auto-select a specific file when navigating from another screen (e.g. Smart Scan recent scans)
+  useEffect(() => {
+    if (initialFileId != null) {
+      // Find the file across the current class's files
+      const targetFile = files.find(f => f.id === initialFileId);
+      if (targetFile) {
+        setSelectedFile(targetFile);
+        setDetailTab('overview');
+      }
+    }
+  }, [initialFileId]);
 
   const toggleBatchSelect = (id: number) => {
     setSelectedFileIds((prev) =>
@@ -196,8 +226,8 @@ export function FilesScreen({
   }, [currentClass, files, fileQuery, fileFilter]);
   const tutorialGuide = tutorialStep === 4 ? {
     step: 4,
-    title: 'Your files live here',
-    body: 'This workspace keeps scans, uploads, and merged notes organized by class so you can review them quickly. Tap Scan below when you want to add something new.',
+    title: 'Your file workspace',
+    body: 'All your scans, uploads, and merged notes live here — organized by class. Tap Scan in the nav bar to capture something new.',
   } : null;
 
   const filteredFiles = useMemo(() => {
@@ -489,14 +519,25 @@ export function FilesScreen({
           <View style={styles.fileInfoCard}>
             <TouchableOpacity
               onPress={() => {
-                if (selectedFile.source === 'camera' && selectedFile.thumbnail) {
+                if (selectedFile.source === 'camera' && selectedFile.thumbnail && !failedThumbnails.has(selectedFile.id)) {
                   setViewingImage(selectedFile.thumbnail);
                 }
               }}
-              disabled={selectedFile.source !== 'camera'}
+              disabled={selectedFile.source !== 'camera' || failedThumbnails.has(selectedFile.id)}
             >
-              <Image source={{ uri: selectedFile.thumbnail }} style={styles.fileThumb} />
-              {selectedFile.source === 'camera' && (
+              {failedThumbnails.has(selectedFile.id) ? (
+                <View style={[styles.fileThumb, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6' }]}>
+                  <Ionicons name="document-text" size={28} color={colors.textTertiary} />
+                  <Text style={{ fontSize: 9, fontFamily: fonts.regular, color: colors.textTertiary, marginTop: 2 }}>No preview</Text>
+                </View>
+              ) : (
+                <Image
+                  source={{ uri: selectedFile.thumbnail }}
+                  style={styles.fileThumb}
+                  onError={() => onThumbnailError(selectedFile.id)}
+                />
+              )}
+              {selectedFile.source === 'camera' && !failedThumbnails.has(selectedFile.id) && (
                 <View style={[styles.imageExpandBadge, { bottom: 4, right: 4, width: 22, height: 22 }]}>
                   <Ionicons name="expand" size={12} color="white" />
                 </View>
@@ -948,14 +989,24 @@ export function FilesScreen({
                       )}
                       <TouchableOpacity
                         onPress={() => {
-                          if (file.source === 'camera' && file.thumbnail && !batchMode) {
+                          if (file.source === 'camera' && file.thumbnail && !batchMode && !failedThumbnails.has(file.id)) {
                             setViewingImage(file.thumbnail);
                           }
                         }}
-                        disabled={batchMode || file.source !== 'camera'}
+                        disabled={batchMode || file.source !== 'camera' || failedThumbnails.has(file.id)}
                       >
-                        <Image source={{ uri: file.thumbnail }} style={styles.fileRowThumb} />
-                        {file.source === 'camera' && !batchMode && (
+                        {failedThumbnails.has(file.id) ? (
+                          <View style={[styles.fileRowThumb, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6' }]}>
+                            <Ionicons name="document-text" size={18} color={colors.textTertiary} />
+                          </View>
+                        ) : (
+                          <Image
+                            source={{ uri: file.thumbnail }}
+                            style={styles.fileRowThumb}
+                            onError={() => onThumbnailError(file.id)}
+                          />
+                        )}
+                        {file.source === 'camera' && !batchMode && !failedThumbnails.has(file.id) && (
                           <View style={styles.imageExpandBadge}>
                             <Ionicons name="expand" size={10} color="white" />
                           </View>
@@ -1012,14 +1063,24 @@ export function FilesScreen({
                   )}
                   <TouchableOpacity
                     onPress={() => {
-                      if (file.source === 'camera' && file.thumbnail && !batchMode) {
+                      if (file.source === 'camera' && file.thumbnail && !batchMode && !failedThumbnails.has(file.id)) {
                         setViewingImage(file.thumbnail);
                       }
                     }}
-                    disabled={batchMode || file.source !== 'camera'}
+                    disabled={batchMode || file.source !== 'camera' || failedThumbnails.has(file.id)}
                   >
-                    <Image source={{ uri: file.thumbnail }} style={styles.fileRowThumb} />
-                    {file.source === 'camera' && !batchMode && (
+                    {failedThumbnails.has(file.id) ? (
+                      <View style={[styles.fileRowThumb, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6' }]}>
+                        <Ionicons name="document-text" size={18} color={colors.textTertiary} />
+                      </View>
+                    ) : (
+                      <Image
+                        source={{ uri: file.thumbnail }}
+                        style={styles.fileRowThumb}
+                        onError={() => onThumbnailError(file.id)}
+                      />
+                    )}
+                    {file.source === 'camera' && !batchMode && !failedThumbnails.has(file.id) && (
                       <View style={styles.imageExpandBadge}>
                         <Ionicons name="expand" size={10} color="white" />
                       </View>

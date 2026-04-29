@@ -155,20 +155,43 @@ export async function extractTextFromImage(imageBase64: string, mimeType: string
 
     const client = getClient();
 
-    const prompt = `You are an OCR assistant for a student note-taking app. Extract ALL text from this image of handwritten or printed notes.
+    const prompt = `You are a world-class study note editor for a student note-taking app. You are given an image of handwritten or printed class notes. Your job is to extract ALL the content from the image and transform it into beautifully organized, professional-quality study notes.
 
-Formatting rules:
-- Use ## for section headings and ### for sub-headings
-- Use - for bullet points (no special characters like •)
-- Use **bold** for key terms, definitions, and important concepts
-- Use *italic* for emphasis or variable names
-- Use numbered lists (1. 2. 3.) when the original has numbered items
-- For math formulas, write them inline with clear notation: use ^ for exponents (x^2), / for fractions (a/b), sqrt() for square roots
-- For chemical formulas, write them clearly: H2O, CO2, NaCl
-- Fix obvious spelling errors but DO NOT add content that isn't in the image
-- If there are diagrams or drawings, describe them briefly in [brackets]
-- Separate distinct sections with a blank line
-- At the end, output a line that says exactly: TITLE: <a short descriptive title for these notes>
+You are NOT a raw OCR tool. Do NOT just transcribe exactly what you see. Instead, read and understand the content, then REWRITE it as polished, well-structured notes that a student would love to study from.
+
+## How to process the image:
+
+**Reading & Understanding:**
+- Extract ALL information from the image — do not skip anything
+- Understand the context and subject matter so you can organize intelligently
+- If there are diagrams, charts, or drawings, describe them clearly in [brackets]
+- If the image contains no readable text, respond with: NO_TEXT_FOUND
+
+**Writing Style:**
+- REWRITE everything in a polished, professional academic voice — do NOT just copy the student's messy handwriting verbatim
+- Always use proper capitalization, grammar, spelling, and punctuation — even if the original notes are all lowercase, have bad grammar, or use shorthand
+- Write in clear, complete sentences — not fragmented shorthand or raw transcription
+- Expand abbreviations and shorthand into proper language (e.g. "govt" → "Government", "bc" → "because", "w/" → "with")
+- Fix obvious spelling errors and clean up incomplete thoughts into coherent statements
+- Think of yourself as a professional textbook editor — same content, but polished to a professional standard
+- Do NOT add facts, claims, or information that isn't visible in the image
+
+**Structure & Formatting:**
+- Use ## for major section headings and ### for sub-topics
+- Use a clear bullet hierarchy:
+  - **Top-level bullets (-)** for main ideas or concepts
+  - **Indented sub-bullets (  -)** for supporting details, examples, or elaboration
+  - **Further indented (    -)** for specific data points, formulas, or edge cases
+- Use **bold** for key terms, vocabulary, names, and definitions
+- Use *italics* for emphasis, variable names, or foreign terms
+- Use numbered lists (1. 2. 3.) only for sequential processes or steps
+- For math: use clear inline notation — ^ for exponents (x^2), / for fractions (a/b), sqrt() for square roots
+- For science formulas: write them clearly — H₂O, CO₂, NaCl
+- Use > blockquotes for important theorems, rules, or definitions worth memorizing
+- Separate sections with blank lines for visual breathing room
+
+At the very end of your response, on its own line, output exactly:
+TITLE: <a clear, specific title for these notes — e.g. "The French Revolution: Causes & Key Events" not just "History Notes">
 - If the image contains no readable text, respond with: NO_TEXT_FOUND`;
 
     const response = await client.models.generateContent({
@@ -215,10 +238,121 @@ Formatting rules:
   }
 }
 
+// ─── Multi-Page OCR ──────────────────────────────────────────────
+export async function extractTextFromMultipleImages(
+  images: { base64: string; mimeType: string }[]
+): Promise<OCRResult> {
+  try {
+    checkRateLimit();
+    const client = getClient();
+
+    const prompt = `You are a world-class study note editor for a student note-taking app. You are given ${images.length} images that together form ONE continuous set of class notes (multiple pages of the same topic/lecture).
+
+Your job is to read ALL ${images.length} pages, understand them as a unified whole, and produce ONE beautifully organized, professional-quality study note document.
+
+## Critical Instructions:
+- These are ${images.length} PAGES of the SAME note — treat them as one continuous document, NOT separate notes
+- Do NOT add page breaks, "Page 1", "Page 2", etc. — merge everything into one flowing document
+- Remove duplicate content that appears across pages (e.g. headers repeated on each page)
+- Organize the content logically by topic, even if the pages cover topics in a scattered order
+- If one page continues a thought from a previous page, combine them into one complete idea
+
+## How to process:
+**Reading & Understanding:**
+- Extract ALL information from ALL images — do not skip anything
+- Understand the context and subject matter so you can organize intelligently
+- If there are diagrams, charts, or drawings, describe them clearly in [brackets]
+- If none of the images contain readable text, respond with: NO_TEXT_FOUND
+
+**Writing Style:**
+- REWRITE everything in a polished, professional academic voice
+- Always use proper capitalization, grammar, spelling, and punctuation
+- Write in clear, complete sentences — not fragmented shorthand
+- Expand abbreviations into proper language
+- Fix spelling errors and clean up incomplete thoughts
+- Do NOT add facts that aren't in the images
+
+**Structure & Formatting:**
+- Use ## for major section headings and ### for sub-topics
+- Use bullet hierarchy: - for main ideas, indented - for details, further indented - for specifics
+- Use **bold** for key terms and definitions
+- Use *italics* for emphasis
+- Use numbered lists for sequential processes
+- Use > blockquotes for important theorems or rules worth memorizing
+- Separate sections with blank lines
+
+At the very end, on its own line, output exactly:
+TITLE: <a clear, specific title for these combined notes>`;
+
+    const parts: any[] = [{ text: prompt }];
+    for (let i = 0; i < images.length; i++) {
+      parts.push({
+        inlineData: {
+          mimeType: images[i].mimeType,
+          data: images[i].base64,
+        },
+      });
+    }
+
+    const response = await client.models.generateContent({
+      model: MODEL_NAME,
+      contents: [{ role: 'user', parts }],
+    });
+
+    const text = response.text;
+
+    if (!text || text.trim().length === 0 || text.includes('NO_TEXT_FOUND')) {
+      return {
+        success: false,
+        text: 'Could not extract text from these images. Try taking clearer photos.',
+        title: 'Scanned Note',
+      };
+    }
+
+    const titleMatch = text.match(/TITLE:\s*(.+)/i);
+    let aiTitle = 'Scanned Note';
+    let extractedText = text;
+
+    if (titleMatch) {
+      aiTitle = titleMatch[1].trim();
+      extractedText = text.replace(/TITLE:\s*.+/i, '').trim();
+    }
+
+    return { success: true, text: extractedText, title: aiTitle };
+  } catch (err) {
+    return { success: false, text: formatError(err), title: 'Scanned Note' };
+  }
+}
+
+// ─── Quiz Hint Generation ────────────────────────────────────────
+export async function generateQuizHint(
+  question: string,
+  options: string[],
+): Promise<string> {
+  try {
+    checkRateLimit();
+    const client = getClient();
+    const prompt = `You are a helpful teacher. A student is stuck on this multiple-choice question and needs a SHORT hint (1-2 sentences max). The hint should nudge them toward the right answer WITHOUT giving it away. Be subtle and encouraging.
+
+Question: ${question}
+Options: ${options.map((o, i) => `${['A','B','C','D'][i]}) ${o}`).join(', ')}
+
+Respond with ONLY the hint text, nothing else.`;
+
+    const response = await client.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+    });
+    return response?.text?.trim() || 'Think carefully about what the question is really asking.';
+  } catch {
+    return 'Think carefully about what the question is really asking.';
+  }
+}
+
 // ─── Quiz Generation ─────────────────────────────────────────────
 export interface QuizGenerationResult {
   success: boolean;
-  questions: { question: string; options: [string, string, string, string]; correctIndex: number }[];
+  questions: { question: string; options: [string, string, string, string]; correctIndex: number; hint?: string }[];
   title: string;
   error?: string;
 }
@@ -246,6 +380,7 @@ Rules:
 - Make wrong options plausible but clearly distinguishable from the correct answer
 - For math or science, use clear notation (^ for exponents, / for fractions)
 - Questions should cover different parts of the notes, not all from one section
+- Each question MUST include a short "hint" — a brief nudge (1-2 sentences max) that helps the student think toward the right answer WITHOUT giving it away. Think of it like a teacher's subtle clue.
 
 You MUST respond with valid JSON only, no markdown, no code fences. Use this exact format:
 {
@@ -254,7 +389,8 @@ You MUST respond with valid JSON only, no markdown, no code fences. Use this exa
     {
       "question": "What is...?",
       "options": ["Option A", "Option B", "Option C", "Option D"],
-      "correctIndex": 0
+      "correctIndex": 0,
+      "hint": "Think about the concept of..."
     }
   ]
 }
@@ -295,6 +431,12 @@ ${notesText}`;
         q.correctIndex >= 0 &&
         q.correctIndex <= 3
       )
+      .map((q: any) => ({
+        question: q.question,
+        options: q.options,
+        correctIndex: q.correctIndex,
+        hint: q.hint || undefined,
+      }))
       .slice(0, questionCount);
 
     if (validQuestions.length === 0) {

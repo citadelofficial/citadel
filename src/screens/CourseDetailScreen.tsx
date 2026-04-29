@@ -14,6 +14,8 @@ import {
   Animated,
   Easing,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
@@ -25,10 +27,11 @@ import { InlineTutorialCard } from '../components/InlineTutorialCard';
 import { FormattedText } from '../components/FormattedText';
 import { colors, fonts } from '../theme';
 import { friendsDirectory } from '../data/friends';
-import { mergeNotesWithAI, extractTextFromImage, generateQuizFromNotes } from '../lib/gemini';
+import { mergeNotesWithAI, extractTextFromImage, extractTextFromMultipleImages, generateQuizFromNotes, generateQuizHint } from '../lib/gemini';
+import { uploadScanImage } from '../lib/storage';
 import * as FileSystemLegacy from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import type { ClassData, SubUnitNote, UnitData, Quiz, QuizQuestion } from '../types';
+import type { ClassData, SubUnitNote, UnitData, Quiz, QuizQuestion, QuizAttempt } from '../types';
 
 interface Props {
   classData: ClassData;
@@ -106,7 +109,20 @@ export function CourseDetailScreen({
   onTutorialSkip = () => { },
 }: Props) {
   const classAccent = classData.color || colors.maroon;
-  const themeColorChoices = [colors.maroon, '#0f766e', '#1d4ed8', '#7c3aed', '#b45309'];
+  const themeColorChoices = [
+    { hex: colors.maroon, label: 'Maroon' },
+    { hex: '#0f766e', label: 'Teal' },
+    { hex: '#1d4ed8', label: 'Royal' },
+    { hex: '#7c3aed', label: 'Purple' },
+    { hex: '#b45309', label: 'Amber' },
+    { hex: '#be185d', label: 'Rose' },
+    { hex: '#059669', label: 'Emerald' },
+    { hex: '#4338ca', label: 'Indigo' },
+    { hex: '#dc2626', label: 'Coral' },
+    { hex: '#475569', label: 'Slate' },
+    { hex: '#166534', label: 'Forest' },
+    { hex: '#7f1d1d', label: 'Wine' },
+  ];
 
   const [selectedUnit, setSelectedUnit] = useState<UnitData | null>(null);
 
@@ -223,6 +239,10 @@ export function CourseDetailScreen({
   const [newNoteTitle, setNewNoteTitle] = useState('');
   const [newNoteContent, setNewNoteContent] = useState('');
   const [noteStep, setNoteStep] = useState<1 | 2 | 3>(1);
+  // Multi-page scan state for unit note adding
+  type ScannedNotePage = { uri: string; base64: string; mimeType: string };
+  const [scannedNotePages, setScannedNotePages] = useState<ScannedNotePage[]>([]);
+  const [ocrProcessingNote, setOcrProcessingNote] = useState(false);
   const [selectedMergeNoteIds, setSelectedMergeNoteIds] = useState<number[]>([]);
   const [isMerging, setIsMerging] = useState(false);
   const [mergedResult, setMergedResult] = useState<{ title: string; content: string } | null>(null);
@@ -287,11 +307,17 @@ export function CourseDetailScreen({
   const [quizAnswers, setQuizAnswers] = useState<(number | null)[]>([]);
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [quizScore, setQuizScore] = useState<number | null>(null);
+  const [quizHintsShown, setQuizHintsShown] = useState<Set<number>>(new Set());
+  const [dynamicHints, setDynamicHints] = useState<Record<number, string>>({});
+  const [hintLoading, setHintLoading] = useState(false);
+
+  // Score history modal
+  const [scoreHistoryQuiz, setScoreHistoryQuiz] = useState<Quiz | null>(null);
 
   const tutorialGuide = tutorialStep === 3 ? {
     step: 3,
-    title: 'This class is your hub',
-    body: 'This page keeps your class details, units, classmates, and saved materials together. Tap Files below when you want the library for this class.',
+    title: 'Your class hub',
+    body: 'This is where everything lives — units, notes, classmates, and study materials. When you\'re ready, tap Files in the nav bar to see your workspace.',
   } : null;
 
   const addQuiz = async () => {
@@ -372,44 +398,78 @@ export function CourseDetailScreen({
     setQuizAnswers(new Array(quiz.questionData.length).fill(null));
     setQuizSubmitted(false);
     setQuizScore(null);
+    setQuizHintsShown(new Set());
+    setDynamicHints({});
   };
 
-  const submitQuiz = () => {
+  const submitQuiz = async () => {
     if (!activeQuiz?.questionData || !activeQuizSubUnitId) return;
 
     let correct = 0;
     activeQuiz.questionData.forEach((q, i) => {
       if (quizAnswers[i] === q.correctIndex) correct++;
     });
-    const score = Math.round((correct / activeQuiz.questionData.length) * 100);
+    const totalQ = activeQuiz.questionData.length;
+    const score = Math.round((correct / totalQ) * 100);
 
     setQuizScore(score);
     setQuizSubmitted(true);
 
-    // Save score to quiz data
+    // Get current user info for the attempt record
+    let userId = 'unknown';
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      userId = userData?.user?.id || 'unknown';
+    } catch { /* fallback */ }
+
+    const attempt: QuizAttempt = {
+      userId,
+      userName: userName || 'You',
+      score,
+      correct,
+      total: totalQ,
+      date: formatToday(),
+      answers: [...quizAnswers],
+    };
+
+    // Save attempt to score history and update best score
     updateSelectedUnit((unit) => ({
       ...unit,
       subUnits: unit.subUnits.map((sub) =>
         sub.id === activeQuizSubUnitId
           ? {
             ...sub,
-            quizzes: (sub.quizzes || []).map((q) =>
-              q.id === activeQuiz.id
-                ? {
-                  ...q,
-                  score,
-                  status: 'graded' as const,
-                  questionData: q.questionData?.map((qd, i) => ({
-                    ...qd,
-                    selectedIndex: quizAnswers[i] ?? undefined,
-                  })),
-                }
-                : q
-            ),
+            quizzes: (sub.quizzes || []).map((q) => {
+              if (q.id !== activeQuiz.id) return q;
+              const history = [...(q.scoreHistory || []), attempt];
+              // Best score across all of this user's attempts
+              const userAttempts = history.filter((a) => a.userId === userId);
+              const bestScore = Math.max(...userAttempts.map((a) => a.score));
+              return {
+                ...q,
+                score: bestScore,
+                status: 'graded' as const,
+                scoreHistory: history,
+                questionData: q.questionData?.map((qd, i) => ({
+                  ...qd,
+                  selectedIndex: quizAnswers[i] ?? undefined,
+                })),
+              };
+            }),
           }
           : sub
       ),
     }));
+  };
+
+  const retakeQuiz = () => {
+    if (!activeQuiz?.questionData) return;
+    setQuizCurrentQ(0);
+    setQuizAnswers(new Array(activeQuiz.questionData.length).fill(null));
+    setQuizSubmitted(false);
+    setQuizScore(null);
+    setQuizHintsShown(new Set());
+    setDynamicHints({});
   };
 
   const closeQuizModal = () => {
@@ -419,6 +479,8 @@ export function CourseDetailScreen({
     setQuizAnswers([]);
     setQuizSubmitted(false);
     setQuizScore(null);
+    setQuizHintsShown(new Set());
+    setDynamicHints({});
   };
 
   const openEditQuiz = (quiz: Quiz, subUnitId: string) => {
@@ -711,12 +773,15 @@ export function CourseDetailScreen({
     setNewNoteAuthor(userName || 'You');
     setNewNoteTitle('');
     setNewNoteContent('');
+    setScannedNotePages([]);
+    setOcrProcessingNote(false);
     setNoteStep(1);
     setShowAddNoteModal(true);
   };
 
   const [isScanningNote, setIsScanningNote] = useState(false);
 
+  // Multi-page scan: capture first page with camera and go to staging step
   const scanNoteWithCamera = async () => {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {
@@ -733,36 +798,164 @@ export function CourseDetailScreen({
     if (result.canceled || !result.assets[0]) return;
     const asset = result.assets[0];
 
-    if (!selectedUnit || !activeSubUnitId) return;
+    let base64Data = asset.base64 || undefined;
+    if (!base64Data && asset.uri) {
+      try {
+        base64Data = await FileSystemLegacy.readAsStringAsync(asset.uri, {
+          encoding: FileSystemLegacy.EncodingType.Base64,
+        });
+      } catch { /* fallback */ }
+    }
 
-    // Show loading state while OCR runs
+    if (base64Data) {
+      const mimeType = asset.uri?.toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg';
+      setScannedNotePages([{ uri: asset.uri, base64: base64Data, mimeType }]);
+      setNoteStep(2); // Go to multi-page staging step
+    }
+  };
+
+  // Multi-page scan: pick first page from library and go to staging step
+  const scanNoteFromLibrary = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      quality: 0.85,
+      mediaTypes: ['images'],
+      base64: true,
+    });
+
+    if (result.canceled || !result.assets[0]) return;
+    const asset = result.assets[0];
+
+    let base64Data = asset.base64 || undefined;
+    if (!base64Data && asset.uri) {
+      try {
+        base64Data = await FileSystemLegacy.readAsStringAsync(asset.uri, {
+          encoding: FileSystemLegacy.EncodingType.Base64,
+        });
+      } catch { /* fallback */ }
+    }
+
+    if (base64Data) {
+      const mimeType = asset.uri?.toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg';
+      setScannedNotePages([{ uri: asset.uri, base64: base64Data, mimeType }]);
+      setNoteStep(2); // Go to multi-page staging step
+    }
+  };
+
+  // Add additional page from camera
+  const addNotePageFromCamera = async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) return;
+    const result = await ImagePicker.launchCameraAsync({
+      quality: 0.85,
+      mediaTypes: ['images'],
+      base64: true,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      let base64Data = asset.base64 || undefined;
+      if (!base64Data && asset.uri) {
+        try {
+          base64Data = await FileSystemLegacy.readAsStringAsync(asset.uri, { encoding: FileSystemLegacy.EncodingType.Base64 });
+        } catch { /* fallback */ }
+      }
+      if (base64Data) {
+        const mimeType = asset.uri?.toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg';
+        setScannedNotePages(prev => [...prev, { uri: asset.uri, base64: base64Data!, mimeType }]);
+      }
+    }
+  };
+
+  // Add additional page from photo library
+  const addNotePageFromLibrary = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      quality: 0.85,
+      mediaTypes: ['images'],
+      base64: true,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      let base64Data = asset.base64 || undefined;
+      if (!base64Data && asset.uri) {
+        try {
+          base64Data = await FileSystemLegacy.readAsStringAsync(asset.uri, { encoding: FileSystemLegacy.EncodingType.Base64 });
+        } catch { /* fallback */ }
+      }
+      if (base64Data) {
+        const mimeType = asset.uri?.toLowerCase().includes('.png') ? 'image/png' : 'image/jpeg';
+        setScannedNotePages(prev => [...prev, { uri: asset.uri, base64: base64Data!, mimeType }]);
+      }
+    }
+  };
+
+  // Remove a page from the staging area
+  const removeNotePage = (index: number) => {
+    setScannedNotePages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // Finalize: run OCR on all scanned pages, then save as a note in the unit
+  const finalizeNotePages = async () => {
+    if (scannedNotePages.length === 0 || !selectedUnit || !activeSubUnitId) return;
+
     setShowAddNoteModal(false);
     setIsScanningNote(true);
+    setOcrProcessingNote(true);
 
-    // OCR via Gemini
     let noteTitle = `Scanned Note — ${formatToday()}`;
-    let noteContent = 'Scanned note captured from camera.';
+    let noteContent = '';
 
-    if (asset.base64) {
-      const ocrResult = await extractTextFromImage(asset.base64, 'image/jpeg');
-      if (ocrResult.success) {
-        noteTitle = ocrResult.title;
-        noteContent = ocrResult.text;
+    try {
+      if (scannedNotePages.length === 1) {
+        const ocrResult = await extractTextFromImage(scannedNotePages[0].base64, scannedNotePages[0].mimeType);
+        if (ocrResult.success && ocrResult.text.trim().length > 0) {
+          noteTitle = ocrResult.title;
+          noteContent = ocrResult.text;
+        }
+      } else {
+        const ocrResult = await extractTextFromMultipleImages(
+          scannedNotePages.map(p => ({ base64: p.base64, mimeType: p.mimeType }))
+        );
+        if (ocrResult.success && ocrResult.text.trim().length > 0) {
+          noteTitle = ocrResult.title;
+          noteContent = ocrResult.text;
+        }
       }
+    } catch (ocrErr) {
+      console.warn('OCR failed:', ocrErr);
+    }
+
+    if (!noteContent.trim()) {
+      noteContent = 'OCR could not extract text from these images. The scanned images are saved.';
+      Alert.alert('OCR Notice', 'Could not extract text from the images. The scan has been saved, but you may want to re-scan with clearer text.');
     }
 
     const scanName = `Scan_${Date.now()}.jpg`;
     const wordCount = noteContent.trim().split(/\s+/).filter(Boolean).length;
     const readTime = Math.max(1, Math.ceil(wordCount / 180));
 
+    // Upload first page image to Supabase so classmates can view it
+    let thumbnailUrl = scannedNotePages[0].uri;
+    try {
+      const publicUrl = await uploadScanImage(scannedNotePages[0].uri, `note_${Date.now()}`);
+      if (publicUrl) {
+        thumbnailUrl = publicUrl;
+      }
+    } catch (e) {
+      console.log('Note image upload failed, using local URI:', e);
+    }
+
     // Save as file in class files tab
     const file = {
       id: Date.now(),
       name: scanName,
       date: formatToday(),
-      thumbnail: asset.uri,
-      pages: 1,
-      size: asset.fileSize ? `${Math.max(0.1, asset.fileSize / (1024 * 1024)).toFixed(1)}MB` : '1.0MB',
+      thumbnail: thumbnailUrl,
+      pages: scannedNotePages.length,
+      size: '1.0MB',
       readTime: `${readTime} Min Read`,
       previewTitle: noteTitle,
       previewText: noteContent,
@@ -785,7 +978,7 @@ export function CourseDetailScreen({
                     title: noteTitle,
                     author: userName || 'You',
                     date: formatToday(),
-                    pages: 1,
+                    pages: scannedNotePages.length,
                     content: noteContent,
                   },
                 ],
@@ -806,6 +999,8 @@ export function CourseDetailScreen({
     onUpdateClass(updatedClass);
     setSelectedUnit(updatedUnits.find((u) => u.id === selectedUnit.id) || selectedUnit);
     setIsScanningNote(false);
+    setOcrProcessingNote(false);
+    setScannedNotePages([]);
   };
 
   const pickNoteFromPhone = async () => {
@@ -840,13 +1035,18 @@ export function CourseDetailScreen({
     }
   };
 
-  // Fetch remote notes from registry and merge any new ones
+  // Fetch remote notes and files from registry and merge any new ones
   const fetchRemoteNotes = useCallback(async () => {
     try {
       const normalized = classData.classCode.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+      // Get current user ID so we skip our own registry entry
+      const { data: userData } = await supabase.auth.getUser();
+      const currentUserId = userData?.user?.id;
+
       const { data, error } = await supabase
         .from('class_code_registry')
-        .select('class_data')
+        .select('class_data, owner_id')
         .eq('class_code', normalized);
 
       if (error || !data || data.length === 0) return;
@@ -854,25 +1054,33 @@ export function CourseDetailScreen({
       const allRemoteNotes = new Map<string, Map<number, any>>();
 
       for (const row of data) {
-        const remoteClass = row.class_data as ClassData;
-        if (!remoteClass?.units) continue;
+        // Skip our own entry — only merge content from classmates
+        if (currentUserId && (row as any).owner_id === currentUserId) continue;
 
-        for (const remoteUnit of remoteClass.units) {
-          for (const remoteSub of remoteUnit.subUnits) {
-            if (!allRemoteNotes.has(remoteSub.id)) {
-              allRemoteNotes.set(remoteSub.id, new Map());
-            }
-            const noteMap = allRemoteNotes.get(remoteSub.id)!;
-            for (const note of remoteSub.notes) {
-              if (!noteMap.has(note.id)) {
-                noteMap.set(note.id, note);
+        const remoteClass = row.class_data as ClassData;
+        if (!remoteClass) continue;
+
+        // Collect remote notes
+        if (remoteClass.units) {
+          for (const remoteUnit of remoteClass.units) {
+            for (const remoteSub of remoteUnit.subUnits) {
+              if (!allRemoteNotes.has(remoteSub.id)) {
+                allRemoteNotes.set(remoteSub.id, new Map());
+              }
+              const noteMap = allRemoteNotes.get(remoteSub.id)!;
+              for (const note of remoteSub.notes) {
+                if (!noteMap.has(note.id)) {
+                  noteMap.set(note.id, note);
+                }
               }
             }
           }
         }
       }
 
-      let hasNewNotes = false;
+      let hasChanges = false;
+
+      // Merge notes
       const mergedUnits = classData.units.map((localUnit) => {
         const mergedSubUnits = localUnit.subUnits.map((localSub) => {
           const remoteNoteMap = allRemoteNotes.get(localSub.id);
@@ -884,7 +1092,7 @@ export function CourseDetailScreen({
           );
 
           if (newNotes.length > 0) {
-            hasNewNotes = true;
+            hasChanges = true;
             return { ...localSub, notes: [...localSub.notes, ...newNotes] };
           }
           return localSub;
@@ -893,7 +1101,7 @@ export function CourseDetailScreen({
         return { ...localUnit, subUnits: mergedSubUnits };
       });
 
-      if (hasNewNotes) {
+      if (hasChanges) {
         onUpdateClass({ ...classData, units: mergedUnits });
       }
     } catch (e) {
@@ -1353,9 +1561,14 @@ export function CourseDetailScreen({
                                           <Text style={[styles.quizScoreText, { color: '#7c3aed' }]}>Awaiting AI</Text>
                                         </View>
                                       )}
-                                      <TouchableOpacity onPress={() => openEditQuiz(quiz, subUnit.id)} hitSlop={8}>
-                                        <Ionicons name="pencil" size={15} color={colors.textTertiary} />
+                                      <TouchableOpacity style={styles.quizTakeBtn} onPress={() => startQuiz(subUnit.id, quiz)}>
+                                        <Text style={styles.quizTakeBtnText}>Retake</Text>
                                       </TouchableOpacity>
+                                      {(quiz.scoreHistory?.length || 0) > 0 && (
+                                        <TouchableOpacity onPress={() => setScoreHistoryQuiz(quiz)} hitSlop={8}>
+                                          <Ionicons name="stats-chart" size={15} color={classAccent} />
+                                        </TouchableOpacity>
+                                      )}
                                       <TouchableOpacity onPress={() => deleteQuiz(subUnit.id, quiz.id)} hitSlop={8}>
                                         <Ionicons name="trash-outline" size={15} color={colors.textTertiary} />
                                       </TouchableOpacity>
@@ -1532,9 +1745,16 @@ export function CourseDetailScreen({
                           </View>
                         );
                       })}
-                      <TouchableOpacity style={[styles.quizNavBtn, { backgroundColor: classAccent, marginTop: 12 }]} onPress={closeQuizModal}>
-                        <Text style={styles.quizNavBtnText}>Done</Text>
-                      </TouchableOpacity>
+                      <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+                        <TouchableOpacity style={[styles.quizNavBtn, { backgroundColor: '#F0E0D0', flex: 1 }]} onPress={closeQuizModal}>
+                          <Ionicons name="checkmark" size={16} color={colors.textPrimary} />
+                          <Text style={[styles.quizNavBtnText, { color: colors.textPrimary }]}>Done</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={[styles.quizNavBtn, { backgroundColor: classAccent, flex: 1 }]} onPress={retakeQuiz}>
+                          <Ionicons name="refresh" size={16} color="white" />
+                          <Text style={styles.quizNavBtnText}>Retake</Text>
+                        </TouchableOpacity>
+                      </View>
                     </ScrollView>
                   );
                 }
@@ -1586,6 +1806,57 @@ export function CourseDetailScreen({
                           );
                         })}
                       </View>
+
+                      {/* Hint button */}
+                      {(() => {
+                        const hintText = currentQuestion.hint || dynamicHints[quizCurrentQ];
+                        const isRevealed = quizHintsShown.has(quizCurrentQ);
+                        if (isRevealed && hintText) {
+                          return (
+                            <View style={{
+                              marginTop: 12, padding: 14, borderRadius: 14,
+                              backgroundColor: '#FFF7ED', borderWidth: 1, borderColor: '#FDBA74',
+                              flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+                            }}>
+                              <Ionicons name="bulb" size={18} color="#F59E0B" style={{ marginTop: 1 }} />
+                              <Text style={{ flex: 1, fontSize: 13, fontFamily: fonts.regular, color: '#92400E', lineHeight: 19 }}>
+                                {hintText}
+                              </Text>
+                            </View>
+                          );
+                        }
+                        return (
+                          <TouchableOpacity
+                            style={{
+                              marginTop: 12, alignSelf: 'center',
+                              flexDirection: 'row', alignItems: 'center', gap: 6,
+                              paddingVertical: 8, paddingHorizontal: 16,
+                              borderRadius: 20, backgroundColor: '#FFF7ED',
+                              borderWidth: 1, borderColor: '#FDE68A',
+                              opacity: hintLoading ? 0.6 : 1,
+                            }}
+                            disabled={hintLoading}
+                            onPress={async () => {
+                              if (currentQuestion.hint) {
+                                // Pre-generated hint exists, just reveal
+                                setQuizHintsShown(prev => { const n = new Set(prev); n.add(quizCurrentQ); return n; });
+                              } else {
+                                // Generate hint on-the-fly
+                                setHintLoading(true);
+                                const hint = await generateQuizHint(currentQuestion.question, [...currentQuestion.options]);
+                                setDynamicHints(prev => ({ ...prev, [quizCurrentQ]: hint }));
+                                setQuizHintsShown(prev => { const n = new Set(prev); n.add(quizCurrentQ); return n; });
+                                setHintLoading(false);
+                              }
+                            }}
+                          >
+                            <Ionicons name={hintLoading ? 'hourglass-outline' : 'bulb-outline'} size={16} color="#F59E0B" />
+                            <Text style={{ fontSize: 13, fontFamily: fonts.medium, color: '#B45309' }}>
+                              {hintLoading ? 'Generating hint…' : 'Need a hint?'}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })()}
                     </ScrollView>
 
                     <View style={styles.quizNavRow}>
@@ -1623,34 +1894,158 @@ export function CourseDetailScreen({
           </View>
         </Modal>
 
+        {/* Score History Modal */}
+        <Modal visible={!!scoreHistoryQuiz} transparent animationType="slide" onRequestClose={() => setScoreHistoryQuiz(null)}>
+          <View style={styles.viewerBackdrop}>
+            <View style={styles.viewerCard}>
+              <View style={styles.viewerHeader}>
+                <View style={styles.viewerHeaderLeft}>
+                  <View style={[styles.viewerBadge, { backgroundColor: classAccent }]}>
+                    <Ionicons name="stats-chart" size={14} color="white" />
+                  </View>
+                  <Text style={styles.viewerLabel}>Quiz Scores</Text>
+                </View>
+                <TouchableOpacity onPress={() => setScoreHistoryQuiz(null)} style={styles.viewerCloseBtn}>
+                  <Ionicons name="close" size={22} color={colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
+
+              {scoreHistoryQuiz && (
+                <>
+                  <Text style={styles.viewerTitle}>{scoreHistoryQuiz.title}</Text>
+                  <View style={styles.viewerMetaRow}>
+                    <Ionicons name="school" size={12} color={colors.textTertiary} />
+                    <Text style={styles.viewerMeta}>
+                      {scoreHistoryQuiz.questions} questions • {(scoreHistoryQuiz.scoreHistory || []).length} total attempt{(scoreHistoryQuiz.scoreHistory || []).length !== 1 ? 's' : ''}
+                    </Text>
+                  </View>
+
+                  <ScrollView style={styles.viewerScroll} showsVerticalScrollIndicator={false}>
+                    {(() => {
+                      const history = scoreHistoryQuiz.scoreHistory || [];
+                      // Group by userId
+                      const grouped = new Map<string, QuizAttempt[]>();
+                      for (const attempt of history) {
+                        const key = attempt.userId;
+                        if (!grouped.has(key)) grouped.set(key, []);
+                        grouped.get(key)!.push(attempt);
+                      }
+                      // Sort by best score descending
+                      const entries = Array.from(grouped.entries()).sort((a, b) => {
+                        const bestA = Math.max(...a[1].map((x) => x.score));
+                        const bestB = Math.max(...b[1].map((x) => x.score));
+                        return bestB - bestA;
+                      });
+
+                      if (entries.length === 0) {
+                        return (
+                          <View style={{ alignItems: 'center', paddingVertical: 24 }}>
+                            <Ionicons name="school-outline" size={32} color={colors.textTertiary} />
+                            <Text style={{ fontFamily: fonts.medium, color: colors.textSecondary, marginTop: 8 }}>No attempts yet</Text>
+                          </View>
+                        );
+                      }
+
+                      return entries.map(([userId, attempts], groupIdx) => {
+                        const best = Math.max(...attempts.map((a) => a.score));
+                        const personName = attempts[0].userName;
+                        return (
+                          <View key={userId} style={{ marginBottom: groupIdx < entries.length - 1 ? 16 : 0 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                              <View style={{
+                                width: 28, height: 28, borderRadius: 14,
+                                backgroundColor: `${classAccent}20`, alignItems: 'center', justifyContent: 'center',
+                              }}>
+                                <Ionicons name="person" size={14} color={classAccent} />
+                              </View>
+                              <View style={{ flex: 1 }}>
+                                <Text style={{ fontFamily: fonts.semiBold, fontSize: 14, color: colors.textPrimary }}>{personName}</Text>
+                                <Text style={{ fontFamily: fonts.regular, fontSize: 11, color: colors.textTertiary }}>
+                                  {attempts.length} attempt{attempts.length !== 1 ? 's' : ''} • Best: {best}%
+                                </Text>
+                              </View>
+                              <View style={[styles.quizScorePill, { backgroundColor: best >= 80 ? '#D1FAE5' : best >= 50 ? '#FEF3C7' : '#FEE2E2' }]}>
+                                <Text style={[styles.quizScoreText, { color: best >= 80 ? '#059669' : best >= 50 ? '#d97706' : '#dc2626' }]}>{best}%</Text>
+                              </View>
+                            </View>
+                            {attempts.map((attempt, ai) => {
+                              const prev = ai > 0 ? attempts[ai - 1].score : null;
+                              const diff = prev !== null ? attempt.score - prev : 0;
+                              return (
+                                <View key={ai} style={{
+                                  flexDirection: 'row', alignItems: 'center', gap: 8,
+                                  paddingLeft: 36, paddingVertical: 4,
+                                }}>
+                                  <Text style={{ fontFamily: fonts.regular, fontSize: 12, color: colors.textTertiary, width: 60 }}>
+                                    #{ai + 1} • {attempt.date}
+                                  </Text>
+                                  <View style={{
+                                    flex: 1, height: 6, borderRadius: 3,
+                                    backgroundColor: '#F0E0D0',
+                                  }}>
+                                    <View style={{
+                                      width: `${attempt.score}%`, height: 6, borderRadius: 3,
+                                      backgroundColor: attempt.score >= 80 ? '#059669' : attempt.score >= 50 ? '#d97706' : '#dc2626',
+                                    }} />
+                                  </View>
+                                  <Text style={{
+                                    fontFamily: fonts.semiBold, fontSize: 12, width: 36, textAlign: 'right',
+                                    color: attempt.score >= 80 ? '#059669' : attempt.score >= 50 ? '#d97706' : '#dc2626',
+                                  }}>{attempt.score}%</Text>
+                                  {diff > 0 && <Text style={{ fontFamily: fonts.medium, fontSize: 11, color: '#059669' }}>↑{diff}</Text>}
+                                  {diff < 0 && <Text style={{ fontFamily: fonts.medium, fontSize: 11, color: '#dc2626' }}>↓{Math.abs(diff)}</Text>}
+                                  {diff === 0 && ai > 0 && <Text style={{ fontFamily: fonts.medium, fontSize: 11, color: colors.textTertiary }}>—</Text>}
+                                </View>
+                              );
+                            })}
+                            {groupIdx < entries.length - 1 && (
+                              <View style={{ height: 1, backgroundColor: '#F0E0D0', marginTop: 12 }} />
+                            )}
+                          </View>
+                        );
+                      });
+                    })()}
+                  </ScrollView>
+                </>
+              )}
+            </View>
+          </View>
+        </Modal>
+
         <Modal visible={showAddNoteModal} transparent animationType="fade" onRequestClose={() => setShowAddNoteModal(false)}>
           <View style={styles.modalBackdropCentered}>
             <View style={styles.noteModalCard}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Add Note</Text>
-                <TouchableOpacity onPress={() => setShowAddNoteModal(false)}>
+                <TouchableOpacity onPress={() => { setShowAddNoteModal(false); setScannedNotePages([]); }}>
                   <Ionicons name="close" size={22} color={colors.textPrimary} />
                 </TouchableOpacity>
               </View>
 
               {/* Step indicators */}
               <View style={styles.wizardSteps}>
-                {[1, 2].map((step) => (
-                  <View key={step} style={styles.wizardStepRow}>
+                {(scannedNotePages.length > 0 ? [
+                  { num: 1, label: 'Source' },
+                  { num: 2, label: 'Pages' },
+                ] : [
+                  { num: 1, label: 'Source' },
+                  { num: 3, label: 'Details' },
+                ]).map((stepInfo, idx, arr) => (
+                  <View key={stepInfo.num} style={styles.wizardStepRow}>
                     <View style={[
                       styles.wizardStepDot,
-                      noteStep >= step && { backgroundColor: classAccent, borderColor: classAccent },
+                      noteStep >= stepInfo.num && { backgroundColor: classAccent, borderColor: classAccent },
                     ]}>
-                      {noteStep > step ? (
+                      {noteStep > stepInfo.num ? (
                         <Ionicons name="checkmark" size={12} color="white" />
                       ) : (
-                        <Text style={[styles.wizardStepNum, noteStep >= step && { color: 'white' }]}>{step}</Text>
+                        <Text style={[styles.wizardStepNum, noteStep >= stepInfo.num && { color: 'white' }]}>{idx + 1}</Text>
                       )}
                     </View>
-                    <Text style={[styles.wizardStepLabel, noteStep >= step && { color: classAccent }]}>
-                      {step === 1 ? 'Source' : 'Details'}
+                    <Text style={[styles.wizardStepLabel, noteStep >= stepInfo.num && { color: classAccent }]}>
+                      {stepInfo.label}
                     </Text>
-                    {step < 2 && <View style={[styles.wizardStepLine, noteStep > step && { backgroundColor: classAccent }]} />}
+                    {idx < arr.length - 1 && <View style={[styles.wizardStepLine, noteStep > stepInfo.num && { backgroundColor: classAccent }]} />}
                   </View>
                 ))}
               </View>
@@ -1662,9 +2057,37 @@ export function CourseDetailScreen({
 
                   <TouchableOpacity
                     style={[styles.sourceActionCard, { borderColor: `${classAccent}40` }]}
+                    onPress={scanNoteWithCamera}
+                  >
+                    <View style={[styles.sourceActionIcon, { backgroundColor: `${classAccent}12` }]}>
+                      <Ionicons name="camera" size={20} color={classAccent} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.sourceActionTitle}>Scan with Camera</Text>
+                      <Text style={styles.sourceActionSub}>Capture one or more pages of notes</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.sourceActionCard, { borderColor: `${classAccent}40` }]}
+                    onPress={scanNoteFromLibrary}
+                  >
+                    <View style={[styles.sourceActionIcon, { backgroundColor: `${classAccent}12` }]}>
+                      <Ionicons name="images" size={20} color={classAccent} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.sourceActionTitle}>Scan from Photos</Text>
+                      <Text style={styles.sourceActionSub}>Pick note images from your gallery</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.sourceActionCard, { borderColor: `${classAccent}40` }]}
                     onPress={async () => {
                       await pickNoteFromPhone();
-                      setNoteStep(2);
+                      setNoteStep(3);
                     }}
                   >
                     <View style={[styles.sourceActionIcon, { backgroundColor: `${classAccent}12` }]}>
@@ -1679,21 +2102,7 @@ export function CourseDetailScreen({
 
                   <TouchableOpacity
                     style={[styles.sourceActionCard, { borderColor: `${classAccent}40` }]}
-                    onPress={scanNoteWithCamera}
-                  >
-                    <View style={[styles.sourceActionIcon, { backgroundColor: `${classAccent}12` }]}>
-                      <Ionicons name="scan" size={20} color={classAccent} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.sourceActionTitle}>Scan Now</Text>
-                      <Text style={styles.sourceActionSub}>Use camera to capture notes</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.sourceActionCard, { borderColor: `${classAccent}40` }]}
-                    onPress={() => setNoteStep(2)}
+                    onPress={() => setNoteStep(3)}
                   >
                     <View style={[styles.sourceActionIcon, { backgroundColor: `${classAccent}12` }]}>
                       <Ionicons name="create" size={20} color={classAccent} />
@@ -1707,8 +2116,99 @@ export function CourseDetailScreen({
                 </View>
               )}
 
-              {/* Step 2: Details + Save */}
-              {noteStep === 2 && (
+              {/* Step 2: Multi-Page Staging */}
+              {noteStep === 2 && scannedNotePages.length > 0 && (
+                <View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <Text style={styles.wizardStepTitle}>
+                      {scannedNotePages.length} Page{scannedNotePages.length > 1 ? 's' : ''} Scanned
+                    </Text>
+                    <TouchableOpacity onPress={() => { setScannedNotePages([]); setNoteStep(1); }} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                      <Text style={{ fontSize: 13, fontFamily: fonts.medium, color: colors.textTertiary }}>Clear All</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={{ fontSize: 13, fontFamily: fonts.regular, color: colors.textSecondary, marginBottom: 12 }}>
+                    Add more pages or tap "Analyze" when ready. AI will combine all pages into one note.
+                  </Text>
+
+                  {/* Page thumbnails */}
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingVertical: 8 }}>
+                    {scannedNotePages.map((page, idx) => (
+                      <View key={idx} style={{ position: 'relative' }}>
+                        <Image source={{ uri: page.uri }} style={{ width: 80, height: 110, borderRadius: 10, backgroundColor: '#F3F4F6' }} />
+                        <TouchableOpacity
+                          onPress={() => removeNotePage(idx)}
+                          style={{
+                            position: 'absolute', top: -6, right: -6,
+                            width: 22, height: 22, borderRadius: 11,
+                            backgroundColor: '#EF4444', alignItems: 'center', justifyContent: 'center',
+                            borderWidth: 2, borderColor: 'white',
+                          }}
+                        >
+                          <Ionicons name="close" size={12} color="white" />
+                        </TouchableOpacity>
+                        <View style={{
+                          position: 'absolute', bottom: 4, left: 4,
+                          backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 6,
+                          paddingHorizontal: 6, paddingVertical: 2,
+                        }}>
+                          <Text style={{ fontSize: 10, fontFamily: fonts.bold, color: 'white' }}>P{idx + 1}</Text>
+                        </View>
+                      </View>
+                    ))}
+                  </ScrollView>
+
+                  {/* Add more pages buttons */}
+                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
+                    <TouchableOpacity
+                      style={{
+                        flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+                        paddingVertical: 12, borderRadius: 12, borderWidth: 1.5, borderColor: '#E5E7EB', borderStyle: 'dashed',
+                      }}
+                      onPress={addNotePageFromCamera}
+                    >
+                      <Ionicons name="camera-outline" size={18} color={classAccent} />
+                      <Text style={{ fontSize: 13, fontFamily: fonts.medium, color: colors.textPrimary }}>Add Page</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={{
+                        flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+                        paddingVertical: 12, borderRadius: 12, borderWidth: 1.5, borderColor: '#E5E7EB', borderStyle: 'dashed',
+                      }}
+                      onPress={addNotePageFromLibrary}
+                    >
+                      <Ionicons name="images-outline" size={18} color={classAccent} />
+                      <Text style={{ fontSize: 13, fontFamily: fonts.medium, color: colors.textPrimary }}>From Gallery</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Action buttons */}
+                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+                    <TouchableOpacity
+                      style={[styles.wizardBackBtn, { borderColor: `${classAccent}40` }]}
+                      onPress={() => { setScannedNotePages([]); setNoteStep(1); }}
+                    >
+                      <Text style={[styles.wizardBackBtnText, { color: classAccent }]}>← Back</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={{
+                        flex: 1, backgroundColor: classAccent, borderRadius: 14,
+                        paddingVertical: 14, alignItems: 'center', flexDirection: 'row',
+                        justifyContent: 'center', gap: 8,
+                      }}
+                      onPress={finalizeNotePages}
+                    >
+                      <Ionicons name="sparkles" size={18} color="white" />
+                      <Text style={{ fontSize: 15, fontFamily: fonts.bold, color: 'white' }}>
+                        Analyze {scannedNotePages.length} Page{scannedNotePages.length > 1 ? 's' : ''}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+
+              {/* Step 3: Details + Save (for manual / upload notes) */}
+              {noteStep === 3 && (
                 <View>
                   <Text style={styles.wizardStepTitle}>Note details</Text>
 
@@ -1974,8 +2474,16 @@ export function CourseDetailScreen({
           <View style={styles.scanOverlay}>
             <View style={styles.scanOverlayCard}>
               <ActivityIndicator size="large" color={classAccent} />
-              <Text style={styles.scanOverlayTitle}>Reading your notes…</Text>
-              <Text style={styles.scanOverlaySub}>AI is extracting text from your scan</Text>
+              <Text style={styles.scanOverlayTitle}>
+                {scannedNotePages.length > 1
+                  ? `Analyzing ${scannedNotePages.length} pages…`
+                  : 'Reading your notes…'}
+              </Text>
+              <Text style={styles.scanOverlaySub}>
+                {scannedNotePages.length > 1
+                  ? 'AI is combining all pages into one note'
+                  : 'AI is extracting text from your scan'}
+              </Text>
             </View>
           </View>
         )}
@@ -2281,13 +2789,17 @@ export function CourseDetailScreen({
             <Image source={{ uri: draftImage }} style={styles.editImagePreview} />
 
             <Text style={styles.modalLabel}>Theme Color</Text>
-            <View style={styles.colorRow}>
-              {themeColorChoices.map((color) => (
+            <View style={styles.colorGrid}>
+              {themeColorChoices.map(({ hex, label }) => (
                 <TouchableOpacity
-                  key={color}
-                  style={[styles.colorDot, { backgroundColor: color }, draftColor === color && styles.colorDotActive]}
-                  onPress={() => setDraftColor(color)}
-                />
+                  key={hex}
+                  style={[styles.colorSwatch, { backgroundColor: hex }, draftColor === hex && styles.colorSwatchActive]}
+                  onPress={() => setDraftColor(hex)}
+                >
+                  {draftColor === hex && (
+                    <Ionicons name="checkmark" size={16} color="white" />
+                  )}
+                </TouchableOpacity>
               ))}
             </View>
 
@@ -2491,7 +3003,7 @@ export function CourseDetailScreen({
 
       {/* Scan-to-Unit Picker Modal */}
       <Modal visible={showScanUnitPicker && !!pendingScanNote} transparent animationType="slide" onRequestClose={() => { setShowScanUnitPicker(false); onClearPendingScanNote?.(); }}>
-        <View style={scanToUnitStyles.overlay}>
+        <KeyboardAvoidingView style={scanToUnitStyles.overlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <View style={scanToUnitStyles.sheet}>
             <View style={scanToUnitStyles.handle} />
             <Text style={scanToUnitStyles.title}>Add Note to Unit</Text>
@@ -2564,7 +3076,7 @@ export function CourseDetailScreen({
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -3056,6 +3568,32 @@ const styles = StyleSheet.create({
   colorRow: { flexDirection: 'row', gap: 12, marginTop: 8 },
   colorDot: { width: 30, height: 30, borderRadius: 12, borderWidth: 3, borderColor: 'transparent' },
   colorDotActive: { borderColor: '#111' },
+  colorGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 8,
+  },
+  colorSwatch: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2.5,
+    borderColor: 'transparent',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  colorSwatchActive: {
+    borderColor: '#111',
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    transform: [{ scale: 1.08 }],
+  },
 
   inviteLabel: { fontSize: 13, color: colors.textSecondary, marginTop: 4, fontFamily: fonts.regular },
   codeCard: {

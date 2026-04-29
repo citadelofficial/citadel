@@ -17,7 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { colors, fonts } from '../theme';
 import { AnimatedPressable } from '../components/AnimatedPressable';
-import { friendsDirectory } from '../data/friends';
+
 import { supabase } from '../lib/supabase';
 import { uploadAvatar } from '../lib/storage';
 import { normalizeSchoolName } from '../lib/schoolUtils';
@@ -30,6 +30,7 @@ interface Props {
     onBack: () => void;
     onLogout: () => void;
     classes: ClassData[];
+    friends?: FriendData[];
     session: Session | null;
     onPersonOpen?: (person: FriendData) => void;
     onInfoPage?: (page: 'help' | 'terms' | 'privacy') => void;
@@ -55,11 +56,19 @@ function SchoolEditField({ value, onChange, onSave, saveScale, saveSpinInterp }:
             try {
                 const { data } = await supabase
                     .from('profiles')
-                    .select('school')
-                    .not('school', 'is', null)
-                    .not('school', 'eq', '');
+                    .select('school, schools');
                 if (data) {
-                    const unique = [...new Set(data.map((r: any) => r.school as string).filter(Boolean))];
+                    const allNames: string[] = [];
+                    for (const row of data) {
+                        const r = row as any;
+                        if (r.school && typeof r.school === 'string') allNames.push(r.school);
+                        if (Array.isArray(r.schools)) {
+                            for (const s of r.schools) {
+                                if (s && typeof s === 'string') allNames.push(s);
+                            }
+                        }
+                    }
+                    const unique = [...new Set(allNames.filter(Boolean))];
                     setAllSchools(unique.sort());
                 }
             } catch (e) {
@@ -147,7 +156,8 @@ export function ProfileScreen({
     onRateApp,
     onShareApp,
     onReplayTutorial,
-    onSchoolOpen
+    onSchoolOpen,
+    friends = [],
 }: Props) {
     const [editName, setEditName] = useState(userData.name || '');
     const [editUsername, setEditUsername] = useState(userData.username || '');
@@ -352,27 +362,31 @@ export function ProfileScreen({
         ]);
     };
 
-    // Fetch real schoolmates from Supabase
-    const [schoolmates, setSchoolmates] = useState<{id: string; name: string; color: string; status: 'online' | 'studying' | 'offline'; school?: string; avatarUrl?: string | null}[]>([]);
+    // Fetch real schoolmates from Supabase (including self for accurate count)
+    const [schoolmates, setSchoolmates] = useState<{id: string; name: string; color: string; status: 'online' | 'studying' | 'offline'; schoolList: string[]; avatarUrl?: string | null; isMe?: boolean}[]>([]);
     useEffect(() => {
         if (!userData.schools || userData.schools.length === 0 || !session?.user?.id) return;
         (async () => {
             try {
-                // Query schoolmates across all schools
+                // Fetch all profiles with school data, then filter client-side
+                // (avoids PostgREST filter issues with school names containing commas/quotes)
                 const { data } = await supabase
                     .from('profiles')
-                    .select('id, username, display_name, school, avatar_url')
-                    .in('school', userData.schools)
-                    .neq('id', session.user.id)
-                    .limit(10);
+                    .select('id, username, display_name, school, schools, avatar_url');
                 if (data) {
-                    setSchoolmates(data.map((p: any) => ({
+                    const mySchoolsLower = userData.schools.map(s => s.toLowerCase());
+                    const matching = data.filter((p: any) => {
+                        const personSchools: string[] = Array.isArray(p.schools) ? p.schools : (p.school ? [p.school] : []);
+                        return personSchools.some(s => mySchoolsLower.includes(s.toLowerCase()));
+                    });
+                    setSchoolmates(matching.map((p: any) => ({
                         id: p.id,
                         name: p.display_name || p.username || 'User',
                         color: '#E0E7FF',
                         status: 'offline' as const,
-                        school: p.school || '',
+                        schoolList: Array.isArray(p.schools) ? p.schools : (p.school ? [p.school] : []),
                         avatarUrl: p.avatar_url || null,
+                        isMe: p.id === session.user.id,
                     })));
                 }
             } catch (e) {
@@ -442,7 +456,7 @@ export function ProfileScreen({
                         </View>
                         <View style={styles.statDivider} />
                         <View style={styles.statItem}>
-                            <Text style={styles.statValue}>{friendsDirectory.length}</Text>
+                            <Text style={styles.statValue}>{friends.length}</Text>
                             <Text style={styles.statLabel}>Friends</Text>
                         </View>
                     </View>
@@ -489,7 +503,7 @@ export function ProfileScreen({
                                             <TextInput
                                                 style={styles.editInput}
                                                 value={editUsername}
-                                                onChangeText={(t) => setEditUsername(t.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase())}
+                                                onChangeText={(t) => setEditUsername(t.replace(/[^a-zA-Z0-9_.]/g, '').toLowerCase())}
                                                 autoCapitalize="none"
                                                 autoCorrect={false}
                                                 autoFocus
@@ -640,7 +654,11 @@ export function ProfileScreen({
                         <>
                             <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Your Schools</Text>
                             {userData.schools.map((schoolName) => {
-                                const membersAtSchool = schoolmates.filter(p => p.school === schoolName);
+                                const membersAtSchool = schoolmates.filter(p => 
+                                    p.schoolList.some(s => s.toLowerCase() === schoolName.toLowerCase())
+                                );
+                                const totalCount = membersAtSchool.length;
+                                const otherMembers = membersAtSchool.filter(m => !m.isMe);
                                 return (
                                     <TouchableOpacity
                                         key={schoolName}
@@ -663,7 +681,7 @@ export function ProfileScreen({
                                         <View style={{ flex: 1 }}>
                                             <Text style={{ fontSize: 15, fontFamily: fonts.bold, color: colors.textPrimary, marginBottom: 2 }}>{schoolName}</Text>
                                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                                                {membersAtSchool.slice(0, 3).map((m, idx) => (
+                                                {otherMembers.slice(0, 3).map((m, idx) => (
                                                     <View key={m.id} style={{
                                                         width: 22, height: 22, borderRadius: 11,
                                                         backgroundColor: '#E0E7FF', alignItems: 'center', justifyContent: 'center',
@@ -678,7 +696,7 @@ export function ProfileScreen({
                                                     </View>
                                                 ))}
                                                 <Text style={{ fontSize: 12, fontFamily: fonts.medium, color: colors.textSecondary }}>
-                                                    {membersAtSchool.length > 0 ? `${membersAtSchool.length} member${membersAtSchool.length > 1 ? 's' : ''}` : 'No members yet'}
+                                                    {totalCount > 0 ? `${totalCount} member${totalCount > 1 ? 's' : ''} (incl. you)` : 'No members yet'}
                                                 </Text>
                                             </View>
                                         </View>

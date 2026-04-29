@@ -36,10 +36,10 @@ type ShortcutType = 'class' | 'school';
 type ClassTemplate = 'Standard' | 'AP Class';
 
 type SearchResult =
-  | { id: string; type: 'class'; title: string; subtitle: string; classId: string }
-  | { id: string; type: 'file'; title: string; subtitle: string; classId: string }
-  | { id: string; type: 'friend'; title: string; subtitle: string }
-  | { id: string; type: 'action'; title: string; subtitle: string; actionId: 'scan' | 'files' | 'friends' };
+  | { id: string; type: 'class'; title: string; subtitle: string; classId: string; matchContext?: string }
+  | { id: string; type: 'file'; title: string; subtitle: string; classId: string; matchContext?: string; noteId?: number }
+  | { id: string; type: 'friend'; title: string; subtitle: string; matchContext?: string }
+  | { id: string; type: 'action'; title: string; subtitle: string; actionId: 'scan' | 'files' | 'friends'; matchContext?: string };
 
 interface ShortcutItem {
   id: string;
@@ -49,7 +49,7 @@ interface ShortcutItem {
 }
 
 interface Props {
-  onCourseOpen: (classId: string) => void;
+  onCourseOpen: (classId: string, noteId?: number) => void;
   onFilesOpen: (classId?: string) => void;
   onScanOpen: () => void;
   onFriendsOpen: () => void;
@@ -576,16 +576,35 @@ export function HomeScreen({
       classId: cls.id,
     }));
 
-    const fileResults: SearchResult[] = classes.flatMap((cls) =>
-      cls.files.map((file) => ({
-        id: `file-${cls.id}-${file.id}`,
-        type: 'file',
-        title: file.name,
-        subtitle: `${cls.title} • ${file.pages} pages`,
-        classId: cls.id,
-      }))
+    // Search within subunit notes (the real notes inside units)
+    const noteResults: SearchResult[] = classes.flatMap((cls) =>
+      cls.units.flatMap((unit) =>
+        unit.subUnits.flatMap((sub) =>
+          sub.notes.map((note) => {
+            let matchContext: string | undefined;
+            if (q && note.content) {
+              const idx = note.content.toLowerCase().indexOf(q);
+              if (idx >= 0) {
+                const start = Math.max(0, idx - 30);
+                const end = Math.min(note.content.length, idx + q.length + 30);
+                matchContext = (start > 0 ? '…' : '') + note.content.slice(start, end).trim() + (end < note.content.length ? '…' : '');
+              }
+            }
+            return {
+              id: `note-${cls.id}-${note.id}`,
+              type: 'file' as const,
+              title: note.title,
+              subtitle: `${cls.title} • ${sub.title} • ${note.pages} page${note.pages !== 1 ? 's' : ''}`,
+              classId: cls.id,
+              matchContext,
+              noteId: note.id,
+            };
+          })
+        )
+      )
     );
 
+    // Use real friends from friendsDirectory for now, but search includes note content matches
     const friendResults: SearchResult[] = friendsDirectory.map((friend) => ({
       id: `friend-${friend.id}`,
       type: 'friend',
@@ -594,12 +613,12 @@ export function HomeScreen({
     }));
 
     const actionResults: SearchResult[] = [
-      { id: 'action-scan', type: 'action', title: 'Open Scan', subtitle: 'Capture notes or files', actionId: 'scan' },
-      { id: 'action-files', type: 'action', title: 'Open Files', subtitle: 'Browse all class files', actionId: 'files' },
-      { id: 'action-friends', type: 'action', title: 'Open Friends', subtitle: 'Start chat or calls', actionId: 'friends' },
+      { id: 'action-scan', type: 'action', title: 'Scan Notes', subtitle: 'Camera, gallery, or document import', actionId: 'scan' },
+      { id: 'action-files', type: 'action', title: 'Browse Files', subtitle: 'View all class files & notes', actionId: 'files' },
+      { id: 'action-friends', type: 'action', title: 'People & Chat', subtitle: 'Friends, requests, and messaging', actionId: 'friends' },
     ];
 
-    let merged = [...classResults, ...fileResults, ...friendResults, ...actionResults];
+    let merged = [...classResults, ...noteResults, ...friendResults, ...actionResults];
 
     if (searchFilter !== 'all') {
       merged = merged.filter((item) => {
@@ -612,14 +631,32 @@ export function HomeScreen({
 
     if (!q) return merged.slice(0, 8);
 
+    // Fuzzy matching with scoring
     return merged
-      .filter((item) => `${item.title} ${item.subtitle}`.toLowerCase().includes(q))
-      .sort((a, b) => {
-        const aStarts = a.title.toLowerCase().startsWith(q) ? 0 : 1;
-        const bStarts = b.title.toLowerCase().startsWith(q) ? 0 : 1;
-        return aStarts - bStarts;
+      .map((item) => {
+        const titleLower = item.title.toLowerCase();
+        const subtitleLower = item.subtitle.toLowerCase();
+        const contextLower = item.matchContext?.toLowerCase() || '';
+        let score = 0;
+
+        if (titleLower === q) score = 100;
+        else if (titleLower.startsWith(q)) score = 80;
+        else if (titleLower.includes(q)) score = 60;
+        else if (subtitleLower.includes(q)) score = 40;
+        else if (contextLower.includes(q)) score = 30;
+        else {
+          // Fuzzy: check if all words in query appear somewhere
+          const words = q.split(/\s+/);
+          const allText = `${titleLower} ${subtitleLower} ${contextLower}`;
+          const allMatch = words.every(w => allText.includes(w));
+          if (allMatch) score = 20;
+        }
+
+        return { ...item, _score: score };
       })
-      .slice(0, 10);
+      .filter((item) => item._score > 0)
+      .sort((a, b) => b._score - a._score)
+      .slice(0, 12);
   }, [classes, searchFilter, searchQuery]);
 
   const tutorialGuide = useMemo<GuideContent | null>(() => {
@@ -628,18 +665,16 @@ export function HomeScreen({
         step: 1,
         title: 'Create your first class',
         body: showClassModal
-          ? 'Finish this class setup, then tap Create Class to continue.'
-          : 'Tap the highlighted Create / Join Class card to start building your schedule.',
+          ? 'Almost there! Fill in the details and tap Create Class when you\'re ready.'
+          : 'Tap the Create / Join Class card below to get started with your first class.',
       };
     }
 
     if (tutorialStep === 2 && !showClassModal) {
       return {
         step: 2,
-        title: 'Open your class',
-        body: tutorialFocusClassId
-          ? 'Tap the highlighted class card to open it and start working inside it.'
-          : 'Tap any class card to open it and start working inside it.',
+        title: 'Jump into your class',
+        body: 'Great job! Now tap your class card to explore units, notes, quizzes, and more inside it.',
       };
     }
 
@@ -686,11 +721,11 @@ export function HomeScreen({
     return () => clearTimeout(timer);
   }, [classes, tutorialFocusClassId, tutorialStep]);
 
-  const openCourse = useCallback((classId: string) => {
+  const openCourse = useCallback((classId: string, noteId?: number) => {
     if (tutorialStep === 2) {
       onTutorialNext();
     }
-    onCourseOpen(classId);
+    onCourseOpen(classId, noteId);
   }, [onCourseOpen, onTutorialNext, tutorialStep]);
 
   const toggleLike = useCallback((id: string) => {
@@ -798,11 +833,19 @@ export function HomeScreen({
   };
 
   const closeClassModal = useCallback(() => {
+    if (tutorialStep > 0) {
+      Alert.alert(
+        'Skip Tutorial?',
+        'You can always replay it from your profile settings.',
+        [
+          { text: 'Continue Tutorial', style: 'cancel', onPress: () => {} },
+          { text: 'Skip', style: 'destructive', onPress: () => { setShowClassModal(false); setShowAPPicker(false); onTutorialSkip(); } },
+        ]
+      );
+      return;
+    }
     setShowClassModal(false);
     setShowAPPicker(false);
-    if (tutorialStep > 0) {
-      onTutorialSkip();
-    }
   }, [onTutorialSkip, tutorialStep]);
 
   const handleTutorialAdvance = useCallback(() => {
@@ -900,7 +943,7 @@ export function HomeScreen({
     if (item.type === 'class') {
       openCourse(item.classId);
     } else if (item.type === 'file') {
-      onFilesOpen(item.classId);
+      openCourse(item.classId, item.noteId);
     } else if (item.type === 'friend') {
       onFriendsOpen();
     } else {
@@ -1138,8 +1181,17 @@ export function HomeScreen({
               </TouchableOpacity>
             )}
           </View>
-          <TouchableOpacity style={[styles.filterBtn, searchFilter !== 'all' && styles.filterBtnActive]} onPress={() => setShowFilterMenu((v) => !v)}>
-            <Ionicons name="options" size={20} color="white" />
+          <TouchableOpacity
+            style={[
+              styles.filterBtn,
+              searchFilter !== 'all' && styles.filterBtnActive,
+            ]}
+            onPress={() => setShowFilterMenu((v) => !v)}
+          >
+            <Ionicons name="options" size={18} color="white" />
+            {searchFilter !== 'all' && (
+              <View style={{ position: 'absolute', top: 4, right: 4, width: 8, height: 8, borderRadius: 4, backgroundColor: '#F59E0B', borderWidth: 1.5, borderColor: 'white' }} />
+            )}
           </TouchableOpacity>
         </View>
 
@@ -1194,32 +1246,63 @@ export function HomeScreen({
         {searchQuery.trim().length > 0 && (
           <View style={styles.searchResultsBox}>
             {searchResults.length === 0 ? (
-              <Text style={styles.searchEmpty}>No results found</Text>
+              <View style={{ padding: 24, alignItems: 'center' }}>
+                <View style={{ width: 48, height: 48, borderRadius: 16, backgroundColor: '#FFF5ED', alignItems: 'center', justifyContent: 'center', marginBottom: 10 }}>
+                  <Ionicons name="search-outline" size={24} color={colors.textTertiary} />
+                </View>
+                <Text style={{ fontSize: 15, fontFamily: fonts.bold, color: colors.textPrimary, marginBottom: 4 }}>No results for "{searchQuery.trim()}"</Text>
+                <Text style={{ fontSize: 12, fontFamily: fonts.regular, color: colors.textTertiary, textAlign: 'center' }}>Try a different keyword or check your filter</Text>
+              </View>
             ) : (
-              searchResults.map((item) => (
-                <TouchableOpacity key={item.id} style={styles.searchResultRow} onPress={() => handleSearchSelect(item)}>
-                  <View style={styles.searchResultIcon}>
-                    <Ionicons
-                      name={
-                        item.type === 'class'
-                          ? 'book'
-                          : item.type === 'file'
-                            ? 'document-text'
-                            : item.type === 'friend'
-                              ? 'people'
-                              : 'flash'
-                      }
-                      size={15}
-                      color={colors.maroon}
-                    />
+              <>
+                {/* Results header */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6 }}>
+                  <Text style={{ fontSize: 12, fontFamily: fonts.semiBold, color: colors.textTertiary, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    {searchResults.length} result{searchResults.length !== 1 ? 's' : ''}
+                  </Text>
+                  <View style={{ flexDirection: 'row', gap: 4 }}>
+                    {['class', 'file', 'friend', 'action'].map(t => {
+                      const count = searchResults.filter(r => r.type === t).length;
+                      if (count === 0) return null;
+                      const color = t === 'class' ? '#7C3AED' : t === 'file' ? '#2563EB' : t === 'friend' ? '#059669' : '#F59E0B';
+                      return (
+                        <View key={t} style={{ flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: `${color}12`, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
+                          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: color }} />
+                          <Text style={{ fontSize: 10, fontFamily: fonts.semiBold, color }}>{count}</Text>
+                        </View>
+                      );
+                    })}
                   </View>
-                  <View style={styles.searchResultInfo}>
-                    <Text style={styles.searchResultTitle}>{item.title}</Text>
-                    <Text style={styles.searchResultSub}>{item.subtitle}</Text>
-                  </View>
-                  <Ionicons name="arrow-forward" size={16} color={colors.textTertiary} />
-                </TouchableOpacity>
-              ))
+                </View>
+
+                {searchResults.map((item, index) => {
+                  const iconName = item.type === 'class' ? 'book' : item.type === 'file' ? 'document-text' : item.type === 'friend' ? 'person' : 'flash';
+                  const accentColor = item.type === 'class' ? '#7C3AED' : item.type === 'file' ? '#2563EB' : item.type === 'friend' ? '#059669' : '#F59E0B';
+                  const typeBadge = item.type === 'class' ? 'Class' : item.type === 'file' ? 'Note' : item.type === 'friend' ? 'Person' : 'Action';
+                  return (
+                    <TouchableOpacity key={item.id} style={styles.searchResultRow} onPress={() => handleSearchSelect(item)} activeOpacity={0.6}>
+                      <View style={[styles.searchResultIcon, { backgroundColor: `${accentColor}12` }]}>
+                        <Ionicons name={iconName} size={16} color={accentColor} />
+                      </View>
+                      <View style={styles.searchResultInfo}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Text style={styles.searchResultTitle} numberOfLines={1}>{item.title}</Text>
+                          <View style={{ backgroundColor: `${accentColor}15`, paddingHorizontal: 6, paddingVertical: 1, borderRadius: 5 }}>
+                            <Text style={{ fontSize: 9, fontFamily: fonts.bold, color: accentColor, textTransform: 'uppercase', letterSpacing: 0.3 }}>{typeBadge}</Text>
+                          </View>
+                        </View>
+                        <Text style={styles.searchResultSub} numberOfLines={1}>{item.subtitle}</Text>
+                        {item.matchContext && (
+                          <Text style={{ fontSize: 11, fontFamily: fonts.regular, color: '#6366F1', marginTop: 3 }} numberOfLines={1}>
+                            "{item.matchContext}"
+                          </Text>
+                        )}
+                      </View>
+                      <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+                    </TouchableOpacity>
+                  );
+                })}
+              </>
             )}
           </View>
         )}
@@ -1228,7 +1311,7 @@ export function HomeScreen({
           <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Shortcuts</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.shortcuts} contentContainerStyle={styles.shortcutsContent}>
             <AnimatedPressable style={styles.shortcutAdd} onPress={() => setShowShortcutModal(true)} scaleDown={0.88}>
-              <Ionicons name="add" size={24} color="white" />
+              <Ionicons name="add" size={20} color="white" />
             </AnimatedPressable>
 
             {shortcuts.map((shortcut) => (
@@ -2151,13 +2234,30 @@ export function HomeScreen({
                       </View>
 
                       <Text style={styles.modalLabel}>Theme Color</Text>
-                      <View style={styles.colorRow}>
-                        {['#3D0C11', '#0f766e', '#1d4ed8', '#7c3aed', '#b45309'].map((color) => (
+                      <View style={styles.colorGrid}>
+                        {[
+                          { hex: '#3D0C11', label: 'Maroon' },
+                          { hex: '#0f766e', label: 'Teal' },
+                          { hex: '#1d4ed8', label: 'Royal' },
+                          { hex: '#7c3aed', label: 'Purple' },
+                          { hex: '#b45309', label: 'Amber' },
+                          { hex: '#be185d', label: 'Rose' },
+                          { hex: '#059669', label: 'Emerald' },
+                          { hex: '#4338ca', label: 'Indigo' },
+                          { hex: '#dc2626', label: 'Coral' },
+                          { hex: '#475569', label: 'Slate' },
+                          { hex: '#166534', label: 'Forest' },
+                          { hex: '#7f1d1d', label: 'Wine' },
+                        ].map(({ hex, label }) => (
                           <TouchableOpacity
-                            key={color}
-                            style={[styles.colorDot, { backgroundColor: color }, newClassColor === color && styles.colorDotActive]}
-                            onPress={() => setNewClassColor(color)}
-                          />
+                            key={hex}
+                            style={[styles.colorSwatch, { backgroundColor: hex }, newClassColor === hex && styles.colorSwatchActive]}
+                            onPress={() => setNewClassColor(hex)}
+                          >
+                            {newClassColor === hex && (
+                              <Ionicons name="checkmark" size={16} color="white" />
+                            )}
+                          </TouchableOpacity>
                         ))}
                       </View>
 
@@ -2440,10 +2540,10 @@ const styles = StyleSheet.create({
   },
   avatar: { width: '100%', height: '100%' },
   searchRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 14 },
-  searchBox: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 20, paddingHorizontal: 20, height: 54, gap: 12, borderWidth: 2, borderColor: '#F0E0D0' },
+  searchBox: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: 'white', borderRadius: 18, paddingHorizontal: 18, height: 48, gap: 10, borderWidth: 2, borderColor: '#F0E0D0' },
   searchInput: { flex: 1, fontSize: 14, color: colors.textPrimary, paddingVertical: 0, fontFamily: fonts.medium },
-  filterBtn: { width: 54, height: 54, borderRadius: 20, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
-  filterBtnActive: { backgroundColor: '#7f1d1d' },
+  filterBtn: { width: 48, height: 48, borderRadius: 16, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
+  filterBtnActive: { backgroundColor: colors.maroon },
   filterMenu: {
     marginTop: 10,
     flexDirection: 'row',
@@ -2462,21 +2562,26 @@ const styles = StyleSheet.create({
   searchResultsBox: {
     marginTop: 10,
     backgroundColor: 'white',
-    borderRadius: 20,
+    borderRadius: 22,
     borderWidth: 2,
     borderColor: '#F0E0D0',
     overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 4,
   },
   searchResultRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingVertical: 13,
     borderBottomWidth: 1,
-    borderBottomColor: '#FFF5ED',
+    borderBottomColor: '#F9F0E7',
   },
-  searchResultIcon: { width: 34, height: 34, borderRadius: 12, backgroundColor: '#FFF5ED', alignItems: 'center', justifyContent: 'center' },
+  searchResultIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: '#FFF5ED', alignItems: 'center', justifyContent: 'center' },
   searchResultInfo: { flex: 1 },
   searchResultTitle: { fontSize: 14, fontFamily: fonts.bold, color: colors.textPrimary },
   searchResultSub: { fontSize: 11, color: colors.textSecondary, marginTop: 2, fontFamily: fonts.regular },
@@ -2551,7 +2656,7 @@ const styles = StyleSheet.create({
   },
   shortcuts: { marginTop: 10 },
   shortcutsContent: { paddingRight: 24, gap: 12, flexDirection: 'row', alignItems: 'center' },
-  shortcutAdd: { width: 56, height: 56, borderRadius: 18, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
+  shortcutAdd: { width: 44, height: 44, borderRadius: 14, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' },
   shortcut: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'white', paddingHorizontal: 20, paddingVertical: 14, borderRadius: 20, borderWidth: 2, borderColor: '#F0E0D0' },
   shortcutLabel: { fontSize: 14, fontFamily: fonts.medium, color: colors.textPrimary, maxWidth: 130 },
   shortcutOptionRow: {
@@ -2789,6 +2894,32 @@ const styles = StyleSheet.create({
   colorRow: { flexDirection: 'row', gap: 12, marginTop: 8 },
   colorDot: { width: 30, height: 30, borderRadius: 12, borderWidth: 3, borderColor: 'transparent' },
   colorDotActive: { borderColor: '#111' },
+  colorGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 8,
+  },
+  colorSwatch: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2.5,
+    borderColor: 'transparent',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  colorSwatchActive: {
+    borderColor: '#111',
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    transform: [{ scale: 1.08 }],
+  },
   // === Schedule & Tasks ===
   blockCard: {
     width: 100,

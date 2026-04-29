@@ -59,17 +59,25 @@ export function OnboardingScreen({ onGetStarted, onSignIn }: Props) {
   // "Did you mean?" state
   const [suggestedMatch, setSuggestedMatch] = useState<{ match: string; score: number } | null>(null);
 
-  // Fetch existing schools from profiles
+  // Fetch existing schools from profiles (both primary and secondary)
   useEffect(() => {
     (async () => {
       try {
         const { data } = await supabase
           .from('profiles')
-          .select('school')
-          .not('school', 'is', null)
-          .not('school', 'eq', '');
+          .select('school, schools');
         if (data) {
-          const unique = [...new Set(data.map((r: any) => r.school as string).filter(Boolean))];
+          const allNames: string[] = [];
+          for (const row of data) {
+            const r = row as any;
+            if (r.school && typeof r.school === 'string') allNames.push(r.school);
+            if (Array.isArray(r.schools)) {
+              for (const s of r.schools) {
+                if (s && typeof s === 'string') allNames.push(s);
+              }
+            }
+          }
+          const unique = [...new Set(allNames.filter(Boolean))];
           setDbSchools(unique.sort());
         }
       } catch (e) {
@@ -500,7 +508,7 @@ export function OnboardingScreen({ onGetStarted, onSignIn }: Props) {
                   placeholder="your_username"
                   placeholderTextColor={colors.textTertiary}
                   value={username}
-                  onChangeText={(text) => setUsername(text.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase())}
+                  onChangeText={(text) => setUsername(text.replace(/[^a-zA-Z0-9_.]/g, '').toLowerCase())}
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
