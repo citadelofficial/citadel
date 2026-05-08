@@ -349,6 +349,38 @@ Respond with ONLY the hint text, nothing else.`;
   }
 }
 
+// ─── Answer Explanation Generation ──────────────────────────────
+export async function generateAnswerExplanation(
+  question: string,
+  options: string[],
+  correctIndex: number,
+  selectedIndex: number | null,
+): Promise<string> {
+  try {
+    checkRateLimit();
+    const client = getClient();
+    const prompt = `You are a helpful teacher reviewing a multiple-choice question with a student.
+
+Question: ${question}
+Options:
+${options.map((o, i) => `${['A', 'B', 'C', 'D'][i]}) ${o}`).join('\n')}
+
+Correct answer: ${['A', 'B', 'C', 'D'][correctIndex]}) ${options[correctIndex]}
+Student answer: ${selectedIndex === null ? 'No answer selected' : `${['A', 'B', 'C', 'D'][selectedIndex]}) ${options[selectedIndex]}`}
+
+Explain in 2-4 concise sentences why the correct answer is right. If the student picked a wrong answer, also explain the specific misconception behind that choice. Use plain student-friendly language and do not mention that you are an AI.`;
+
+    const response = await client.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+    });
+
+    return response?.text?.trim() || 'The correct answer best matches what the question is asking. Review the key idea and compare each option carefully.';
+  } catch (err) {
+    return formatError(err);
+  }
+}
+
 // ─── Quiz Generation ─────────────────────────────────────────────
 export interface QuizGenerationResult {
   success: boolean;
@@ -450,5 +482,157 @@ ${notesText}`;
     };
   } catch (err) {
     return { success: false, questions: [], title: 'Quiz', error: formatError(err) };
+  }
+}
+
+// ─── AP Practice Test Generation ────────────────────────────────
+export async function generateAPPracticeTest(
+  courseTitle: string,
+  topicOutline: { unitTitle: string; sections: string[] }[],
+  questionCount: number = 18,
+  difficulty: 'mixed' | 'easy' | 'medium' | 'hard' = 'mixed',
+): Promise<QuizGenerationResult> {
+  try {
+    checkRateLimit();
+
+    const client = getClient();
+
+    const outlineText = topicOutline.length > 0
+      ? topicOutline
+        .map((unit, i) => {
+          const sections = unit.sections.length > 0
+            ? unit.sections.map((section) => `  - ${section}`).join('\n')
+            : '  - Broad review of this unit';
+          return `Unit ${i + 1}: ${unit.unitTitle}\n${sections}`;
+        })
+        .join('\n\n')
+      : 'Use the standard College Board AP course framework for this subject.';
+
+    const difficultyInstruction =
+      difficulty === 'easy'
+        ? 'Use mostly foundational AP questions: definitions, core concepts, straightforward applications, and approachable distractors.'
+        : difficulty === 'medium'
+          ? 'Use standard AP exam difficulty: a balanced mix of recall, application, interpretation, and multi-step reasoning.'
+          : difficulty === 'hard'
+            ? 'Use challenging AP exam difficulty: multi-step reasoning, subtle distractors, cross-topic synthesis, data/stimulus interpretation, and higher-order application.'
+            : 'Use mixed AP exam difficulty: include foundational, standard, and challenging questions in the same set.';
+
+    const prompt = `You are an expert AP exam prep teacher. Generate exactly ${questionCount} AP-style multiple-choice practice questions for ${courseTitle}.
+
+This is NOT a normal class-note quiz. It must be a comprehensive AP practice set built from the official-style course topics and broad exam expectations. Do NOT rely on student notes, uploaded files, or user-provided note content.
+
+Selected topic outline:
+${outlineText}
+
+Difficulty target: ${difficulty}
+${difficultyInstruction}
+
+Rules:
+- Cover the selected topic outline as evenly as possible, not just one unit unless only one unit is selected
+- Make questions more comprehensive than a normal quiz: include cross-unit reasoning, application, interpretation, and exam-style distractors
+- Use AP-style wording appropriate to the subject
+- For history, social science, literature, art history, and geography, include stimulus-style questions when useful
+- For science, math, and economics, include data, equations, graphs described in text, calculations, experimental reasoning, or model interpretation when useful
+- For world language courses, test interpretive communication, vocabulary in context, grammar, cultural comparison, and reading comprehension in the target language when appropriate
+- Each question must have exactly 4 answer options
+- Only ONE option should be correct
+- Make wrong options plausible but clearly distinguishable from the correct answer
+- For math and science notation, use plain text notation (^ for exponents, / for fractions, sqrt() for roots)
+- Each question MUST include a short hint that nudges the student without giving away the answer
+
+You MUST respond with valid JSON only, no markdown, no code fences. Use this exact format:
+{
+  "title": "AP Practice: <course name>",
+  "questions": [
+    {
+      "question": "AP-style question text...",
+      "options": ["Option A", "Option B", "Option C", "Option D"],
+      "correctIndex": 0,
+      "hint": "A short nudge that does not reveal the answer."
+    }
+  ]
+}
+
+The correctIndex is 0-based (0=A, 1=B, 2=C, 3=D).`;
+
+    const response = await client.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+    });
+
+    const rawText = response?.text?.trim() || '';
+
+    if (!rawText) {
+      return { success: false, questions: [], title: 'AP Practice', error: 'AI returned empty response' };
+    }
+
+    const cleanJson = rawText.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+    const parsed = JSON.parse(cleanJson);
+
+    if (!parsed.questions || !Array.isArray(parsed.questions) || parsed.questions.length === 0) {
+      return { success: false, questions: [], title: 'AP Practice', error: 'No questions in AI response' };
+    }
+
+    const validQuestions = parsed.questions
+      .filter((q: any) =>
+        q.question &&
+        Array.isArray(q.options) &&
+        q.options.length === 4 &&
+        typeof q.correctIndex === 'number' &&
+        q.correctIndex >= 0 &&
+        q.correctIndex <= 3
+      )
+      .map((q: any) => ({
+        question: q.question,
+        options: q.options,
+        correctIndex: q.correctIndex,
+        hint: q.hint || undefined,
+      }))
+      .slice(0, questionCount);
+
+    if (validQuestions.length === 0) {
+      return { success: false, questions: [], title: 'AP Practice', error: 'No valid questions generated' };
+    }
+
+    return {
+      success: true,
+      questions: validQuestions,
+      title: parsed.title || `AP Practice: ${courseTitle}`,
+    };
+  } catch (err) {
+    return { success: false, questions: [], title: 'AP Practice', error: formatError(err) };
+  }
+}
+
+// ─── Quiz Advice Generation ─────────────────────────────────────
+export async function generateQuizAdvice(
+  questions: { question: string; options: string[]; correctIndex: number }[],
+  userAnswers: (number | null)[],
+): Promise<string> {
+  try {
+    checkRateLimit();
+    const client = getClient();
+
+    const missed = questions
+      .map((q, i) => ({ ...q, userAnswer: userAnswers[i], index: i }))
+      .filter((q) => q.userAnswer !== q.correctIndex);
+
+    if (missed.length === 0) {
+      return 'You got everything right — keep up the great work!';
+    }
+
+    const missedText = missed
+      .map((q) => `Q: ${q.question}\nCorrect: ${q.options[q.correctIndex]}${q.userAnswer !== null ? `\nStudent picked: ${q.options[q.userAnswer]}` : '\nStudent skipped'}`)
+      .join('\n\n');
+
+    const prompt = `A student just took a quiz. Here are the questions they got wrong:\n\n${missedText}\n\nIn 1-2 short sentences, give them friendly, specific study advice about what concepts or topics they should focus on to improve. Be concise and encouraging. Do not list the questions back.`;
+
+    const response = await client.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+    });
+    return response?.text?.trim() || 'Review the concepts you missed and try again!';
+  } catch {
+    return 'Review the concepts you missed and try again!';
   }
 }

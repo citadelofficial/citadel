@@ -226,8 +226,8 @@ export function FilesScreen({
   }, [currentClass, files, fileQuery, fileFilter]);
   const tutorialGuide = tutorialStep === 4 ? {
     step: 4,
-    title: 'Your file workspace',
-    body: 'All your scans, uploads, and merged notes live here — organized by class. Tap Scan in the nav bar to capture something new.',
+    title: 'Find what you save',
+    body: 'Files collects scans, uploads, and merged notes in one searchable workspace. Next, jump to Scan so you can add something new.',
   } : null;
 
   const filteredFiles = useMemo(() => {
@@ -511,6 +511,7 @@ export function FilesScreen({
               onDismiss={onTutorialSkip}
               onPrevious={onTutorialBack}
               onNext={onTutorialNext}
+              nextLabel="Go to Scan"
             />
           )}
 
@@ -872,6 +873,7 @@ export function FilesScreen({
             onDismiss={onTutorialSkip}
             onPrevious={onTutorialBack}
             onNext={onTutorialNext}
+            nextLabel="Go to Scan"
           />
         )}
 

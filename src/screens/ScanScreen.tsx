@@ -122,8 +122,8 @@ export function ScanScreen({
   const [newClassBlock, setNewClassBlock] = useState('');
   const tutorialGuide = tutorialStep === 5 ? {
     step: 5,
-    title: 'Scan your notes',
-    body: 'Use Smart Scan to capture notes, documents, and whiteboards — they\'re saved straight into your class. Tap People below when you\'re ready to connect.',
+    title: 'Capture the next handout',
+    body: 'Scan paper notes, whiteboards, or worksheets and save them directly to a class. Next, head to People so sharing has somewhere to go.',
   } : null;
 
   const recentScans = useMemo(
@@ -477,6 +477,7 @@ export function ScanScreen({
               onDismiss={onTutorialSkip}
               onPrevious={onTutorialBack}
               onNext={onTutorialNext}
+              nextLabel="Go to People"
             />
           </View>
         )}
@@ -1343,4 +1344,3 @@ const scanExtraStyles = StyleSheet.create({
     color: colors.maroon,
   },
 });
-

@@ -51,57 +51,61 @@ export function InlineTutorialCard({
   }, [step]);
 
   const icon = STEP_ICONS[step] || 'compass';
-  const progress = step / totalSteps;
+  const progressPercent = `${Math.max(0, Math.min(100, (step / totalSteps) * 100))}%` as `${number}%`;
 
   return (
     <Animated.View style={[
       styles.card,
       { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
     ]}>
-      {/* Header */}
       <View style={styles.header}>
         <View style={styles.iconWrap}>
           <Ionicons name={icon} size={18} color={colors.maroon} />
         </View>
         <View style={styles.headerText}>
-          <Text style={styles.stepLabel}>Step {step} of {totalSteps}</Text>
+          <Text style={styles.stepLabel}>Guided setup • Step {step} of {totalSteps}</Text>
           <Text style={styles.title}>{title}</Text>
         </View>
-        <TouchableOpacity onPress={onDismiss} hitSlop={10} style={styles.closeBtn}>
+        <TouchableOpacity
+          onPress={onDismiss}
+          hitSlop={10}
+          style={styles.closeBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Skip tutorial"
+        >
           <Ionicons name="close" size={14} color={colors.textTertiary} />
         </TouchableOpacity>
       </View>
 
-      {/* Body */}
       <Text style={styles.body}>{body}</Text>
 
-      {/* Progress dots */}
-      <View style={styles.dotsRow}>
-        {Array.from({ length: totalSteps }).map((_, i) => {
-          const done = i + 1 < step;
-          const active = i + 1 === step;
-          return (
-            <View
-              key={i}
-              style={[
-                styles.dot,
-                done && styles.dotDone,
-                active && styles.dotActive,
-              ]}
-            />
-          );
-        })}
+      <View style={styles.progressWrap}>
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: progressPercent }]} />
+        </View>
+        <Text style={styles.progressText}>{Math.round((step / totalSteps) * 100)}%</Text>
       </View>
 
-      {/* Footer */}
       <View style={styles.footer}>
         {onPrevious ? (
-          <TouchableOpacity onPress={onPrevious} style={styles.secondaryBtn} activeOpacity={0.7}>
+          <TouchableOpacity
+            onPress={onPrevious}
+            style={styles.secondaryBtn}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={previousLabel}
+          >
             <Ionicons name="chevron-back" size={13} color={colors.textSecondary} />
             <Text style={styles.secondaryBtnText}>{previousLabel}</Text>
           </TouchableOpacity>
         ) : (
-          <TouchableOpacity onPress={onDismiss} style={styles.skipBtn} activeOpacity={0.7}>
+          <TouchableOpacity
+            onPress={onDismiss}
+            style={styles.skipBtn}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={dismissLabel}
+          >
             <Text style={styles.skipBtnText}>{dismissLabel}</Text>
           </TouchableOpacity>
         )}
@@ -111,6 +115,8 @@ export function InlineTutorialCard({
             onPress={onNext}
             style={styles.primaryBtn}
             activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={nextLabel}
           >
             <Text style={styles.primaryBtnText}>{nextLabel}</Text>
             <Ionicons name="arrow-forward" size={13} color="white" />
@@ -125,9 +131,9 @@ const styles = StyleSheet.create({
   card: {
     marginTop: 14,
     marginBottom: 8,
-    borderRadius: 20,
+    borderRadius: 16,
     backgroundColor: 'white',
-    borderWidth: 2,
+    borderWidth: 1,
     borderColor: colors.warmBorder,
     overflow: 'hidden',
     padding: 16,
@@ -157,7 +163,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: fonts.semiBold,
     color: colors.textTertiary,
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
     textTransform: 'uppercase',
     marginBottom: 2,
   },
@@ -165,7 +171,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: fonts.bold,
     color: colors.textPrimary,
-    letterSpacing: -0.2,
   },
   closeBtn: {
     width: 26,
@@ -182,25 +187,30 @@ const styles = StyleSheet.create({
     fontFamily: fonts.regular,
     color: colors.textSecondary,
   },
-  dotsRow: {
+  progressWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    gap: 10,
     marginTop: 14,
   },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+  progressTrack: {
+    flex: 1,
+    height: 6,
+    borderRadius: 3,
     backgroundColor: colors.warmBorder,
+    overflow: 'hidden',
   },
-  dotDone: {
+  progressFill: {
+    height: '100%',
+    borderRadius: 3,
     backgroundColor: colors.maroon,
   },
-  dotActive: {
-    width: 20,
-    backgroundColor: colors.maroon,
-    borderRadius: 4,
+  progressText: {
+    width: 36,
+    textAlign: 'right',
+    fontSize: 11,
+    fontFamily: fonts.semiBold,
+    color: colors.textTertiary,
   },
   footer: {
     flexDirection: 'row',

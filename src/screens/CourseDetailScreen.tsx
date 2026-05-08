@@ -27,7 +27,8 @@ import { InlineTutorialCard } from '../components/InlineTutorialCard';
 import { FormattedText } from '../components/FormattedText';
 import { colors, fonts } from '../theme';
 import { friendsDirectory } from '../data/friends';
-import { mergeNotesWithAI, extractTextFromImage, extractTextFromMultipleImages, generateQuizFromNotes, generateQuizHint } from '../lib/gemini';
+import { getAPCourseFramework } from '../data/apCourseFrameworks';
+import { mergeNotesWithAI, extractTextFromImage, extractTextFromMultipleImages, generateQuizFromNotes, generateQuizHint, generateAPPracticeTest, generateAnswerExplanation, generateQuizAdvice } from '../lib/gemini';
 import { uploadScanImage } from '../lib/storage';
 import * as FileSystemLegacy from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -54,6 +55,14 @@ interface Props {
 }
 
 const TUTORIAL_TOTAL_STEPS = 7;
+const AP_PRACTICE_COUNTS = [10, 18, 25, 40];
+const AP_PRACTICE_DIFFICULTIES = [
+  { value: 'mixed', label: 'Mixed' },
+  { value: 'easy', label: 'Easy' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'hard', label: 'Hard' },
+] as const;
+type APPracticeDifficulty = typeof AP_PRACTICE_DIFFICULTIES[number]['value'];
 
 function makeCustomCode(title: string) {
   const prefix =
@@ -109,6 +118,9 @@ export function CourseDetailScreen({
   onTutorialSkip = () => { },
 }: Props) {
   const classAccent = classData.color || colors.maroon;
+  const apCourseFramework = useMemo(() => getAPCourseFramework(classData.title), [classData.title]);
+  const apPracticeUnits = apCourseFramework?.units || [];
+  const isAPClass = !!apCourseFramework || /^AP\b/i.test(classData.title.trim()) || /AP Class/i.test(classData.description);
   const themeColorChoices = [
     { hex: colors.maroon, label: 'Maroon' },
     { hex: '#0f766e', label: 'Teal' },
@@ -305,20 +317,77 @@ export function CourseDetailScreen({
   const [activeQuizSubUnitId, setActiveQuizSubUnitId] = useState<string | null>(null);
   const [quizCurrentQ, setQuizCurrentQ] = useState(0);
   const [quizAnswers, setQuizAnswers] = useState<(number | null)[]>([]);
+  const [quizEliminated, setQuizEliminated] = useState<Record<number, number[]>>({});
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [quizScore, setQuizScore] = useState<number | null>(null);
   const [quizHintsShown, setQuizHintsShown] = useState<Set<number>>(new Set());
   const [dynamicHints, setDynamicHints] = useState<Record<number, string>>({});
   const [hintLoading, setHintLoading] = useState(false);
+  const [answerExplanations, setAnswerExplanations] = useState<Record<string, string>>({});
+  const [explanationLoadingKey, setExplanationLoadingKey] = useState<string | null>(null);
+  const [quizAdvice, setQuizAdvice] = useState<string | null>(null);
+  const [quizAdviceLoading, setQuizAdviceLoading] = useState(false);
+  const [apPracticeLoading, setApPracticeLoading] = useState(false);
+  const [showAPPracticeSetup, setShowAPPracticeSetup] = useState(false);
+  const [apPracticeQuestionCount, setAPPracticeQuestionCount] = useState(18);
+  const [apPracticeDifficulty, setAPPracticeDifficulty] = useState<APPracticeDifficulty>('mixed');
+  const [apPracticeUnitIds, setAPPracticeUnitIds] = useState<string[]>(() => apPracticeUnits.map((unit) => unit.id));
 
   // Score history modal
   const [scoreHistoryQuiz, setScoreHistoryQuiz] = useState<Quiz | null>(null);
+  const [scoreHistorySubUnitId, setScoreHistorySubUnitId] = useState<string | null>(null);
+
+  const openQuizAttemptReview = useCallback((quiz: Quiz, attempt: QuizAttempt, subUnitId: string | null = null) => {
+    if (!quiz.questionData || quiz.questionData.length === 0) return;
+    setScoreHistoryQuiz(null);
+    setScoreHistorySubUnitId(null);
+    setActiveQuiz(quiz);
+    setActiveQuizSubUnitId(subUnitId);
+    setQuizCurrentQ(0);
+    setQuizAnswers([...attempt.answers]);
+    setQuizEliminated({});
+    setQuizSubmitted(true);
+    setQuizScore(attempt.score);
+    setQuizHintsShown(new Set());
+    setDynamicHints({});
+    setQuizAdvice(quiz.lastAdvice || null);
+    setQuizAdviceLoading(false);
+  }, []);
+
+  const openLatestQuizAttempt = useCallback((quiz: Quiz, subUnitId: string | null = null) => {
+    const latestAttempt = quiz.scoreHistory?.[quiz.scoreHistory.length - 1];
+    if (latestAttempt) {
+      openQuizAttemptReview(quiz, latestAttempt, subUnitId);
+    }
+  }, [openQuizAttemptReview]);
+
+  const openScoreHistory = useCallback((quiz: Quiz, subUnitId: string | null = null) => {
+    setScoreHistoryQuiz(quiz);
+    setScoreHistorySubUnitId(subUnitId);
+  }, []);
+
+  const explainQuizQuestion = useCallback(async (question: QuizQuestion, selectedIndex: number | null, key: string) => {
+    if (answerExplanations[key] || explanationLoadingKey) return;
+    setExplanationLoadingKey(key);
+    const explanation = await generateAnswerExplanation(
+      question.question,
+      [...question.options],
+      question.correctIndex,
+      selectedIndex,
+    );
+    setAnswerExplanations((prev) => ({ ...prev, [key]: explanation }));
+    setExplanationLoadingKey(null);
+  }, [answerExplanations, explanationLoadingKey]);
 
   const tutorialGuide = tutorialStep === 3 ? {
     step: 3,
-    title: 'Your class hub',
-    body: 'This is where everything lives — units, notes, classmates, and study materials. When you\'re ready, tap Files in the nav bar to see your workspace.',
+    title: 'See the class hub',
+    body: 'Units and sections keep the class from turning into a pile. Next, open Files to see everything saved for this class in one place.',
   } : null;
+
+  useEffect(() => {
+    setAPPracticeUnitIds(apPracticeUnits.map((unit) => unit.id));
+  }, [apPracticeUnits, classData.id]);
 
   const addQuiz = async () => {
     if (!selectedUnit || !activeSubUnitId) return;
@@ -371,6 +440,7 @@ export function CourseDetailScreen({
                   question: rq.question,
                   options: rq.options,
                   correctIndex: rq.correctIndex,
+                  hint: rq.hint,
                 })),
               }
               : q
@@ -390,20 +460,75 @@ export function CourseDetailScreen({
     }
   };
 
-  const startQuiz = (subUnitId: string, quiz: Quiz) => {
+  const startQuiz = (subUnitId: string | null, quiz: Quiz) => {
     if (!quiz.questionData || quiz.questionData.length === 0) return;
     setActiveQuiz(quiz);
     setActiveQuizSubUnitId(subUnitId);
     setQuizCurrentQ(0);
     setQuizAnswers(new Array(quiz.questionData.length).fill(null));
+    setQuizEliminated({});
     setQuizSubmitted(false);
     setQuizScore(null);
     setQuizHintsShown(new Set());
     setDynamicHints({});
   };
 
+  const startAPPractice = useCallback(async () => {
+    if (apPracticeLoading) return;
+
+    const selectedFrameworkUnits = apPracticeUnits.length > 0 ? apPracticeUnits : [{
+      id: 'standard-ap-framework',
+      title: `${classData.title} full course framework`,
+      sections: [],
+    }];
+    const selectedUnitIds = apPracticeUnitIds.length > 0
+      ? apPracticeUnitIds
+      : selectedFrameworkUnits.map((unit) => unit.id);
+    const selectedOutline = selectedFrameworkUnits
+      .filter((unit) => selectedUnitIds.includes(unit.id))
+      .map((unit) => ({
+        unitTitle: unit.title,
+        sections: unit.sections,
+      }));
+    const questionCount = Math.max(5, Math.min(40, apPracticeQuestionCount));
+
+    setShowAPPracticeSetup(false);
+    setApPracticeLoading(true);
+    const result = await generateAPPracticeTest(classData.title, selectedOutline, questionCount, apPracticeDifficulty);
+    setApPracticeLoading(false);
+
+    if (!result.success || result.questions.length === 0) {
+      Alert.alert('Could Not Build AP Practice', result.error || 'Please try again in a moment.');
+      return;
+    }
+
+    const practiceQuiz: Quiz = {
+      id: Date.now(),
+      title: result.title || `AP Practice: ${classData.title}`,
+      questions: result.questions.length,
+      date: formatToday(),
+      type: 'ap-practice',
+      status: 'ready',
+      questionData: result.questions,
+    };
+
+    onUpdateClass({
+      ...classData,
+      apPracticeTests: [practiceQuiz, ...(classData.apPracticeTests || [])],
+    });
+    setActiveQuiz(practiceQuiz);
+    setActiveQuizSubUnitId(null);
+    setQuizCurrentQ(0);
+    setQuizAnswers(new Array(result.questions.length).fill(null));
+    setQuizEliminated({});
+    setQuizSubmitted(false);
+    setQuizScore(null);
+    setQuizHintsShown(new Set());
+    setDynamicHints({});
+  }, [apPracticeDifficulty, apPracticeLoading, apPracticeQuestionCount, apPracticeUnitIds, apPracticeUnits, classData, onUpdateClass]);
+
   const submitQuiz = async () => {
-    if (!activeQuiz?.questionData || !activeQuizSubUnitId) return;
+    if (!activeQuiz?.questionData) return;
 
     let correct = 0;
     activeQuiz.questionData.forEach((q, i) => {
@@ -414,6 +539,44 @@ export function CourseDetailScreen({
 
     setQuizScore(score);
     setQuizSubmitted(true);
+
+    // Generate AI study advice
+    setQuizAdvice(null);
+    setQuizAdviceLoading(true);
+    generateQuizAdvice(activeQuiz.questionData, quizAnswers)
+      .then((advice) => {
+        setQuizAdvice(advice);
+        // Persist advice into quiz data
+        setActiveQuiz((prev) => prev ? { ...prev, lastAdvice: advice } : prev);
+        // Save to class data — use classDataRef.current to avoid overwriting concurrent grading save
+        const freshData = classDataRef.current;
+        if (!activeQuizSubUnitId) {
+          // AP practice test path
+          onUpdateClass({
+            ...freshData,
+            apPracticeTests: (freshData.apPracticeTests || []).map((q) =>
+              q.id === activeQuiz.id ? { ...q, lastAdvice: advice } : q
+            ),
+          });
+        } else {
+          // Section quiz path
+          const updatedUnits = freshData.units.map((unit) => ({
+            ...unit,
+            subUnits: unit.subUnits.map((sub) =>
+              sub.id === activeQuizSubUnitId
+                ? {
+                  ...sub,
+                  quizzes: (sub.quizzes || []).map((q) =>
+                    q.id === activeQuiz.id ? { ...q, lastAdvice: advice } : q
+                  ),
+                }
+                : sub
+            ),
+          }));
+          onUpdateClass({ ...freshData, units: updatedUnits });
+        }
+      })
+      .finally(() => setQuizAdviceLoading(false));
 
     // Get current user info for the attempt record
     let userId = 'unknown';
@@ -432,8 +595,37 @@ export function CourseDetailScreen({
       answers: [...quizAnswers],
     };
 
+    if (!activeQuizSubUnitId) {
+      const history = [...(activeQuiz.scoreHistory || []), attempt];
+      const userAttempts = history.filter((a) => a.userId === userId);
+      const bestScore = Math.max(...userAttempts.map((a) => a.score));
+      const updatedPracticeQuiz: Quiz = {
+        ...activeQuiz,
+        score: bestScore,
+        status: 'graded',
+        scoreHistory: history,
+        questionData: activeQuiz.questionData.map((qd, i) => ({
+          ...qd,
+          selectedIndex: quizAnswers[i] ?? undefined,
+        })),
+      };
+
+      onUpdateClass({
+        ...classDataRef.current,
+        apPracticeTests: (classDataRef.current.apPracticeTests || []).some((quiz) => quiz.id === activeQuiz.id)
+          ? (classDataRef.current.apPracticeTests || []).map((quiz) =>
+            quiz.id === activeQuiz.id ? updatedPracticeQuiz : quiz
+          )
+          : [updatedPracticeQuiz, ...(classDataRef.current.apPracticeTests || [])],
+      });
+      setActiveQuiz(updatedPracticeQuiz);
+      return;
+    }
+
     // Save attempt to score history and update best score
-    updateSelectedUnit((unit) => ({
+    // Use onUpdateClass directly (not updateSelectedUnit) to avoid silent failures when selectedUnit is null
+    const currentData = classDataRef.current;
+    const updatedUnits = currentData.units.map((unit) => ({
       ...unit,
       subUnits: unit.subUnits.map((sub) =>
         sub.id === activeQuizSubUnitId
@@ -442,7 +634,6 @@ export function CourseDetailScreen({
             quizzes: (sub.quizzes || []).map((q) => {
               if (q.id !== activeQuiz.id) return q;
               const history = [...(q.scoreHistory || []), attempt];
-              // Best score across all of this user's attempts
               const userAttempts = history.filter((a) => a.userId === userId);
               const bestScore = Math.max(...userAttempts.map((a) => a.score));
               return {
@@ -460,28 +651,76 @@ export function CourseDetailScreen({
           : sub
       ),
     }));
+    onUpdateClass({ ...currentData, units: updatedUnits });
+    // Keep selectedUnit in sync if it's active
+    if (selectedUnit) {
+      const refreshed = updatedUnits.find((u) => u.id === selectedUnit.id);
+      if (refreshed) setSelectedUnit(refreshed);
+    }
   };
 
   const retakeQuiz = () => {
     if (!activeQuiz?.questionData) return;
     setQuizCurrentQ(0);
     setQuizAnswers(new Array(activeQuiz.questionData.length).fill(null));
+    setQuizEliminated({});
     setQuizSubmitted(false);
     setQuizScore(null);
     setQuizHintsShown(new Set());
     setDynamicHints({});
+    setQuizAdvice(null);
+    setQuizAdviceLoading(false);
   };
 
-  const closeQuizModal = () => {
+  const closeQuizModal = useCallback(() => {
     setActiveQuiz(null);
     setActiveQuizSubUnitId(null);
     setQuizCurrentQ(0);
     setQuizAnswers([]);
+    setQuizEliminated({});
     setQuizSubmitted(false);
     setQuizScore(null);
     setQuizHintsShown(new Set());
     setDynamicHints({});
-  };
+    setQuizAdvice(null);
+    setQuizAdviceLoading(false);
+  }, []);
+
+  const selectQuizAnswer = useCallback((questionIndex: number, optionIndex: number) => {
+    setQuizAnswers((prev) => {
+      const next = [...prev];
+      next[questionIndex] = optionIndex;
+      return next;
+    });
+    setQuizEliminated((prev) => {
+      const current = prev[questionIndex] || [];
+      if (!current.includes(optionIndex)) return prev;
+      const remaining = current.filter((idx) => idx !== optionIndex);
+      const next = { ...prev };
+      if (remaining.length > 0) next[questionIndex] = remaining;
+      else delete next[questionIndex];
+      return next;
+    });
+  }, []);
+
+  const toggleEliminatedAnswer = useCallback((questionIndex: number, optionIndex: number) => {
+    setQuizEliminated((prev) => {
+      const current = prev[questionIndex] || [];
+      const nextForQuestion = current.includes(optionIndex)
+        ? current.filter((idx) => idx !== optionIndex)
+        : [...current, optionIndex];
+      const next = { ...prev };
+      if (nextForQuestion.length > 0) next[questionIndex] = nextForQuestion;
+      else delete next[questionIndex];
+      return next;
+    });
+    setQuizAnswers((prev) => {
+      if (prev[questionIndex] !== optionIndex) return prev;
+      const next = [...prev];
+      next[questionIndex] = null;
+      return next;
+    });
+  }, []);
 
   const openEditQuiz = (quiz: Quiz, subUnitId: string) => {
     setEditingQuizId(quiz.id);
@@ -529,6 +768,22 @@ export function CourseDetailScreen({
                 : sub
             ),
           }));
+        },
+      },
+    ]);
+  };
+
+  const deleteAPPractice = (quizId: number) => {
+    Alert.alert('Delete AP Practice', 'Remove this AP practice test and its scores?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          onUpdateClass({
+            ...classData,
+            apPracticeTests: (classData.apPracticeTests || []).filter((quiz) => quiz.id !== quizId),
+          });
         },
       },
     ]);
@@ -1371,6 +1626,7 @@ export function CourseDetailScreen({
             onDismiss={onTutorialSkip}
             onPrevious={onTutorialBack}
             onNext={onTutorialNext}
+            nextLabel="Go to Files"
           />
         )}
 
@@ -1535,58 +1791,73 @@ export function CourseDetailScreen({
                               const isGraded = quiz.status === 'graded';
                               const isReady = !quiz.status || quiz.status === 'ready';
                               return (
-                                <View key={quiz.id} style={[styles.quizRow, (isGenerating || isGrading) && styles.quizRowPending]}>
-                                  {isGenerating || isGrading ? (
-                                    <ActivityIndicator size="small" color={classAccent} />
-                                  ) : (
-                                    <Ionicons name="school" size={14} color={classAccent} />
-                                  )}
-                                  <View style={{ flex: 1 }}>
-                                    <Text style={[styles.quizTitle, (isGenerating || isGrading) && { color: colors.textTertiary }]}>
-                                      {isGenerating ? 'Generating…' : isGrading ? 'Grading…' : quiz.title}
-                                    </Text>
-                                    {!isGenerating && (
-                                      <Text style={styles.quizMeta}>{quiz.questions} questions • {quiz.date}</Text>
+                                <TouchableOpacity
+                                  key={quiz.id}
+                                  style={[styles.quizRow, (isGenerating || isGrading) && styles.quizRowPending]}
+                                  activeOpacity={isGraded && (quiz.scoreHistory?.length || 0) > 0 ? 0.72 : 1}
+                                  onPress={() => isGraded ? openLatestQuizAttempt(quiz, subUnit.id) : undefined}
+                                  disabled={isGenerating || isGrading}
+                                >
+                                  <View style={styles.quizIconSlot}>
+                                    {isGenerating || isGrading ? (
+                                      <ActivityIndicator size="small" color={classAccent} />
+                                    ) : (
+                                      <Ionicons name="school" size={14} color={classAccent} />
                                     )}
                                   </View>
-                                  {isGenerating || isGrading ? null : isGraded ? (
-                                    <View style={styles.quizActions}>
-                                      {quiz.score !== undefined && (
-                                        <View style={[styles.quizScorePill, { backgroundColor: quiz.score >= 80 ? '#D1FAE5' : '#FEF3C7' }]}>
-                                          <Text style={[styles.quizScoreText, { color: quiz.score >= 80 ? '#059669' : '#d97706' }]}>{quiz.score}%</Text>
-                                        </View>
+                                  <View style={styles.quizBody}>
+                                    <View style={styles.quizTextBlock}>
+                                      <Text style={[styles.quizTitle, (isGenerating || isGrading) && { color: colors.textTertiary }]}>
+                                        {isGenerating ? 'Generating…' : isGrading ? 'Grading…' : quiz.title}
+                                      </Text>
+                                      {!isGenerating && (
+                                        <Text style={styles.quizMeta}>{quiz.questions} questions • {quiz.date}</Text>
                                       )}
-                                      {quiz.score === undefined && (
-                                        <View style={[styles.quizScorePill, { backgroundColor: '#EDE9FE' }]}>
-                                          <Text style={[styles.quizScoreText, { color: '#7c3aed' }]}>Awaiting AI</Text>
-                                        </View>
-                                      )}
-                                      <TouchableOpacity style={styles.quizTakeBtn} onPress={() => startQuiz(subUnit.id, quiz)}>
-                                        <Text style={styles.quizTakeBtnText}>Retake</Text>
-                                      </TouchableOpacity>
-                                      {(quiz.scoreHistory?.length || 0) > 0 && (
-                                        <TouchableOpacity onPress={() => setScoreHistoryQuiz(quiz)} hitSlop={8}>
-                                          <Ionicons name="stats-chart" size={15} color={classAccent} />
+                                    </View>
+                                    {isGenerating || isGrading ? null : isGraded ? (
+                                      <View style={styles.quizActions}>
+                                        {quiz.score !== undefined && (
+                                          <View style={[styles.quizScorePill, { backgroundColor: quiz.score >= 80 ? '#D1FAE5' : '#FEF3C7' }]}>
+                                            <Text style={[styles.quizScoreText, { color: quiz.score >= 80 ? '#059669' : '#d97706' }]}>{quiz.score}%</Text>
+                                          </View>
+                                        )}
+                                        {quiz.score === undefined && (
+                                          <View style={[styles.quizScorePill, { backgroundColor: '#EDE9FE' }]}>
+                                            <Text style={[styles.quizScoreText, { color: '#7c3aed' }]}>Awaiting AI</Text>
+                                          </View>
+                                        )}
+                                        {(quiz.scoreHistory?.length || 0) > 0 && (
+                                          <TouchableOpacity style={[styles.quizTakeBtn, { backgroundColor: `${classAccent}15` }]} onPress={() => openLatestQuizAttempt(quiz, subUnit.id)}>
+                                            <Text style={[styles.quizTakeBtnText, { color: classAccent }]}>Review</Text>
+                                          </TouchableOpacity>
+                                        )}
+                                        <TouchableOpacity style={styles.quizTakeBtn} onPress={() => startQuiz(subUnit.id, quiz)}>
+                                          <Text style={styles.quizTakeBtnText}>Retake</Text>
                                         </TouchableOpacity>
-                                      )}
-                                      <TouchableOpacity onPress={() => deleteQuiz(subUnit.id, quiz.id)} hitSlop={8}>
-                                        <Ionicons name="trash-outline" size={15} color={colors.textTertiary} />
-                                      </TouchableOpacity>
-                                    </View>
-                                  ) : isReady ? (
-                                    <View style={styles.quizActions}>
-                                      <TouchableOpacity style={styles.quizTakeBtn} onPress={() => startQuiz(subUnit.id, quiz)}>
-                                        <Text style={styles.quizTakeBtnText}>Take</Text>
-                                      </TouchableOpacity>
-                                      <TouchableOpacity onPress={() => openEditQuiz(quiz, subUnit.id)} hitSlop={8}>
-                                        <Ionicons name="pencil" size={15} color={colors.textTertiary} />
-                                      </TouchableOpacity>
-                                      <TouchableOpacity onPress={() => deleteQuiz(subUnit.id, quiz.id)} hitSlop={8}>
-                                        <Ionicons name="trash-outline" size={15} color={colors.textTertiary} />
-                                      </TouchableOpacity>
-                                    </View>
-                                  ) : null}
-                                </View>
+                                        {(quiz.scoreHistory?.length || 0) > 1 && (
+                                          <TouchableOpacity onPress={() => openScoreHistory(quiz, subUnit.id)} hitSlop={8} style={styles.quizIconAction}>
+                                            <Ionicons name="stats-chart" size={15} color={classAccent} />
+                                          </TouchableOpacity>
+                                        )}
+                                        <TouchableOpacity onPress={() => deleteQuiz(subUnit.id, quiz.id)} hitSlop={8} style={styles.quizIconAction}>
+                                          <Ionicons name="trash-outline" size={15} color={colors.textTertiary} />
+                                        </TouchableOpacity>
+                                      </View>
+                                    ) : isReady ? (
+                                      <View style={styles.quizActions}>
+                                        <TouchableOpacity style={styles.quizTakeBtn} onPress={() => startQuiz(subUnit.id, quiz)}>
+                                          <Text style={styles.quizTakeBtnText}>Take</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity onPress={() => openEditQuiz(quiz, subUnit.id)} hitSlop={8} style={styles.quizIconAction}>
+                                          <Ionicons name="pencil" size={15} color={colors.textTertiary} />
+                                        </TouchableOpacity>
+                                        <TouchableOpacity onPress={() => deleteQuiz(subUnit.id, quiz.id)} hitSlop={8} style={styles.quizIconAction}>
+                                          <Ionicons name="trash-outline" size={15} color={colors.textTertiary} />
+                                        </TouchableOpacity>
+                                      </View>
+                                    ) : null}
+                                  </View>
+                                </TouchableOpacity>
                               );
                             })}
                           </View>
@@ -1701,61 +1972,150 @@ export function CourseDetailScreen({
                 if (quizSubmitted && quizScore !== null) {
                   // Results view
                   const correct = questions.filter((q, i) => quizAnswers[i] === q.correctIndex).length;
-                  const emoji = quizScore >= 90 ? '🏆' : quizScore >= 70 ? '🎉' : quizScore >= 50 ? '💪' : '📚';
                   return (
-                    <ScrollView showsVerticalScrollIndicator={false}>
-                      <View style={styles.quizResultHeader}>
-                        <Text style={{ fontSize: 48 }}>{emoji}</Text>
-                        <Text style={styles.quizResultScore}>{quizScore}%</Text>
-                        <Text style={styles.quizResultSub}>{correct}/{totalQ} correct</Text>
-                        <Text style={[styles.quizResultLabel, { color: quizScore >= 70 ? '#059669' : '#d97706' }]}>
-                          {quizScore >= 90 ? 'Outstanding!' : quizScore >= 70 ? 'Great job!' : quizScore >= 50 ? 'Good effort!' : 'Keep studying!'}
-                        </Text>
-                      </View>
-                      {/* Review each question */}
-                      {questions.map((q, qi) => {
-                        const userAnswer = quizAnswers[qi];
-                        const isCorrect = userAnswer === q.correctIndex;
-                        return (
-                          <View key={qi} style={[styles.quizReviewCard, { borderColor: isCorrect ? '#D1FAE5' : '#FEE2E2' }]}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                              <Ionicons name={isCorrect ? 'checkmark-circle' : 'close-circle'} size={18} color={isCorrect ? '#059669' : '#dc2626'} />
-                              <Text style={styles.quizReviewQ}>Q{qi + 1}. {q.question}</Text>
-                            </View>
-                            {q.options.map((opt, oi) => {
-                              const isUserPick = userAnswer === oi;
-                              const isCorrectOpt = q.correctIndex === oi;
-                              return (
-                                <View key={oi} style={[
-                                  styles.quizReviewOpt,
-                                  isCorrectOpt && { backgroundColor: '#D1FAE5', borderColor: '#059669' },
-                                  isUserPick && !isCorrectOpt && { backgroundColor: '#FEE2E2', borderColor: '#dc2626' },
-                                ]}>
-                                  <Text style={[styles.quizReviewOptLetter, isCorrectOpt && { color: '#059669' }, isUserPick && !isCorrectOpt && { color: '#dc2626' }]}>
-                                    {['A', 'B', 'C', 'D'][oi]}
-                                  </Text>
-                                  <Text style={[styles.quizReviewOptText, isCorrectOpt && { color: '#059669', fontFamily: fonts.bold }]}>
-                                    {opt}
-                                  </Text>
-                                  {isCorrectOpt && <Ionicons name="checkmark" size={14} color="#059669" />}
-                                  {isUserPick && !isCorrectOpt && <Ionicons name="close" size={14} color="#dc2626" />}
-                                </View>
-                              );
-                            })}
+                    <View style={{ flex: 1 }}>
+                      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
+                        {/* Score Header */}
+                        <View style={styles.quizResultHeader}>
+                          <TouchableOpacity
+                            style={styles.quizResultCloseBtn}
+                            onPress={closeQuizModal}
+                            accessibilityRole="button"
+                            accessibilityLabel="Close quiz review"
+                          >
+                            <Ionicons name="close" size={20} color={colors.textPrimary} />
+                          </TouchableOpacity>
+                          <Text style={styles.quizResultScore}>{quizScore}%</Text>
+                          <Text style={styles.quizResultSub}>{correct}/{totalQ} correct</Text>
+                          <Text style={[styles.quizResultLabel, { color: quizScore >= 70 ? '#059669' : '#d97706' }]}>
+                            {quizScore >= 90 ? 'Outstanding!' : quizScore >= 70 ? 'Great job!' : quizScore >= 50 ? 'Good effort!' : 'Keep studying!'}
+                          </Text>
+                        </View>
+
+                        {/* AI Study Advice */}
+                        <View style={[styles.quizAdviceCard, { borderColor: `${classAccent}30` }]}>
+                          <View style={styles.quizAdviceHeader}>
+                            <Ionicons name="sparkles" size={15} color={classAccent} />
+                            <Text style={[styles.quizAdviceTitle, { color: classAccent }]}>Study Tip</Text>
                           </View>
-                        );
-                      })}
-                      <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
-                        <TouchableOpacity style={[styles.quizNavBtn, { backgroundColor: '#F0E0D0', flex: 1 }]} onPress={closeQuizModal}>
-                          <Ionicons name="checkmark" size={16} color={colors.textPrimary} />
-                          <Text style={[styles.quizNavBtnText, { color: colors.textPrimary }]}>Done</Text>
+                          {quizAdviceLoading ? (
+                            <View style={styles.quizAdviceLoadingRow}>
+                              <ActivityIndicator size="small" color={classAccent} />
+                              <Text style={styles.quizAdviceLoadingText}>Analyzing your results...</Text>
+                            </View>
+                          ) : (
+                            <Text style={styles.quizAdviceText}>{quizAdvice || 'Review the concepts you missed and try again!'}</Text>
+                          )}
+                        </View>
+
+                        {/* Section Label */}
+                        <View style={styles.quizResultSectionRow}>
+                          <Ionicons name="list" size={16} color={colors.textSecondary} />
+                          <Text style={styles.quizResultSectionLabel}>Review Answers</Text>
+                        </View>
+
+                        {/* Review each question */}
+                        {questions.map((q, qi) => {
+                          const userAnswer = quizAnswers[qi];
+                          const isCorrect = userAnswer === q.correctIndex;
+                          const explanationKey = `${activeQuiz.id}-${qi}-${userAnswer ?? 'none'}`;
+                          const explanation = answerExplanations[explanationKey];
+                          const explanationLoading = explanationLoadingKey === explanationKey;
+                          return (
+                            <View key={qi} style={[styles.quizReviewCard, { borderColor: isCorrect ? '#D1FAE5' : '#FEE2E2' }]}>
+                              <View style={[styles.quizReviewAccent, { backgroundColor: isCorrect ? '#059669' : '#dc2626' }]} />
+                              <View style={styles.quizReviewContent}>
+                                <View style={styles.quizReviewHeader}>
+                                  <View style={[styles.quizReviewBadge, { backgroundColor: isCorrect ? '#D1FAE5' : '#FEE2E2' }]}>
+                                    <Ionicons name={isCorrect ? 'checkmark-circle' : 'close-circle'} size={16} color={isCorrect ? '#059669' : '#dc2626'} />
+                                    <Text style={[styles.quizReviewBadgeText, { color: isCorrect ? '#059669' : '#dc2626' }]}>
+                                      {isCorrect ? 'Correct' : 'Incorrect'}
+                                    </Text>
+                                  </View>
+                                  <Text style={styles.quizReviewQNum}>Question {qi + 1}</Text>
+                                </View>
+                                <Text style={styles.quizReviewQ}>{q.question}</Text>
+                                <View style={styles.quizReviewOptsContainer}>
+                                  {q.options.map((opt, oi) => {
+                                    const isUserPick = userAnswer === oi;
+                                    const isCorrectOpt = q.correctIndex === oi;
+                                    const isNeutral = !isUserPick && !isCorrectOpt;
+                                    return (
+                                      <View key={oi} style={[
+                                        styles.quizReviewOpt,
+                                        isCorrectOpt && { backgroundColor: '#ECFDF5', borderColor: '#059669' },
+                                        isUserPick && !isCorrectOpt && { backgroundColor: '#FEF2F2', borderColor: '#dc2626' },
+                                        isNeutral && { opacity: 0.6 },
+                                      ]}>
+                                        <View style={[
+                                          styles.quizReviewLetterCircle,
+                                          isCorrectOpt && { backgroundColor: '#059669' },
+                                          isUserPick && !isCorrectOpt && { backgroundColor: '#dc2626' },
+                                        ]}>
+                                          <Text style={[
+                                            styles.quizReviewOptLetter,
+                                            (isCorrectOpt || (isUserPick && !isCorrectOpt)) && { color: 'white' },
+                                          ]}>
+                                            {['A', 'B', 'C', 'D'][oi]}
+                                          </Text>
+                                        </View>
+                                        <Text style={[
+                                          styles.quizReviewOptText,
+                                          isCorrectOpt && { color: '#065F46', fontFamily: fonts.semiBold },
+                                          isUserPick && !isCorrectOpt && { color: '#991B1B' },
+                                        ]}>
+                                          {opt}
+                                        </Text>
+                                        {isCorrectOpt && <Ionicons name="checkmark-circle" size={16} color="#059669" />}
+                                        {isUserPick && !isCorrectOpt && <Ionicons name="close-circle" size={16} color="#dc2626" />}
+                                        {isUserPick && isCorrectOpt && (
+                                          <View style={styles.quizReviewYourAnswer}>
+                                            <Text style={styles.quizReviewYourAnswerText}>Your answer</Text>
+                                          </View>
+                                        )}
+                                      </View>
+                                    );
+                                  })}
+                                </View>
+                                {explanation ? (
+                                  <View style={[styles.quizExplanationBox, { backgroundColor: `${classAccent}08`, borderColor: `${classAccent}25` }]}>
+                                    <Ionicons name="sparkles" size={15} color={classAccent} />
+                                    <Text style={[styles.quizExplanationText, { color: classAccent }]}>{explanation}</Text>
+                                  </View>
+                                ) : (
+                                  <TouchableOpacity
+                                    style={[styles.quizExplainBtn, { backgroundColor: `${classAccent}10`, borderColor: `${classAccent}30` }]}
+                                    onPress={() => explainQuizQuestion(q, userAnswer, explanationKey)}
+                                    disabled={!!explanationLoadingKey}
+                                  >
+                                    {explanationLoading ? (
+                                      <ActivityIndicator size="small" color={classAccent} />
+                                    ) : (
+                                      <Ionicons name="sparkles-outline" size={14} color={classAccent} />
+                                    )}
+                                    <Text style={[styles.quizExplainBtnText, { color: classAccent }]}>
+                                      {explanationLoading ? 'Explaining...' : 'Explain answer'}
+                                    </Text>
+                                  </TouchableOpacity>
+                                )}
+                              </View>
+                            </View>
+                          );
+                        })}
+                      </ScrollView>
+
+                      {/* Sticky Bottom Action Bar */}
+                      <View style={styles.quizResultActionBar}>
+                        <TouchableOpacity style={styles.quizResultDoneBtn} onPress={closeQuizModal}>
+                          <Ionicons name="checkmark" size={18} color={colors.textPrimary} />
+                          <Text style={styles.quizResultDoneBtnText}>Done</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity style={[styles.quizNavBtn, { backgroundColor: classAccent, flex: 1 }]} onPress={retakeQuiz}>
-                          <Ionicons name="refresh" size={16} color="white" />
-                          <Text style={styles.quizNavBtnText}>Retake</Text>
+                        <TouchableOpacity style={[styles.quizResultRetakeBtn, { backgroundColor: classAccent }]} onPress={retakeQuiz}>
+                          <Ionicons name="refresh" size={18} color="white" />
+                          <Text style={styles.quizResultRetakeBtnText}>Retake Quiz</Text>
                         </TouchableOpacity>
                       </View>
-                    </ScrollView>
+                    </View>
                   );
                 }
 
@@ -1781,27 +2141,38 @@ export function CourseDetailScreen({
                       <View style={styles.quizOptionsContainer}>
                         {currentQuestion.options.map((option, oi) => {
                           const isSelected = quizAnswers[quizCurrentQ] === oi;
+                          const isEliminated = (quizEliminated[quizCurrentQ] || []).includes(oi);
                           return (
                             <TouchableOpacity
                               key={oi}
                               style={[
                                 styles.quizOptionBtn,
                                 isSelected && { backgroundColor: `${classAccent}15`, borderColor: classAccent, borderWidth: 2 },
+                                isEliminated && styles.quizOptionEliminated,
                               ]}
-                              onPress={() => {
-                                const newAnswers = [...quizAnswers];
-                                newAnswers[quizCurrentQ] = oi;
-                                setQuizAnswers(newAnswers);
-                              }}
+                              onPress={() => selectQuizAnswer(quizCurrentQ, oi)}
                             >
-                              <View style={[styles.quizOptionLetter, isSelected && { backgroundColor: classAccent }]}>
-                                <Text style={[styles.quizOptionLetterText, isSelected && { color: 'white' }]}>
+                              <View style={[styles.quizOptionLetter, isSelected && { backgroundColor: classAccent }, isEliminated && styles.quizOptionLetterEliminated]}>
+                                <Text style={[styles.quizOptionLetterText, isSelected && { color: 'white' }, isEliminated && styles.quizOptionTextEliminated]}>
                                   {['A', 'B', 'C', 'D'][oi]}
                                 </Text>
                               </View>
-                              <Text style={[styles.quizOptionText, isSelected && { color: classAccent, fontFamily: fonts.semiBold }]}>
+                              <Text style={[styles.quizOptionText, isSelected && { color: classAccent, fontFamily: fonts.semiBold }, isEliminated && styles.quizOptionTextEliminated]}>
                                 {option}
                               </Text>
+                              <TouchableOpacity
+                                style={[styles.quizEliminateBtn, isEliminated && styles.quizEliminateBtnActive]}
+                                onPress={() => toggleEliminatedAnswer(quizCurrentQ, oi)}
+                                hitSlop={8}
+                                accessibilityRole="button"
+                                accessibilityLabel={isEliminated ? `Restore answer ${['A', 'B', 'C', 'D'][oi]}` : `Cross out answer ${['A', 'B', 'C', 'D'][oi]}`}
+                              >
+                                <Ionicons
+                                  name={isEliminated ? 'close-circle' : 'close-circle-outline'}
+                                  size={18}
+                                  color={isEliminated ? '#B45309' : colors.textTertiary}
+                                />
+                              </TouchableOpacity>
                             </TouchableOpacity>
                           );
                         })}
@@ -1895,7 +2266,7 @@ export function CourseDetailScreen({
         </Modal>
 
         {/* Score History Modal */}
-        <Modal visible={!!scoreHistoryQuiz} transparent animationType="slide" onRequestClose={() => setScoreHistoryQuiz(null)}>
+        <Modal visible={!!scoreHistoryQuiz} transparent animationType="slide" onRequestClose={() => { setScoreHistoryQuiz(null); setScoreHistorySubUnitId(null); }}>
           <View style={styles.viewerBackdrop}>
             <View style={styles.viewerCard}>
               <View style={styles.viewerHeader}>
@@ -1905,7 +2276,7 @@ export function CourseDetailScreen({
                   </View>
                   <Text style={styles.viewerLabel}>Quiz Scores</Text>
                 </View>
-                <TouchableOpacity onPress={() => setScoreHistoryQuiz(null)} style={styles.viewerCloseBtn}>
+                <TouchableOpacity onPress={() => { setScoreHistoryQuiz(null); setScoreHistorySubUnitId(null); }} style={styles.viewerCloseBtn}>
                   <Ionicons name="close" size={22} color={colors.textPrimary} />
                 </TouchableOpacity>
               </View>
@@ -1972,10 +2343,10 @@ export function CourseDetailScreen({
                               const prev = ai > 0 ? attempts[ai - 1].score : null;
                               const diff = prev !== null ? attempt.score - prev : 0;
                               return (
-                                <View key={ai} style={{
+                                <TouchableOpacity key={ai} style={{
                                   flexDirection: 'row', alignItems: 'center', gap: 8,
                                   paddingLeft: 36, paddingVertical: 4,
-                                }}>
+                                }} onPress={() => scoreHistoryQuiz && openQuizAttemptReview(scoreHistoryQuiz, attempt, scoreHistorySubUnitId)}>
                                   <Text style={{ fontFamily: fonts.regular, fontSize: 12, color: colors.textTertiary, width: 60 }}>
                                     #{ai + 1} • {attempt.date}
                                   </Text>
@@ -1995,7 +2366,7 @@ export function CourseDetailScreen({
                                   {diff > 0 && <Text style={{ fontFamily: fonts.medium, fontSize: 11, color: '#059669' }}>↑{diff}</Text>}
                                   {diff < 0 && <Text style={{ fontFamily: fonts.medium, fontSize: 11, color: '#dc2626' }}>↓{Math.abs(diff)}</Text>}
                                   {diff === 0 && ai > 0 && <Text style={{ fontFamily: fonts.medium, fontSize: 11, color: colors.textTertiary }}>—</Text>}
-                                </View>
+                                </TouchableOpacity>
                               );
                             })}
                             {groupIdx < entries.length - 1 && (
@@ -2519,6 +2890,7 @@ export function CourseDetailScreen({
               onDismiss={onTutorialSkip}
               onPrevious={onTutorialBack}
               onNext={onTutorialNext}
+              nextLabel="Go to Files"
             />
           </View>
         )}
@@ -2594,6 +2966,86 @@ export function CourseDetailScreen({
                   </Text>
                   <Ionicons name="pencil" size={12} color={colors.textTertiary} />
                 </TouchableOpacity>
+              )}
+            </View>
+          )}
+
+          {isAPClass && (
+            <View style={styles.apPracticeSection}>
+              <TouchableOpacity
+                style={[styles.apPracticeCard, { borderColor: `${classAccent}33`, backgroundColor: `${classAccent}10` }]}
+                onPress={() => setShowAPPracticeSetup(true)}
+                activeOpacity={0.85}
+                disabled={apPracticeLoading}
+              >
+                <View style={[styles.apPracticeIcon, { backgroundColor: classAccent }]}>
+                  {apPracticeLoading ? (
+                    <ActivityIndicator size="small" color="white" />
+                  ) : (
+                    <Ionicons name="ribbon" size={18} color="white" />
+                  )}
+                </View>
+                <View style={styles.apPracticeText}>
+                  <Text style={styles.apPracticeTitle}>
+                    {apPracticeLoading ? 'Building AP practice...' : 'Practice for AP Test'}
+                  </Text>
+                  <Text style={styles.apPracticeBody}>
+                    Comprehensive AI questions from the course topics, not class notes.
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={classAccent} />
+              </TouchableOpacity>
+
+              {(classData.apPracticeTests || []).length > 0 && (
+                <View style={styles.apPracticeHistory}>
+                  {(classData.apPracticeTests || []).map((quiz) => {
+                    const latestAttempt = quiz.scoreHistory?.[quiz.scoreHistory.length - 1];
+                    const isGraded = quiz.status === 'graded' && latestAttempt;
+                    return (
+                      <TouchableOpacity
+                        key={quiz.id}
+                        style={styles.quizRow}
+                        activeOpacity={isGraded ? 0.72 : 1}
+                        onPress={() => isGraded ? openLatestQuizAttempt(quiz, null) : undefined}
+                      >
+                        <View style={styles.quizIconSlot}>
+                          <Ionicons name="ribbon" size={14} color={classAccent} />
+                        </View>
+                        <View style={styles.quizBody}>
+                          <View style={styles.quizTextBlock}>
+                            <Text style={styles.quizTitle}>{quiz.title}</Text>
+                            <Text style={styles.quizMeta}>
+                              {quiz.questions} questions • {quiz.date}{latestAttempt ? ` • Last: ${latestAttempt.score}%` : ''}
+                            </Text>
+                          </View>
+                          <View style={styles.quizActions}>
+                            {quiz.score !== undefined && (
+                              <View style={[styles.quizScorePill, { backgroundColor: quiz.score >= 80 ? '#D1FAE5' : quiz.score >= 50 ? '#FEF3C7' : '#FEE2E2' }]}>
+                                <Text style={[styles.quizScoreText, { color: quiz.score >= 80 ? '#059669' : quiz.score >= 50 ? '#d97706' : '#dc2626' }]}>{quiz.score}%</Text>
+                              </View>
+                            )}
+                            {(quiz.scoreHistory?.length || 0) > 0 && latestAttempt && (
+                              <TouchableOpacity style={[styles.quizTakeBtn, { backgroundColor: `${classAccent}15` }]} onPress={() => openQuizAttemptReview(quiz, latestAttempt, null)}>
+                                <Text style={[styles.quizTakeBtnText, { color: classAccent }]}>Review</Text>
+                              </TouchableOpacity>
+                            )}
+                            <TouchableOpacity style={styles.quizTakeBtn} onPress={() => startQuiz(null, quiz)}>
+                              <Text style={styles.quizTakeBtnText}>{quiz.scoreHistory?.length ? 'Retake' : 'Take'}</Text>
+                            </TouchableOpacity>
+                            {(quiz.scoreHistory?.length || 0) > 1 && (
+                              <TouchableOpacity onPress={() => openScoreHistory(quiz, null)} hitSlop={8} style={styles.quizIconAction}>
+                                <Ionicons name="stats-chart" size={15} color={classAccent} />
+                              </TouchableOpacity>
+                            )}
+                            <TouchableOpacity onPress={() => deleteAPPractice(quiz.id)} hitSlop={8} style={styles.quizIconAction}>
+                              <Ionicons name="trash-outline" size={15} color={colors.textTertiary} />
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
               )}
             </View>
           )}
@@ -2754,6 +3206,402 @@ export function CourseDetailScreen({
       </ScrollView>
 
       <BottomNav active="home" onHome={onBack} onScan={onScan} onFriends={onFriends} onFiles={onFilesOpen} highlightedTab={tutorialStep === 3 ? 'files' : undefined} />
+
+      <Modal visible={showAPPracticeSetup} transparent animationType="fade" onRequestClose={() => setShowAPPracticeSetup(false)}>
+        <View style={styles.modalBackdropCentered}>
+          <View style={styles.noteModalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>AP Practice Setup</Text>
+              <TouchableOpacity onPress={() => setShowAPPracticeSetup(false)}>
+                <Ionicons name="close" size={22} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.apSetupSub}>
+              Build a comprehensive AP-style set from {apCourseFramework?.course || classData.title} units, separate from your class organization.
+            </Text>
+
+            <Text style={styles.modalLabel}>Number of Questions</Text>
+            <View style={styles.apSetupChipGrid}>
+              {AP_PRACTICE_COUNTS.map((count) => (
+                <TouchableOpacity
+                  key={count}
+                  style={[styles.filePickChip, apPracticeQuestionCount === count && styles.filePickChipActive]}
+                  onPress={() => setAPPracticeQuestionCount(count)}
+                >
+                  <Text style={[styles.filePickChipText, apPracticeQuestionCount === count && styles.filePickChipTextActive]}>
+                    {count}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={styles.modalLabel}>Difficulty</Text>
+            <View style={styles.apSetupChipGrid}>
+              {AP_PRACTICE_DIFFICULTIES.map((difficulty) => (
+                <TouchableOpacity
+                  key={difficulty.value}
+                  style={[styles.filePickChip, apPracticeDifficulty === difficulty.value && styles.filePickChipActive]}
+                  onPress={() => setAPPracticeDifficulty(difficulty.value)}
+                >
+                  <Text style={[styles.filePickChipText, apPracticeDifficulty === difficulty.value && styles.filePickChipTextActive]}>
+                    {difficulty.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={styles.modalLabel}>Units to Include</Text>
+            <ScrollView style={styles.apSetupUnits} showsVerticalScrollIndicator={false}>
+              {apPracticeUnits.length > 0 ? apPracticeUnits.map((unit) => {
+                const selected = apPracticeUnitIds.includes(unit.id);
+                return (
+                  <TouchableOpacity
+                    key={unit.id}
+                    style={[styles.apUnitRow, selected && { borderColor: classAccent, backgroundColor: `${classAccent}10` }]}
+                    onPress={() => {
+                      setAPPracticeUnitIds((prev) => {
+                        if (prev.includes(unit.id)) {
+                          return prev.length > 1 ? prev.filter((id) => id !== unit.id) : prev;
+                        }
+                        return [...prev, unit.id];
+                      });
+                    }}
+                    activeOpacity={0.75}
+                  >
+                    <View style={[styles.apUnitCheck, selected && { backgroundColor: classAccent, borderColor: classAccent }]}>
+                      {selected && <Ionicons name="checkmark" size={13} color="white" />}
+                    </View>
+                    <View style={styles.apUnitText}>
+                      <Text style={styles.apUnitTitle}>{unit.title}</Text>
+                      <Text style={styles.apUnitMeta}>
+                        {apCourseFramework?.course || 'AP course framework'}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              }) : (
+                <Text style={styles.apSetupEmpty}>Citadel could not match this class to a known AP subject, so it will use the standard AP framework for the class title.</Text>
+              )}
+            </ScrollView>
+
+            <TouchableOpacity
+              style={[styles.modalSaveBtn, { backgroundColor: classAccent }, apPracticeLoading && { opacity: 0.7 }]}
+              onPress={startAPPractice}
+              disabled={apPracticeLoading}
+            >
+              {apPracticeLoading ? (
+                <ActivityIndicator size="small" color="white" />
+              ) : (
+                <Ionicons name="sparkles" size={16} color="white" />
+              )}
+              <Text style={styles.modalSaveBtnText}>
+                {apPracticeLoading ? 'Generating...' : 'Generate Practice'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Quiz-Taking Modal */}
+      <Modal visible={!!activeQuiz} transparent animationType="slide" onRequestClose={closeQuizModal}>
+        <View style={styles.quizModalBackdrop}>
+          <View style={styles.quizModalCard}>
+            {activeQuiz?.questionData && (() => {
+              const questions = activeQuiz.questionData!;
+              const currentQuestion = questions[quizCurrentQ];
+              const totalQ = questions.length;
+              const isLast = quizCurrentQ === totalQ - 1;
+              const allAnswered = quizAnswers.every((a) => a !== null);
+
+              if (quizSubmitted && quizScore !== null) {
+                const correct = questions.filter((q, i) => quizAnswers[i] === q.correctIndex).length;
+                return (
+                  <View style={{ flex: 1 }}>
+                    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
+                      {/* Score Header */}
+                      <View style={styles.quizResultHeader}>
+                        <TouchableOpacity
+                          style={styles.quizResultCloseBtn}
+                          onPress={closeQuizModal}
+                          accessibilityRole="button"
+                          accessibilityLabel="Close quiz review"
+                        >
+                          <Ionicons name="close" size={20} color={colors.textPrimary} />
+                        </TouchableOpacity>
+                        <Text style={styles.quizResultScore}>{quizScore}%</Text>
+                        <Text style={styles.quizResultSub}>{correct}/{totalQ} correct</Text>
+                        <Text style={[styles.quizResultLabel, { color: quizScore >= 70 ? '#059669' : '#d97706' }]}>
+                          {quizScore >= 90 ? 'Outstanding!' : quizScore >= 70 ? 'Great job!' : quizScore >= 50 ? 'Good effort!' : 'Keep studying!'}
+                        </Text>
+                      </View>
+
+                      {/* AI Study Advice */}
+                      <View style={[styles.quizAdviceCard, { borderColor: `${classAccent}30` }]}>
+                        <View style={styles.quizAdviceHeader}>
+                          <Ionicons name="sparkles" size={15} color={classAccent} />
+                          <Text style={[styles.quizAdviceTitle, { color: classAccent }]}>Study Tip</Text>
+                        </View>
+                        {quizAdviceLoading ? (
+                          <View style={styles.quizAdviceLoadingRow}>
+                            <ActivityIndicator size="small" color={classAccent} />
+                            <Text style={styles.quizAdviceLoadingText}>Analyzing your results...</Text>
+                          </View>
+                        ) : (
+                          <Text style={styles.quizAdviceText}>{quizAdvice || 'Review the concepts you missed and try again!'}</Text>
+                        )}
+                      </View>
+
+                      {/* Section Label */}
+                      <View style={styles.quizResultSectionRow}>
+                        <Ionicons name="list" size={16} color={colors.textSecondary} />
+                        <Text style={styles.quizResultSectionLabel}>Review Answers</Text>
+                      </View>
+
+                      {questions.map((q, qi) => {
+                        const userAnswer = quizAnswers[qi];
+                        const isCorrect = userAnswer === q.correctIndex;
+                        const explanationKey = `${activeQuiz.id}-${qi}-${userAnswer ?? 'none'}`;
+                        const explanation = answerExplanations[explanationKey];
+                        const explanationLoading = explanationLoadingKey === explanationKey;
+                        return (
+                          <View key={qi} style={[styles.quizReviewCard, { borderColor: isCorrect ? '#D1FAE5' : '#FEE2E2' }]}>
+                            <View style={[styles.quizReviewAccent, { backgroundColor: isCorrect ? '#059669' : '#dc2626' }]} />
+                            <View style={styles.quizReviewContent}>
+                              <View style={styles.quizReviewHeader}>
+                                <View style={[styles.quizReviewBadge, { backgroundColor: isCorrect ? '#D1FAE5' : '#FEE2E2' }]}>
+                                  <Ionicons name={isCorrect ? 'checkmark-circle' : 'close-circle'} size={16} color={isCorrect ? '#059669' : '#dc2626'} />
+                                  <Text style={[styles.quizReviewBadgeText, { color: isCorrect ? '#059669' : '#dc2626' }]}>
+                                    {isCorrect ? 'Correct' : 'Incorrect'}
+                                  </Text>
+                                </View>
+                                <Text style={styles.quizReviewQNum}>Question {qi + 1}</Text>
+                              </View>
+                              <Text style={styles.quizReviewQ}>{q.question}</Text>
+                              <View style={styles.quizReviewOptsContainer}>
+                                {q.options.map((opt, oi) => {
+                                  const isUserPick = userAnswer === oi;
+                                  const isCorrectOpt = q.correctIndex === oi;
+                                  const isNeutral = !isUserPick && !isCorrectOpt;
+                                  return (
+                                    <View key={oi} style={[
+                                      styles.quizReviewOpt,
+                                      isCorrectOpt && { backgroundColor: '#ECFDF5', borderColor: '#059669' },
+                                      isUserPick && !isCorrectOpt && { backgroundColor: '#FEF2F2', borderColor: '#dc2626' },
+                                      isNeutral && { opacity: 0.6 },
+                                    ]}>
+                                      <View style={[
+                                        styles.quizReviewLetterCircle,
+                                        isCorrectOpt && { backgroundColor: '#059669' },
+                                        isUserPick && !isCorrectOpt && { backgroundColor: '#dc2626' },
+                                      ]}>
+                                        <Text style={[
+                                          styles.quizReviewOptLetter,
+                                          (isCorrectOpt || (isUserPick && !isCorrectOpt)) && { color: 'white' },
+                                        ]}>
+                                          {['A', 'B', 'C', 'D'][oi]}
+                                        </Text>
+                                      </View>
+                                      <Text style={[
+                                        styles.quizReviewOptText,
+                                        isCorrectOpt && { color: '#065F46', fontFamily: fonts.semiBold },
+                                        isUserPick && !isCorrectOpt && { color: '#991B1B' },
+                                      ]}>
+                                        {opt}
+                                      </Text>
+                                      {isCorrectOpt && <Ionicons name="checkmark-circle" size={16} color="#059669" />}
+                                      {isUserPick && !isCorrectOpt && <Ionicons name="close-circle" size={16} color="#dc2626" />}
+                                      {isUserPick && isCorrectOpt && (
+                                        <View style={styles.quizReviewYourAnswer}>
+                                          <Text style={styles.quizReviewYourAnswerText}>Your answer</Text>
+                                        </View>
+                                      )}
+                                    </View>
+                                  );
+                                })}
+                              </View>
+                              {explanation ? (
+                                <View style={[styles.quizExplanationBox, { backgroundColor: `${classAccent}08`, borderColor: `${classAccent}25` }]}>
+                                  <Ionicons name="sparkles" size={15} color={classAccent} />
+                                  <Text style={[styles.quizExplanationText, { color: classAccent }]}>{explanation}</Text>
+                                </View>
+                              ) : (
+                                <TouchableOpacity
+                                  style={[styles.quizExplainBtn, { backgroundColor: `${classAccent}10`, borderColor: `${classAccent}30` }]}
+                                  onPress={() => explainQuizQuestion(q, userAnswer, explanationKey)}
+                                  disabled={!!explanationLoadingKey}
+                                >
+                                  {explanationLoading ? (
+                                    <ActivityIndicator size="small" color={classAccent} />
+                                  ) : (
+                                    <Ionicons name="sparkles-outline" size={14} color={classAccent} />
+                                  )}
+                                  <Text style={[styles.quizExplainBtnText, { color: classAccent }]}>
+                                    {explanationLoading ? 'Explaining...' : 'Explain answer'}
+                                  </Text>
+                                </TouchableOpacity>
+                              )}
+                            </View>
+                          </View>
+                        );
+                      })}
+                    </ScrollView>
+
+                    {/* Sticky Bottom Action Bar */}
+                    <View style={styles.quizResultActionBar}>
+                      <TouchableOpacity style={styles.quizResultDoneBtn} onPress={closeQuizModal}>
+                        <Ionicons name="checkmark" size={18} color={colors.textPrimary} />
+                        <Text style={styles.quizResultDoneBtnText}>Done</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={[styles.quizResultRetakeBtn, { backgroundColor: classAccent }]} onPress={retakeQuiz}>
+                        <Ionicons name="refresh" size={18} color="white" />
+                        <Text style={styles.quizResultRetakeBtnText}>Retake Quiz</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              }
+
+              return (
+                <>
+                  <View style={styles.quizTopBar}>
+                    <TouchableOpacity onPress={closeQuizModal}>
+                      <Ionicons name="close" size={24} color={colors.textPrimary} />
+                    </TouchableOpacity>
+                    <Text style={styles.quizTopTitle}>{activeQuiz.title}</Text>
+                    <Text style={styles.quizTopProgress}>{quizCurrentQ + 1}/{totalQ}</Text>
+                  </View>
+
+                  <View style={styles.quizProgressBar}>
+                    <View style={[styles.quizProgressFill, { width: `${((quizCurrentQ + 1) / totalQ) * 100}%`, backgroundColor: classAccent }]} />
+                  </View>
+
+                  <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
+                    <Text style={styles.quizQuestionText}>{currentQuestion.question}</Text>
+
+                    <View style={styles.quizOptionsContainer}>
+                      {currentQuestion.options.map((option, oi) => {
+                        const isSelected = quizAnswers[quizCurrentQ] === oi;
+                        const isEliminated = (quizEliminated[quizCurrentQ] || []).includes(oi);
+                        return (
+                          <TouchableOpacity
+                            key={oi}
+                            style={[
+                              styles.quizOptionBtn,
+                              isSelected && { backgroundColor: `${classAccent}15`, borderColor: classAccent, borderWidth: 2 },
+                              isEliminated && styles.quizOptionEliminated,
+                            ]}
+                            onPress={() => selectQuizAnswer(quizCurrentQ, oi)}
+                          >
+                            <View style={[styles.quizOptionLetter, isSelected && { backgroundColor: classAccent }, isEliminated && styles.quizOptionLetterEliminated]}>
+                              <Text style={[styles.quizOptionLetterText, isSelected && { color: 'white' }, isEliminated && styles.quizOptionTextEliminated]}>
+                                {['A', 'B', 'C', 'D'][oi]}
+                              </Text>
+                            </View>
+                            <Text style={[styles.quizOptionText, isSelected && { color: classAccent, fontFamily: fonts.semiBold }, isEliminated && styles.quizOptionTextEliminated]}>
+                              {option}
+                            </Text>
+                            <TouchableOpacity
+                              style={[styles.quizEliminateBtn, isEliminated && styles.quizEliminateBtnActive]}
+                              onPress={() => toggleEliminatedAnswer(quizCurrentQ, oi)}
+                              hitSlop={8}
+                              accessibilityRole="button"
+                              accessibilityLabel={isEliminated ? `Restore answer ${['A', 'B', 'C', 'D'][oi]}` : `Cross out answer ${['A', 'B', 'C', 'D'][oi]}`}
+                            >
+                              <Ionicons
+                                name={isEliminated ? 'close-circle' : 'close-circle-outline'}
+                                size={18}
+                                color={isEliminated ? '#B45309' : colors.textTertiary}
+                              />
+                            </TouchableOpacity>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+
+                    {(() => {
+                      const hintText = currentQuestion.hint || dynamicHints[quizCurrentQ];
+                      const isRevealed = quizHintsShown.has(quizCurrentQ);
+                      if (isRevealed && hintText) {
+                        return (
+                          <View style={{
+                            marginTop: 12, padding: 14, borderRadius: 14,
+                            backgroundColor: '#FFF7ED', borderWidth: 1, borderColor: '#FDBA74',
+                            flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+                          }}>
+                            <Ionicons name="bulb" size={18} color="#F59E0B" style={{ marginTop: 1 }} />
+                            <Text style={{ flex: 1, fontSize: 13, fontFamily: fonts.regular, color: '#92400E', lineHeight: 19 }}>
+                              {hintText}
+                            </Text>
+                          </View>
+                        );
+                      }
+                      return (
+                        <TouchableOpacity
+                          style={{
+                            marginTop: 12, alignSelf: 'center',
+                            flexDirection: 'row', alignItems: 'center', gap: 6,
+                            paddingVertical: 8, paddingHorizontal: 16,
+                            borderRadius: 20, backgroundColor: '#FFF7ED',
+                            borderWidth: 1, borderColor: '#FDE68A',
+                            opacity: hintLoading ? 0.6 : 1,
+                          }}
+                          disabled={hintLoading}
+                          onPress={async () => {
+                            if (currentQuestion.hint) {
+                              setQuizHintsShown(prev => { const n = new Set(prev); n.add(quizCurrentQ); return n; });
+                            } else {
+                              setHintLoading(true);
+                              const hint = await generateQuizHint(currentQuestion.question, [...currentQuestion.options]);
+                              setDynamicHints(prev => ({ ...prev, [quizCurrentQ]: hint }));
+                              setQuizHintsShown(prev => { const n = new Set(prev); n.add(quizCurrentQ); return n; });
+                              setHintLoading(false);
+                            }
+                          }}
+                        >
+                          <Ionicons name={hintLoading ? 'hourglass-outline' : 'bulb-outline'} size={16} color="#F59E0B" />
+                          <Text style={{ fontSize: 13, fontFamily: fonts.medium, color: '#B45309' }}>
+                            {hintLoading ? 'Generating hint…' : 'Need a hint?'}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })()}
+                  </ScrollView>
+
+                  <View style={styles.quizNavRow}>
+                    {quizCurrentQ > 0 && (
+                      <TouchableOpacity style={[styles.quizNavBtn, { backgroundColor: '#F0E0D0' }]} onPress={() => setQuizCurrentQ((q) => q - 1)}>
+                        <Ionicons name="arrow-back" size={16} color={colors.textPrimary} />
+                        <Text style={[styles.quizNavBtnText, { color: colors.textPrimary }]}>Back</Text>
+                      </TouchableOpacity>
+                    )}
+                    <View style={{ flex: 1 }} />
+                    {isLast ? (
+                      <TouchableOpacity
+                        style={[styles.quizNavBtn, { backgroundColor: allAnswered ? classAccent : '#D8C8B8' }]}
+                        onPress={submitQuiz}
+                        disabled={!allAnswered}
+                      >
+                        <Ionicons name="checkmark-circle" size={16} color="white" />
+                        <Text style={styles.quizNavBtnText}>Submit</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity
+                        style={[styles.quizNavBtn, { backgroundColor: quizAnswers[quizCurrentQ] !== null ? classAccent : '#D8C8B8' }]}
+                        onPress={() => setQuizCurrentQ((q) => q + 1)}
+                        disabled={quizAnswers[quizCurrentQ] === null}
+                      >
+                        <Text style={styles.quizNavBtnText}>Next</Text>
+                        <Ionicons name="arrow-forward" size={16} color="white" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </>
+              );
+            })()}
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={showEditModal} transparent animationType="slide" onRequestClose={() => setShowEditModal(false)}>
         <View style={styles.modalBackdrop}>
@@ -3146,6 +3994,103 @@ const styles = StyleSheet.create({
   statText: { fontSize: 12, color: colors.textSecondary, fontFamily: fonts.medium },
   desc: { fontSize: 14, color: colors.textSecondary, marginTop: 24, lineHeight: 22, fontFamily: fonts.regular },
   descBold: { fontFamily: fonts.bold, color: colors.textPrimary },
+  apPracticeSection: {
+    marginTop: 18,
+    gap: 8,
+  },
+  apPracticeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderRadius: 18,
+    borderWidth: 1,
+  },
+  apPracticeHistory: {
+    gap: 6,
+  },
+  apPracticeIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  apPracticeText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  apPracticeTitle: {
+    fontSize: 14,
+    fontFamily: fonts.bold,
+    color: colors.textPrimary,
+  },
+  apPracticeBody: {
+    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 17,
+    fontFamily: fonts.regular,
+    color: colors.textSecondary,
+  },
+  apSetupSub: {
+    fontSize: 13,
+    lineHeight: 19,
+    fontFamily: fonts.regular,
+    color: colors.textSecondary,
+    marginBottom: 6,
+  },
+  apSetupChipGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 6,
+  },
+  apSetupUnits: {
+    maxHeight: 230,
+  },
+  apSetupEmpty: {
+    fontSize: 13,
+    lineHeight: 19,
+    fontFamily: fonts.regular,
+    color: colors.textSecondary,
+    paddingVertical: 10,
+  },
+  apUnitRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'white',
+    borderWidth: 1.5,
+    borderColor: '#F0E0D0',
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 8,
+  },
+  apUnitCheck: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: '#D8C8B8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF8F2',
+  },
+  apUnitText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  apUnitTitle: {
+    fontSize: 13,
+    fontFamily: fonts.bold,
+    color: colors.textPrimary,
+  },
+  apUnitMeta: {
+    marginTop: 2,
+    fontSize: 11,
+    fontFamily: fonts.regular,
+    color: colors.textTertiary,
+  },
 
   emptyBox: { backgroundColor: 'white', borderRadius: 28, padding: 24, alignItems: 'center', marginTop: 24, borderWidth: 2, borderColor: '#F0E0D0' },
   emptyTitle: { fontSize: 16, fontFamily: fonts.bold, color: colors.textPrimary, marginTop: 12 },
@@ -3387,12 +4332,14 @@ const styles = StyleSheet.create({
     fontFamily: fonts.medium,
   },
   modalSaveBtn: {
+    flexDirection: 'row',
     marginTop: 16,
     height: 52,
     borderRadius: 20,
     backgroundColor: colors.maroon,
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 8,
   },
   modalSaveBtnDisabled: { backgroundColor: '#D8C8B8' },
   modalSaveBtnText: { color: 'white', fontSize: 15, fontFamily: fonts.bold },
@@ -3810,17 +4757,32 @@ const styles = StyleSheet.create({
   // === Quiz styles ===
   quizRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 10,
-    paddingVertical: 8,
+    paddingVertical: 10,
     paddingHorizontal: 10,
     backgroundColor: `${colors.maroon}12`,
     borderRadius: 14,
     marginBottom: 6,
   },
-  quizTitle: { fontSize: 13, fontFamily: fonts.bold, color: colors.textPrimary },
-  quizMeta: { fontSize: 11, fontFamily: fonts.regular, color: colors.textTertiary, marginTop: 1 },
-  quizScorePill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
+  quizIconSlot: {
+    width: 18,
+    minHeight: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 1,
+  },
+  quizBody: {
+    flex: 1,
+    minWidth: 0,
+    gap: 8,
+  },
+  quizTextBlock: {
+    minWidth: 0,
+  },
+  quizTitle: { fontSize: 13, lineHeight: 18, fontFamily: fonts.bold, color: colors.textPrimary },
+  quizMeta: { fontSize: 11, fontFamily: fonts.regular, color: colors.textTertiary, marginTop: 2 },
+  quizScorePill: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
   quizScoreText: { fontSize: 12, fontFamily: fonts.bold },
   quizTakeBtn: {
     paddingHorizontal: 14,
@@ -3851,6 +4813,22 @@ const styles = StyleSheet.create({
   quizTopProgress: { fontSize: 13, fontFamily: fonts.semiBold, color: colors.textSecondary },
   quizProgressBar: { height: 6, backgroundColor: '#F0E0D0', borderRadius: 3, marginBottom: 24, overflow: 'hidden' },
   quizProgressFill: { height: '100%', borderRadius: 3 },
+  quizDismissZone: {
+    minHeight: 44,
+    marginTop: -6,
+    marginBottom: 4,
+  },
+  quizTopCloseBtn: {
+    position: 'absolute',
+    right: 0,
+    top: 4,
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: '#F0E0D0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   quizQuestionText: { fontSize: 18, fontFamily: fonts.bold, color: colors.textPrimary, lineHeight: 26, marginBottom: 20 },
   quizOptionsContainer: { gap: 12 },
   quizOptionBtn: {
@@ -3858,12 +4836,38 @@ const styles = StyleSheet.create({
     backgroundColor: 'white', borderRadius: 18, padding: 16,
     borderWidth: 2, borderColor: '#F0E0D0',
   },
+  quizOptionEliminated: {
+    backgroundColor: '#F8F2EC',
+    borderColor: '#E7D5C5',
+    opacity: 0.76,
+  },
   quizOptionLetter: {
     width: 32, height: 32, borderRadius: 10, backgroundColor: '#F0E0D0',
     alignItems: 'center', justifyContent: 'center',
   },
+  quizOptionLetterEliminated: {
+    backgroundColor: '#E7D5C5',
+  },
   quizOptionLetterText: { fontSize: 14, fontFamily: fonts.bold, color: colors.textSecondary },
   quizOptionText: { flex: 1, fontSize: 14, fontFamily: fonts.regular, color: colors.textPrimary, lineHeight: 20 },
+  quizOptionTextEliminated: {
+    color: colors.textTertiary,
+    textDecorationLine: 'line-through',
+  },
+  quizEliminateBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF8F2',
+    borderWidth: 1,
+    borderColor: '#F0E0D0',
+  },
+  quizEliminateBtnActive: {
+    backgroundColor: '#FEF3C7',
+    borderColor: '#FCD34D',
+  },
   quizNavRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 16 },
   quizNavBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
@@ -3871,25 +4875,233 @@ const styles = StyleSheet.create({
   },
   quizNavBtnText: { fontSize: 14, fontFamily: fonts.bold, color: 'white' },
 
-  // Results
-  quizResultHeader: { alignItems: 'center', paddingVertical: 24 },
-  quizResultScore: { fontSize: 48, fontFamily: fonts.bold, color: colors.textPrimary, marginTop: 8 },
-  quizResultSub: { fontSize: 16, fontFamily: fonts.medium, color: colors.textSecondary, marginTop: 4 },
-  quizResultLabel: { fontSize: 18, fontFamily: fonts.bold, marginTop: 8 },
+  // Results — Header
+  quizResultHeader: {
+    alignItems: 'center' as const,
+    paddingTop: 8,
+    paddingBottom: 20,
+    position: 'relative' as const,
+  },
+  quizResultCloseBtn: {
+    position: 'absolute' as const,
+    right: 0,
+    top: 4,
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: '#F0E0D0',
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    zIndex: 10,
+  },
+  quizResultScore: {
+    fontSize: 44,
+    fontFamily: fonts.bold,
+    color: colors.textPrimary,
+    marginTop: 4,
+  },
+  quizResultSub: {
+    fontSize: 15,
+    fontFamily: fonts.medium,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  quizResultLabel: {
+    fontSize: 17,
+    fontFamily: fonts.bold,
+    marginTop: 6,
+  },
+
+  // Results — AI Advice Card
+  quizAdviceCard: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 18,
+    borderWidth: 1,
+  },
+  quizAdviceHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 6,
+    marginBottom: 8,
+  },
+  quizAdviceTitle: {
+    fontSize: 13,
+    fontFamily: fonts.bold,
+  },
+  quizAdviceText: {
+    fontSize: 13,
+    fontFamily: fonts.regular,
+    color: colors.textPrimary,
+    lineHeight: 19,
+  },
+  quizAdviceLoadingRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+  },
+  quizAdviceLoadingText: {
+    fontSize: 13,
+    fontFamily: fonts.regular,
+    color: colors.textTertiary,
+    fontStyle: 'italic' as const,
+  },
+
+  // Results — Section Label
+  quizResultSectionRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+    marginBottom: 14,
+    paddingHorizontal: 2,
+  },
+  quizResultSectionLabel: {
+    fontSize: 15,
+    fontFamily: fonts.bold,
+    color: colors.textSecondary,
+  },
+
+  // Results — Sticky Action Bar
+  quizResultActionBar: {
+    position: 'absolute' as const,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row' as const,
+    gap: 10,
+    paddingHorizontal: 22,
+    paddingTop: 14,
+    paddingBottom: 20,
+    backgroundColor: '#FFF8F2',
+    borderTopWidth: 1,
+    borderTopColor: '#F0E0D0',
+  },
+  quizResultDoneBtn: {
+    flex: 1,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 6,
+    paddingVertical: 14,
+    borderRadius: 16,
+    backgroundColor: '#F0E0D0',
+  },
+  quizResultDoneBtnText: {
+    fontSize: 15,
+    fontFamily: fonts.bold,
+    color: colors.textPrimary,
+  },
+  quizResultRetakeBtn: {
+    flex: 1.3,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 6,
+    paddingVertical: 14,
+    borderRadius: 16,
+  },
+  quizResultRetakeBtnText: {
+    fontSize: 15,
+    fontFamily: fonts.bold,
+    color: 'white',
+  },
 
   // Review
   quizReviewCard: {
-    backgroundColor: 'white', borderRadius: 18, padding: 14, marginBottom: 12,
-    borderWidth: 2,
+    backgroundColor: 'white', borderRadius: 18, marginBottom: 14,
+    borderWidth: 1.5, overflow: 'hidden' as const,
+    flexDirection: 'row' as const,
   },
-  quizReviewQ: { flex: 1, fontSize: 13, fontFamily: fonts.semiBold, color: colors.textPrimary, lineHeight: 18 },
+  quizReviewAccent: {
+    width: 5,
+    borderTopLeftRadius: 18,
+    borderBottomLeftRadius: 18,
+  },
+  quizReviewContent: {
+    flex: 1,
+    padding: 16,
+  },
+  quizReviewHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    marginBottom: 10,
+  },
+  quizReviewBadge: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+  },
+  quizReviewBadgeText: {
+    fontSize: 11,
+    fontFamily: fonts.bold,
+  },
+  quizReviewQNum: {
+    fontSize: 11,
+    fontFamily: fonts.medium,
+    color: colors.textTertiary,
+  },
+  quizReviewQ: { fontSize: 14, fontFamily: fonts.semiBold, color: colors.textPrimary, lineHeight: 20, marginBottom: 12 },
+  quizReviewOptsContainer: {
+    gap: 6,
+  },
   quizReviewOpt: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingVertical: 6, paddingHorizontal: 10, borderRadius: 10, marginTop: 4,
+    flexDirection: 'row' as const, alignItems: 'center' as const, gap: 10,
+    paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12,
     borderWidth: 1.5, borderColor: '#F0E0D0',
+    backgroundColor: '#FDFCFB',
   },
-  quizReviewOptLetter: { fontSize: 11, fontFamily: fonts.bold, color: colors.textTertiary, width: 16 },
-  quizReviewOptText: { flex: 1, fontSize: 12, fontFamily: fonts.regular, color: colors.textPrimary },
+  quizReviewLetterCircle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    backgroundColor: '#E7D5C5',
+  },
+  quizReviewOptLetter: { fontSize: 12, fontFamily: fonts.bold, color: colors.textSecondary },
+  quizReviewOptText: { flex: 1, fontSize: 13, fontFamily: fonts.regular, color: colors.textPrimary, lineHeight: 18 },
+  quizReviewYourAnswer: {
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  quizReviewYourAnswerText: {
+    fontSize: 10,
+    fontFamily: fonts.bold,
+    color: '#059669',
+  },
+  quizExplainBtn: {
+    marginTop: 12,
+    alignSelf: 'flex-start' as const,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 20,
+    backgroundColor: '#F5F3FF',
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+  },
+  quizExplainBtnText: { fontSize: 12, fontFamily: fonts.semiBold, color: '#7c3aed' },
+  quizExplanationBox: {
+    marginTop: 12,
+    flexDirection: 'row' as const,
+    alignItems: 'flex-start' as const,
+    gap: 8,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: '#F5F3FF',
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+  },
+  quizExplanationText: { flex: 1, fontSize: 12, lineHeight: 18, fontFamily: fonts.regular, color: '#4c1d95' },
 
   // Teacher
   teacherRow: {
@@ -3906,7 +5118,20 @@ const styles = StyleSheet.create({
   },
   teacherSaveBtn: { width: 26, height: 26, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   quizRowPending: { opacity: 0.6 },
-  quizActions: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 10 },
+  quizActions: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    flexWrap: 'wrap' as const,
+    gap: 8,
+  },
+  quizIconAction: {
+    width: 28,
+    height: 28,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.45)',
+  },
 
   // === Inline Action Bar (inside scroll) ===
   unitActionBarInline: {

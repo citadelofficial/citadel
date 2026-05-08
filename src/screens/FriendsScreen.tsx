@@ -466,14 +466,14 @@ export function FriendsScreen({
     tutorialStep === 6
       ? {
         step: 6,
-        title: 'Meet your people',
-        body: 'Chat with friends, manage requests, and discover classmates — all in one place. Tap the Discover tab to find your school network.',
+        title: 'Find classmates',
+        body: 'Use Discover to find students from your school, then send requests so notes and class invites travel faster.',
       }
       : tutorialStep === 7
         ? {
           step: 7,
-          title: 'Grow your network',
-          body: 'Almost done! Use the Invite button below to share Citadel with friends at your school. You\'re all set after this!',
+          title: 'Invite your circle',
+          body: 'Share your username or school invite when you are ready. This is the last step; Citadel is now set up around your classes.',
         }
         : null;
 
@@ -540,6 +540,17 @@ export function FriendsScreen({
     setSendResult(null);
     setFriendSearchUsername('');
   };
+
+  const handleTutorialNextPress = useCallback(() => {
+    if (tutorialStep === 6) {
+      setActiveTab('discover');
+    }
+    if (tutorialStep === 7) {
+      onTutorialFinish();
+      return;
+    }
+    onTutorialNext();
+  }, [onTutorialFinish, onTutorialNext, tutorialStep]);
 
   const shareSchoolInvite = useCallback(async () => {
     try {
@@ -1006,8 +1017,8 @@ export function FriendsScreen({
             body={tutorialGuide.body}
             onDismiss={onTutorialSkip}
             onPrevious={onTutorialBack}
-            onNext={tutorialStep === 7 ? onTutorialFinish : onTutorialNext}
-            nextLabel={tutorialStep === 7 ? 'Finish' : 'Next'}
+            onNext={handleTutorialNextPress}
+            nextLabel={tutorialStep === 7 ? 'Finish' : 'Open Discover'}
           />
         )}
 

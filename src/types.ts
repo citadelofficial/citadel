@@ -67,9 +67,11 @@ export interface Quiz {
   questions: number;
   score?: number; // best score for current user (percentage 0-100)
   date: string;
+  type?: 'quiz' | 'ap-practice';
   status?: 'generating' | 'ready' | 'grading' | 'graded';
   questionData?: QuizQuestion[];
   scoreHistory?: QuizAttempt[];
+  lastAdvice?: string; // AI-generated study advice from the most recent attempt
 }
 
 export interface SubUnit {
@@ -102,6 +104,7 @@ export interface ClassData {
   description: string;
   files: FileData[];
   units: UnitData[];
+  apPracticeTests?: Quiz[];
   school?: string;
   teacher?: string;
 }

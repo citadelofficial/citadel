@@ -379,7 +379,8 @@ export default function App() {
         await supabase.from('class_code_registry').insert(registryRows);
       }
 
-      // Count how many users have each class code and update classmates
+      // Count how many users have each class code (read-only, no state update here
+      // to avoid re-triggering the classes useEffect → saveClasses → syncClassCodes loop)
       try {
         for (const cls of classesData) {
           const normalized = cls.classCode.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
@@ -387,20 +388,7 @@ export default function App() {
             .from('class_code_registry')
             .select('owner_id')
             .eq('class_code', normalized);
-
-          if (countData && countData.length > 0) {
-            const memberCount = countData.length;
-            // Only update if the count has changed
-            if (memberCount !== cls.classmates) {
-              setClasses((prev) =>
-                prev.map((c) =>
-                  c.classCode === cls.classCode
-                    ? { ...c, classmates: memberCount }
-                    : c
-                )
-              );
-            }
-          }
+          // Classmate counts are synced during loadClasses instead
         }
       } catch {
         // Count query failed, that's ok
@@ -422,6 +410,7 @@ export default function App() {
           description: cls.description,
           school: cls.school || '',
           units: cls.units,
+          apPracticeTests: cls.apPracticeTests || [],
           files: cls.files,
           documents: cls.documents,
           classmates: cls.classmates,
@@ -687,7 +676,10 @@ export default function App() {
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.log('Class invites load error (table may not exist):', error.message);
+        // Silently ignore network errors (expected when offline)
+        if (!error.message?.includes('Network request failed')) {
+          console.log('Class invites load error (table may not exist):', error.message);
+        }
         return;
       }
 
@@ -722,8 +714,8 @@ export default function App() {
       } else {
         setClassInvites([]);
       }
-    } catch (err) {
-      console.log('Error loading class invites:', err);
+    } catch {
+      // Silently ignore — typically network failures when offline
     }
   };
 

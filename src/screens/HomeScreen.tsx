@@ -663,18 +663,18 @@ export function HomeScreen({
     if (tutorialStep === 1) {
       return {
         step: 1,
-        title: 'Create your first class',
+        title: showClassModal ? 'Build your first class' : 'Start with one class',
         body: showClassModal
-          ? 'Almost there! Fill in the details and tap Create Class when you\'re ready.'
-          : 'Tap the Create / Join Class card below to get started with your first class.',
+          ? 'Choose a template, name the class, pick the block, and tap Create Class. Citadel will add starter sections so your work has somewhere to land.'
+          : 'Create or join the class you want to organize first. This becomes the home base for notes, files, quizzes, and classmates.',
       };
     }
 
     if (tutorialStep === 2 && !showClassModal) {
       return {
         step: 2,
-        title: 'Jump into your class',
-        body: 'Great job! Now tap your class card to explore units, notes, quizzes, and more inside it.',
+        title: 'Open the class hub',
+        body: 'Tap the class you just made. Inside, you will see how units, notes, files, and classmates stay connected.',
       };
     }
 
@@ -1350,7 +1350,7 @@ export function HomeScreen({
               onDismiss={onTutorialSkip}
               onPrevious={tutorialStep > 1 ? onTutorialBack : undefined}
               onNext={handleTutorialAdvance}
-              nextLabel={tutorialStep === 2 ? 'Open' : 'Next'}
+              nextLabel={tutorialStep === 2 ? 'Open class' : 'Create class'}
             />
           )}
 
