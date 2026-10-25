@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,8 @@ import {
   Share,
   ActivityIndicator,
   Alert,
+  Dimensions,
+  FlatList,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -19,7 +21,7 @@ import { BottomNav } from '../components/BottomNav';
 import { InlineTutorialCard } from '../components/InlineTutorialCard';
 import { FormattedText } from '../components/FormattedText';
 import { colors, fonts } from '../theme';
-import { mergeNotesWithAI } from '../lib/gemini';
+import { mergeNotesWithAI, generateNoteSummary } from '../lib/gemini';
 import type { ClassData, FileData, UnitData } from '../types';
 
 interface Props {
@@ -100,11 +102,28 @@ export function FilesScreen({
   const classAccent = currentClass?.color || colors.maroon;
   const files = currentClass?.files || [];
 
+  // AI-generated summary state
+  const [aiSummaryBullets, setAiSummaryBullets] = useState<string[]>([]);
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
+  const [aiSummaryError, setAiSummaryError] = useState<string | null>(null);
+  const summaryCache = useRef<Record<number, string[]>>({});
+
+  // Memoize page images for stable FlatList data
+  const allPages = useMemo(() => {
+    if (!selectedFile) return [];
+    if (selectedFile.pageImages && selectedFile.pageImages.length > 0) return selectedFile.pageImages;
+    if (selectedFile.source !== 'document' && selectedFile.thumbnail) return [selectedFile.thumbnail];
+    return [];
+  }, [selectedFile?.id, selectedFile?.pageImages, selectedFile?.thumbnail, selectedFile?.source]);
+
   // Batch select
   const [batchMode, setBatchMode] = useState(false);
   const [selectedFileIds, setSelectedFileIds] = useState<number[]>([]);
   // Image viewer
   const [viewingImage, setViewingImage] = useState<string | null>(null);
+  const [viewerPageIndex, setViewerPageIndex] = useState(0);
+  // Pages gallery
+  const [showPagesGallery, setShowPagesGallery] = useState(false);
   // View mode
   const [viewMode, setViewMode] = useState<ViewMode>('organized');
   // Track broken thumbnails (e.g. local file:// URIs from other users' devices)
@@ -129,6 +148,52 @@ export function FilesScreen({
       }
     }
   }, [initialFileId]);
+
+  // Fetch AI summary when the summary tab is selected
+  const summaryFetchingRef = useRef(false);
+  const selectedFileId = selectedFile?.id ?? null;
+  const selectedFileTitle = selectedFile?.previewTitle || selectedFile?.name || '';
+  const selectedFileText = selectedFile?.previewText || '';
+
+  useEffect(() => {
+    if (detailTab !== 'summary' || selectedFileId === null) return;
+
+    // Use cached result if available
+    if (summaryCache.current[selectedFileId]) {
+      setAiSummaryBullets(summaryCache.current[selectedFileId]);
+      setAiSummaryError(null);
+      setAiSummaryLoading(false);
+      return;
+    }
+
+    // Prevent duplicate concurrent fetches
+    if (summaryFetchingRef.current) return;
+    summaryFetchingRef.current = true;
+
+    let cancelled = false;
+    setAiSummaryLoading(true);
+    setAiSummaryError(null);
+
+    generateNoteSummary(selectedFileTitle, selectedFileText)
+      .then((result) => {
+        if (cancelled) return;
+        if (result.success) {
+          summaryCache.current[selectedFileId] = result.bullets;
+          setAiSummaryBullets(result.bullets);
+        } else {
+          setAiSummaryError(result.error || 'Could not generate summary.');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setAiSummaryError('Something went wrong. Please try again.');
+      })
+      .finally(() => {
+        if (!cancelled) setAiSummaryLoading(false);
+        summaryFetchingRef.current = false;
+      });
+
+    return () => { cancelled = true; summaryFetchingRef.current = false; };
+  }, [detailTab, selectedFileId]);
 
   const toggleBatchSelect = (id: number) => {
     setSelectedFileIds((prev) =>
@@ -477,12 +542,6 @@ export function FilesScreen({
   };
 
   if (selectedFile) {
-    const summaryBullets = selectedFile.previewText
-      .split('. ')
-      .filter(Boolean)
-      .slice(0, 4)
-      .map((text) => (text.endsWith('.') ? text : `${text}.`));
-
     const mergeSubUnits = currentClass?.units.flatMap((unit) => unit.subUnits.map((sub) => ({ unit, sub }))) || [];
 
     return (
@@ -517,33 +576,66 @@ export function FilesScreen({
 
           {actionStatus.length > 0 && <Text style={styles.actionStatus}>{actionStatus}</Text>}
 
+          {/* Page Preview — scrollable if multi-page */}
+          {allPages.length > 0 && !failedThumbnails.has(selectedFile.id) && (
+            <View style={{ marginBottom: 16 }}>
+              <FlatList
+                data={allPages}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                keyExtractor={(_, i) => `page-${i}`}
+                onMomentumScrollEnd={(e) => {
+                  const screenW = Dimensions.get('window').width;
+                  const previewW = screenW - 48;
+                  const idx = Math.round(e.nativeEvent.contentOffset.x / previewW);
+                  setViewerPageIndex(idx);
+                }}
+                renderItem={({ item: uri, index }) => {
+                  const screenW = Dimensions.get('window').width;
+                  const previewW = screenW - 48;
+                  return (
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      onPress={() => {
+                        setViewerPageIndex(index);
+                        setViewingImage(uri);
+                      }}
+                      style={{ width: previewW }}
+                    >
+                      <Image
+                        source={{ uri }}
+                        style={{ width: previewW, height: 200, borderRadius: 20, backgroundColor: '#FFF5ED' }}
+                        resizeMode="cover"
+                        onError={() => onThumbnailError(selectedFile.id)}
+                      />
+                      <View style={[styles.imageExpandBadge, { bottom: 8, right: 8, width: 28, height: 28 }]}>
+                        <Ionicons name="expand" size={14} color="white" />
+                      </View>
+                    </TouchableOpacity>
+                  );
+                }}
+              />
+              {allPages.length > 1 && (
+                <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 5, marginTop: 8 }}>
+                  {allPages.map((_, i) => (
+                    <View
+                      key={i}
+                      style={{
+                        width: viewerPageIndex === i ? 18 : 6,
+                        height: 6,
+                        borderRadius: 3,
+                        backgroundColor: viewerPageIndex === i ? classAccent : '#E0D0C0',
+                      }}
+                    />
+                  ))}
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* File Meta Card */}
           <View style={styles.fileInfoCard}>
-            <TouchableOpacity
-              onPress={() => {
-                if (selectedFile.source === 'camera' && selectedFile.thumbnail && !failedThumbnails.has(selectedFile.id)) {
-                  setViewingImage(selectedFile.thumbnail);
-                }
-              }}
-              disabled={selectedFile.source !== 'camera' || failedThumbnails.has(selectedFile.id)}
-            >
-              {failedThumbnails.has(selectedFile.id) ? (
-                <View style={[styles.fileThumb, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6' }]}>
-                  <Ionicons name="document-text" size={28} color={colors.textTertiary} />
-                  <Text style={{ fontSize: 9, fontFamily: fonts.regular, color: colors.textTertiary, marginTop: 2 }}>No preview</Text>
-                </View>
-              ) : (
-                <Image
-                  source={{ uri: selectedFile.thumbnail }}
-                  style={styles.fileThumb}
-                  onError={() => onThumbnailError(selectedFile.id)}
-                />
-              )}
-              {selectedFile.source === 'camera' && !failedThumbnails.has(selectedFile.id) && (
-                <View style={[styles.imageExpandBadge, { bottom: 4, right: 4, width: 22, height: 22 }]}>
-                  <Ionicons name="expand" size={12} color="white" />
-                </View>
-              )}
-            </TouchableOpacity>
             <View style={styles.fileMeta}>
               <Text style={styles.fileName}>{selectedFile.previewTitle || selectedFile.name}</Text>
               <Text style={styles.fileClass}>{currentClass?.title} • {currentClass?.block}</Text>
@@ -552,7 +644,16 @@ export function FilesScreen({
           </View>
 
           <View style={styles.chips}>
-            <View style={styles.chip}><Ionicons name="document-text" size={12} color={classAccent} /><Text style={styles.chipText}>{selectedFile.pages} Pages</Text></View>
+            <TouchableOpacity
+              style={styles.chip}
+              onPress={() => {
+                if (allPages.length > 0) setShowPagesGallery(true);
+              }}
+            >
+              <Ionicons name="document-text" size={12} color={classAccent} />
+              <Text style={styles.chipText}>{selectedFile.pages} {selectedFile.pages === 1 ? 'Page' : 'Pages'}</Text>
+              <Ionicons name="chevron-forward" size={10} color={colors.textTertiary} />
+            </TouchableOpacity>
             <View style={styles.chip}><Ionicons name="hardware-chip-outline" size={12} color="#2563eb" /><Text style={styles.chipText}>{selectedFile.size}</Text></View>
             <View style={styles.chip}><Ionicons name="time-outline" size={12} color="#059669" /><Text style={styles.chipText}>{selectedFile.readTime}</Text></View>
           </View>
@@ -574,7 +675,9 @@ export function FilesScreen({
           {detailTab === 'overview' && (
             <View style={styles.detailSection}>
               <Text style={styles.previewHeading}>{selectedFile.previewTitle}</Text>
-              <Text style={styles.previewBody}>{selectedFile.previewText}</Text>
+              <View style={{ marginTop: 8 }}>
+                <FormattedText accentColor={classAccent}>{selectedFile.previewText}</FormattedText>
+              </View>
 
               <View style={styles.quickActionsRow}>
                 <TouchableOpacity style={styles.quickActionBtn} onPress={openMoveToUnit}>
@@ -591,15 +694,39 @@ export function FilesScreen({
 
           {detailTab === 'summary' && (
             <View style={styles.detailSection}>
-              <Text style={styles.detailSectionTitle}>Key Summary</Text>
-              {summaryBullets.map((bullet, idx) => (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                <Ionicons name="sparkles" size={16} color={classAccent} />
+                <Text style={styles.detailSectionTitle}>AI Summary</Text>
+              </View>
+              {aiSummaryLoading && (
+                <View style={{ alignItems: 'center', paddingVertical: 24 }}>
+                  <ActivityIndicator size="small" color={classAccent} />
+                  <Text style={[styles.summaryText, { marginTop: 8, textAlign: 'center' }]}>Generating summary…</Text>
+                </View>
+              )}
+              {aiSummaryError && !aiSummaryLoading && (
+                <View style={{ paddingVertical: 12 }}>
+                  <Text style={[styles.summaryText, { color: '#DC2626' }]}>{aiSummaryError}</Text>
+                  <TouchableOpacity
+                    style={{ marginTop: 8 }}
+                    onPress={() => {
+                      // Clear cache to force re-fetch
+                      if (selectedFile) delete summaryCache.current[selectedFile.id];
+                      setAiSummaryError(null);
+                      setDetailTab('overview');
+                      setTimeout(() => setDetailTab('summary'), 50);
+                    }}
+                  >
+                    <Text style={[styles.quickActionText, { color: classAccent }]}>Retry</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              {!aiSummaryLoading && !aiSummaryError && aiSummaryBullets.map((bullet, idx) => (
                 <View key={idx} style={styles.summaryRow}>
-                  <Ionicons name="sparkles" size={14} color={classAccent} />
+                  <Ionicons name="checkmark-circle" size={14} color={classAccent} />
                   <Text style={styles.summaryText}>{bullet}</Text>
                 </View>
               ))}
-              <Text style={styles.detailSectionTitle}>Suggested Next Step</Text>
-              <Text style={styles.previewBody}>Create 3 flashcards from this file and attach them to your active unit before your next study session.</Text>
             </View>
           )}
 
@@ -607,20 +734,33 @@ export function FilesScreen({
             <View style={styles.detailSection}>
               <Text style={styles.detailSectionTitle}>File Activity</Text>
               <View style={styles.activityItem}>
-                <Ionicons name="download-outline" size={16} color={colors.textSecondary} />
-                <Text style={styles.activityText}>Downloaded for offline reading.</Text>
-                <Text style={styles.activityTime}>2h ago</Text>
+                <Ionicons
+                  name={selectedFile.source === 'camera' ? 'camera-outline' : selectedFile.source === 'document' ? 'document-attach-outline' : 'images-outline'}
+                  size={16}
+                  color={colors.textSecondary}
+                />
+                <Text style={styles.activityText}>
+                  {selectedFile.source === 'camera' ? 'Scanned with camera' : selectedFile.source === 'document' ? 'Imported from document' : selectedFile.source === 'library' ? 'Added from photo library' : 'File added'}
+                </Text>
+                <Text style={styles.activityTime}>{selectedFile.date}</Text>
               </View>
               <View style={styles.activityItem}>
-                <Ionicons name="git-merge-outline" size={16} color={colors.textSecondary} />
-                <Text style={styles.activityText}>Ready to merge with class notes.</Text>
-                <Text style={styles.activityTime}>Today</Text>
+                <Ionicons name="sparkles-outline" size={16} color={colors.textSecondary} />
+                <Text style={styles.activityText}>AI text extraction completed</Text>
+                <Text style={styles.activityTime}>{selectedFile.date}</Text>
               </View>
               <View style={styles.activityItem}>
-                <Ionicons name="create-outline" size={16} color={colors.textSecondary} />
-                <Text style={styles.activityText}>Notes annotated.</Text>
-                <Text style={styles.activityTime}>2d ago</Text>
+                <Ionicons name="document-text-outline" size={16} color={colors.textSecondary} />
+                <Text style={styles.activityText}>{selectedFile.pages} {selectedFile.pages === 1 ? 'page' : 'pages'} • {selectedFile.size}</Text>
+                <Text style={styles.activityTime}>{selectedFile.readTime}</Text>
               </View>
+              {currentClass && (
+                <View style={styles.activityItem}>
+                  <Ionicons name="folder-outline" size={16} color={colors.textSecondary} />
+                  <Text style={styles.activityText}>Filed under {currentClass.title}</Text>
+                  <Text style={styles.activityTime}>{selectedFile.date}</Text>
+                </View>
+              )}
             </View>
           )}
 
@@ -831,15 +971,112 @@ export function FilesScreen({
           </Modal>
         </ScrollView>
 
-        {/* Full Image Viewer (detail view) */}
+        {/* Full Image Viewer with pinch-to-zoom */}
         <Modal visible={!!viewingImage} transparent animationType="fade" onRequestClose={() => setViewingImage(null)}>
           <View style={styles.imageViewerBackdrop}>
             <TouchableOpacity style={styles.imageViewerClose} onPress={() => setViewingImage(null)}>
               <Ionicons name="close" size={28} color="white" />
             </TouchableOpacity>
-            {viewingImage && (
-              <Image source={{ uri: viewingImage }} style={styles.imageViewerImage} resizeMode="contain" />
-            )}
+            {viewingImage && (() => {
+              const currentIdx = allPages.indexOf(viewingImage);
+              const hasPrev = currentIdx > 0;
+              const hasNext = currentIdx < allPages.length - 1;
+              const screenW = Dimensions.get('window').width;
+              const screenH = Dimensions.get('window').height;
+
+              return (
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', width: '100%' }}>
+                  <ScrollView
+                    contentContainerStyle={{ alignItems: 'center', justifyContent: 'center', minHeight: screenH * 0.75 }}
+                    maximumZoomScale={5}
+                    minimumZoomScale={1}
+                    bouncesZoom
+                    showsVerticalScrollIndicator={false}
+                    showsHorizontalScrollIndicator={false}
+                  >
+                    <Image
+                      source={{ uri: viewingImage }}
+                      style={{ width: screenW * 0.92, height: screenH * 0.72, borderRadius: 12 }}
+                      resizeMode="contain"
+                    />
+                  </ScrollView>
+                  {/* Page counter */}
+                  {allPages.length > 1 && (
+                    <View style={{
+                      position: 'absolute', bottom: 80,
+                      backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 14,
+                      paddingHorizontal: 14, paddingVertical: 6,
+                    }}>
+                      <Text style={{ color: 'white', fontFamily: fonts.bold, fontSize: 13 }}>
+                        {currentIdx + 1} / {allPages.length}
+                      </Text>
+                    </View>
+                  )}
+                  {/* Prev / Next arrows */}
+                  {hasPrev && (
+                    <TouchableOpacity
+                      style={{ position: 'absolute', left: 12, top: '50%', marginTop: -22, width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' }}
+                      onPress={() => {
+                        const prev = allPages[currentIdx - 1];
+                        setViewerPageIndex(currentIdx - 1);
+                        setViewingImage(prev);
+                      }}
+                    >
+                      <Ionicons name="chevron-back" size={24} color="white" />
+                    </TouchableOpacity>
+                  )}
+                  {hasNext && (
+                    <TouchableOpacity
+                      style={{ position: 'absolute', right: 12, top: '50%', marginTop: -22, width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' }}
+                      onPress={() => {
+                        const next = allPages[currentIdx + 1];
+                        setViewerPageIndex(currentIdx + 1);
+                        setViewingImage(next);
+                      }}
+                    >
+                      <Ionicons name="chevron-forward" size={24} color="white" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              );
+            })()}
+          </View>
+        </Modal>
+
+        {/* Pages Gallery Modal */}
+        <Modal visible={showPagesGallery} transparent animationType="slide" onRequestClose={() => setShowPagesGallery(false)}>
+          <View style={{ flex: 1, backgroundColor: '#FFF8F2' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 60, paddingBottom: 16 }}>
+              <Text style={{ fontSize: 22, fontFamily: fonts.bold, color: colors.textPrimary }}>All Pages</Text>
+              <TouchableOpacity
+                style={{ width: 40, height: 40, borderRadius: 14, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#F0E0D0' }}
+                onPress={() => setShowPagesGallery(false)}
+              >
+                <Ionicons name="close" size={22} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', padding: 16, gap: 12 }}>
+              {allPages.map((uri, i) => {
+                const tileW = (Dimensions.get('window').width - 56) / 2;
+                return (
+                  <TouchableOpacity
+                    key={i}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      setShowPagesGallery(false);
+                      setViewerPageIndex(i);
+                      setViewingImage(uri);
+                    }}
+                    style={{ width: tileW, borderRadius: 16, overflow: 'hidden', borderWidth: 2, borderColor: '#F0E0D0', backgroundColor: 'white' }}
+                  >
+                    <Image source={{ uri }} style={{ width: tileW - 4, height: tileW * 1.3, borderRadius: 14 }} resizeMode="cover" />
+                    <View style={{ padding: 8, alignItems: 'center' }}>
+                      <Text style={{ fontSize: 12, fontFamily: fonts.bold, color: colors.textPrimary }}>Page {i + 1}</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
           </View>
         </Modal>
 
@@ -1116,7 +1353,20 @@ export function FilesScreen({
               <Ionicons name="close" size={28} color="white" />
             </TouchableOpacity>
             {viewingImage && (
-              <Image source={{ uri: viewingImage }} style={styles.imageViewerImage} resizeMode="contain" />
+              <ScrollView
+                contentContainerStyle={{ alignItems: 'center', justifyContent: 'center', minHeight: Dimensions.get('window').height * 0.75 }}
+                maximumZoomScale={5}
+                minimumZoomScale={1}
+                bouncesZoom
+                showsVerticalScrollIndicator={false}
+                showsHorizontalScrollIndicator={false}
+              >
+                <Image
+                  source={{ uri: viewingImage }}
+                  style={{ width: Dimensions.get('window').width * 0.92, height: Dimensions.get('window').height * 0.72, borderRadius: 12 }}
+                  resizeMode="contain"
+                />
+              </ScrollView>
             )}
           </View>
         </Modal>

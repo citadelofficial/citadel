@@ -636,3 +636,177 @@ export async function generateQuizAdvice(
     return 'Review the concepts you missed and try again!';
   }
 }
+
+// ─── Note Summary Generation ────────────────────────────────────
+export interface SummaryResult {
+  success: boolean;
+  bullets: string[];   // Key point bullet strings
+  error?: string;
+}
+
+export async function generateNoteSummary(
+  noteTitle: string,
+  noteContent: string,
+): Promise<SummaryResult> {
+  try {
+    checkRateLimit();
+    const client = getClient();
+
+    const prompt = `You are a study assistant. A student has a note titled "${noteTitle}". Read the following note content and produce a concise summary as 3-5 bullet points. Each bullet should be one clear sentence capturing a key fact, concept, or takeaway.
+
+Rules:
+- Each bullet is a standalone sentence (no sub-bullets)
+- Focus on the most important facts, definitions, and concepts
+- Use plain language a student can quickly scan
+- Do NOT add information not present in the notes
+- Do NOT include the note title in the bullets
+- Respond with ONLY the bullet points, one per line, each starting with "- "
+
+Note content:
+${noteContent}`;
+
+    const response = await client.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+    });
+
+    const text = response?.text?.trim() || '';
+
+    if (!text) {
+      return { success: false, bullets: [], error: 'AI returned empty response' };
+    }
+
+    const bullets = text
+      .split('\n')
+      .map((line: string) => line.replace(/^[-•*]\s*/, '').trim())
+      .filter((line: string) => line.length > 0)
+      .slice(0, 5);
+
+    if (bullets.length === 0) {
+      return { success: false, bullets: [], error: 'Could not extract summary points' };
+    }
+
+    return { success: true, bullets };
+  } catch (err) {
+    return { success: false, bullets: [], error: formatError(err) };
+  }
+}
+
+// ─── Auto-Sort: Classify Notes into Units ───────────────────────
+export interface NoteClassification {
+  noteIndex: number;
+  unitTitle: string;
+  subUnitTitle: string;
+  isNewUnit: boolean;
+  suggestedNoteTitle: string;
+}
+
+export interface ClassifyNotesResult {
+  success: boolean;
+  classifications: NoteClassification[];
+  error?: string;
+}
+
+export async function classifyNotesIntoUnits(
+  notes: { title: string; content: string }[],
+  existingUnits: { title: string; subUnits: { title: string }[] }[],
+): Promise<ClassifyNotesResult> {
+  try {
+    checkRateLimit();
+    const client = getClient();
+
+    const unitsDescription =
+      existingUnits.length > 0
+        ? existingUnits
+            .map(
+              (u, i) =>
+                `Unit ${i + 1}: "${u.title}"\n  Sections: ${u.subUnits.map((s) => `"${s.title}"`).join(', ')}`,
+            )
+            .join('\n')
+        : 'No existing units — you must create new ones for every note.';
+
+    const notesDescription = notes
+      .map(
+        (n, i) =>
+          `--- Note ${i} ---\nTitle: ${n.title}\nContent preview: ${n.content.slice(0, 500)}${n.content.length > 500 ? '...' : ''}`,
+      )
+      .join('\n\n');
+
+    const prompt = `You are an intelligent note organizer for a student study app. You are given ${notes.length} scanned notes and a list of existing course units with their sections.
+
+Your job is to classify each note into the most appropriate unit and section. If no existing unit is a good match for a note's topic, create a new unit.
+
+## Existing Units:
+${unitsDescription}
+
+## Notes to Classify:
+${notesDescription}
+
+## Rules:
+- Assign each note to the BEST matching existing unit and section based on topic/subject alignment
+- If a note clearly does not fit any existing unit, set "isNewUnit" to true and provide a descriptive unit title (e.g. "Cellular Respiration", "World War II Causes")
+- When creating new units, group related notes into the SAME new unit when they cover similar topics
+- For new units, set the subUnitTitle to "Core Concepts"
+- Provide a clean, descriptive suggestedNoteTitle for each note (e.g. "Mitosis vs Meiosis" not "scan_1726943821.jpg")
+- Every note MUST be classified — do not skip any
+
+You MUST respond with valid JSON only, no markdown, no code fences. Use this exact format:
+{
+  "classifications": [
+    {
+      "noteIndex": 0,
+      "unitTitle": "Exact existing unit title OR new unit title",
+      "subUnitTitle": "Exact existing section title OR 'Core Concepts' for new units",
+      "isNewUnit": false,
+      "suggestedNoteTitle": "Clean descriptive title"
+    }
+  ]
+}`;
+
+    const response = await client.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+    });
+
+    const rawText = response?.text?.trim() || '';
+
+    if (!rawText) {
+      return { success: false, classifications: [], error: 'AI returned empty response' };
+    }
+
+    const cleanJson = rawText.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+    const parsed = JSON.parse(cleanJson);
+
+    if (!parsed.classifications || !Array.isArray(parsed.classifications)) {
+      return { success: false, classifications: [], error: 'Invalid AI response format' };
+    }
+
+    const validClassifications: NoteClassification[] = parsed.classifications
+      .filter(
+        (c: any) =>
+          typeof c.noteIndex === 'number' &&
+          c.noteIndex >= 0 &&
+          c.noteIndex < notes.length &&
+          typeof c.unitTitle === 'string' &&
+          c.unitTitle.trim().length > 0 &&
+          typeof c.subUnitTitle === 'string' &&
+          typeof c.isNewUnit === 'boolean' &&
+          typeof c.suggestedNoteTitle === 'string',
+      )
+      .map((c: any) => ({
+        noteIndex: c.noteIndex,
+        unitTitle: c.unitTitle.trim(),
+        subUnitTitle: c.subUnitTitle.trim() || 'Core Concepts',
+        isNewUnit: c.isNewUnit,
+        suggestedNoteTitle: c.suggestedNoteTitle.trim(),
+      }));
+
+    if (validClassifications.length === 0) {
+      return { success: false, classifications: [], error: 'No valid classifications generated' };
+    }
+
+    return { success: true, classifications: validClassifications };
+  } catch (err) {
+    return { success: false, classifications: [], error: formatError(err) };
+  }
+}

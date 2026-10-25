@@ -11,6 +11,8 @@ import {
   Platform,
   Animated,
   Easing,
+  Linking,
+  Modal,
   ActivityIndicator,
   Alert,
 } from 'react-native';
@@ -42,6 +44,11 @@ export function SignInScreen({ onSignIn, onBack, onBeforeSignUp, onGoToSignUp, s
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [agreedToPrivacy, setAgreedToPrivacy] = useState(false);
+  const [confirmedAge, setConfirmedAge] = useState(false);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
 
   const introOpacity = useRef(new Animated.Value(0)).current;
   const introTranslate = useRef(new Animated.Value(18)).current;
@@ -156,6 +163,25 @@ export function SignInScreen({ onSignIn, onBack, onBeforeSignUp, onGoToSignUp, s
       }
       if (password !== confirmPassword) {
         setError('Passwords don\'t match.');
+        return;
+      }
+      if (!confirmedAge) {
+        setError('You must be 16 years of age or older to use Citadel.');
+        return;
+      }
+      if (!agreedToPrivacy) {
+        setError('Please read and agree to the Privacy Policy.');
+        return;
+      }
+      if (!agreedToTerms) {
+        setError('Please read and agree to the Terms of Service.');
+        return;
+      }
+    }
+
+    if (mode === 'signin') {
+      if (!agreedToTerms) {
+        setError('Please read and agree to the Terms of Service to sign in.');
         return;
       }
     }
@@ -366,12 +392,240 @@ export function SignInScreen({ onSignIn, onBack, onBeforeSignUp, onGoToSignUp, s
             </View>
           )}
 
+          {mode === 'signup' && (
+            <View style={styles.consentSection}>
+              <TouchableOpacity
+                style={styles.checkboxRow}
+                onPress={() => setConfirmedAge(!confirmedAge)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.checkbox, confirmedAge && styles.checkboxChecked]}>
+                  {confirmedAge && <Ionicons name="checkmark" size={14} color="white" />}
+                </View>
+                <Text style={styles.checkboxLabel}>I am 16 years of age or older</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.checkboxRow}
+                onPress={() => setAgreedToPrivacy(!agreedToPrivacy)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.checkbox, agreedToPrivacy && styles.checkboxChecked]}>
+                  {agreedToPrivacy && <Ionicons name="checkmark" size={14} color="white" />}
+                </View>
+                <Text style={styles.checkboxLabel}>
+                  I have read and agree to the{' '}
+                  <Text style={styles.privacyLink} onPress={() => setShowPrivacyModal(true)}>Privacy Policy</Text>
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.checkboxRow}
+                onPress={() => setAgreedToTerms(!agreedToTerms)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.checkbox, agreedToTerms && styles.checkboxChecked]}>
+                  {agreedToTerms && <Ionicons name="checkmark" size={14} color="white" />}
+                </View>
+                <Text style={styles.checkboxLabel}>
+                  I have read and agree to the{' '}
+                  <Text style={styles.privacyLink} onPress={() => setShowTermsModal(true)}>Terms of Service</Text>
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {mode === 'signin' && (
+            <View style={styles.consentSection}>
+              <TouchableOpacity
+                style={styles.checkboxRow}
+                onPress={() => setAgreedToTerms(!agreedToTerms)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.checkbox, agreedToTerms && styles.checkboxChecked]}>
+                  {agreedToTerms && <Ionicons name="checkmark" size={14} color="white" />}
+                </View>
+                <Text style={styles.checkboxLabel}>
+                  I have read and agree to the{' '}
+                  <Text style={styles.privacyLink} onPress={() => setShowTermsModal(true)}>Terms of Service</Text>
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {error && (
             <View style={styles.errorBox}>
               <Ionicons name="alert-circle" size={16} color="#dc2626" />
               <Text style={styles.errorText}>{error}</Text>
             </View>
           )}
+
+          {/* Privacy Policy Modal */}
+          <Modal visible={showPrivacyModal} animationType="slide" presentationStyle="pageSheet">
+            <View style={styles.privacyModalContainer}>
+              <View style={styles.privacyModalHeader}>
+                <Text style={styles.privacyModalTitle}>Privacy Policy</Text>
+                <TouchableOpacity onPress={() => setShowPrivacyModal(false)} style={styles.privacyModalClose}>
+                  <Ionicons name="close" size={22} color={colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
+              <ScrollView style={styles.privacyModalScroll} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}>
+                <Text style={styles.privacyModalDate}>Last updated October 12, 2026</Text>
+                <Text style={styles.privacyModalBody}>
+                  Citadel helps students capture, combine, and study their class notes together. This policy covers the Citadel iOS app and mycitadel.us (together, "Citadel"). It explains what we collect, why, and the choices you have. Citadel is run by a small student team. You can reach us at my.citadel.official@gmail.com.
+                </Text>
+                <Text style={styles.privacyModalSub}>What We Collect</Text>
+                <Text style={styles.privacyModalBody}>
+                  • Account info: your name, email, username, and, if you sign in with Google, basic Google profile details.{'\n'}
+                  • Your content: notes you write or import, files you upload (slides, PDFs, photos, recordings), and study material Citadel generates for you.{'\n'}
+                  • Study rooms: limited connection data needed to run live audio, video, and screen sharing.{'\n'}
+                  • Usage and device data: pages and features you use, time in the app, device type, operating system, and IP address. We collect this through Google Analytics for Firebase.
+                </Text>
+                <Text style={styles.privacyModalSub}>How We Use It</Text>
+                <Text style={styles.privacyModalBody}>
+                  We use your information to run Citadel. That means syncing and backing up your content, powering search and AI features, running study rooms, keeping accounts secure, answering support requests, and improving the app from aggregate usage. We send account and service emails. We send product updates only if you opt in. We never sell your personal information, and we don't use your notes for advertising.
+                </Text>
+                <Text style={styles.privacyModalSub}>Your Notes and Uploads</Text>
+                <Text style={styles.privacyModalBody}>
+                  Your content is private to you and the groups or links you choose to share it with. It is encrypted in transit and at rest. Uploads may be processed to pull out text and make them searchable. You can delete any note or upload at any time.
+                </Text>
+                <Text style={styles.privacyModalSub}>AI Features</Text>
+                <Text style={styles.privacyModalBody}>
+                  When you merge notes or generate quizzes and flashcards, the content involved is sent to our AI provider only to produce your result. We don't allow that provider to train its models on your content. AI output can be wrong, so check it before you rely on it.
+                </Text>
+                <Text style={styles.privacyModalSub}>Study Rooms</Text>
+                <Text style={styles.privacyModalBody}>
+                  Audio and video pass between participants in real time and are not recorded unless a host starts a recording. If that happens, everyone in the room is notified.
+                </Text>
+                <Text style={styles.privacyModalSub}>Who We Share With</Text>
+                <Text style={styles.privacyModalBody}>
+                  We share data only with the service providers that run Citadel: Firebase/Google (hosting, sign-in, analytics), Expo (app delivery), our AI provider, and our video provider. Each one may use your data only to provide its service to us. We may also disclose information if the law requires it or to protect users' safety.
+                </Text>
+                <Text style={styles.privacyModalSub}>Students and Children</Text>
+                <Text style={styles.privacyModalBody}>
+                  Citadel is for students 13 and older. If you're under 18, use Citadel with a parent or guardian's permission. We don't knowingly collect data from children under 13. If we learn we have, we delete it. Parents can contact us at any time to review or delete their child's data.
+                </Text>
+                <Text style={styles.privacyModalSub}>Keeping and Deleting Data</Text>
+                <Text style={styles.privacyModalBody}>
+                  We keep your content while your account is active. You can delete your account in the app under Settings. When you do, we permanently remove your data within 30 days, except limited records the law requires us to keep.
+                </Text>
+                <Text style={styles.privacyModalSub}>Your Rights</Text>
+                <Text style={styles.privacyModalBody}>
+                  You can access, correct, export, or delete your information, and you can withdraw any consent you've given. Depending on where you live, including California and the EU, you may have more rights under local law. To make a request, email my.citadel.official@gmail.com. We'll respond within 30 days.
+                </Text>
+                <Text style={styles.privacyModalSub}>Security</Text>
+                <Text style={styles.privacyModalBody}>
+                  We use reasonable technical and organizational safeguards, but no system is perfectly secure. If a breach affects your personal data, we'll notify you as the law requires.
+                </Text>
+                <Text style={styles.privacyModalSub}>Where Data Is Stored</Text>
+                <Text style={styles.privacyModalBody}>
+                  Citadel is based in the United States, and your data is processed there. If you use Citadel from outside the U.S., your data is transferred to the U.S. with the safeguards the law requires.
+                </Text>
+                <Text style={styles.privacyModalSub}>Changes</Text>
+                <Text style={styles.privacyModalBody}>
+                  If we make a significant change to this policy, we'll update the date at the top and notify you in the app or by email.
+                </Text>
+                <Text style={styles.privacyModalSub}>Contact</Text>
+                <Text style={styles.privacyModalBody}>
+                  my.citadel.official@gmail.com
+                </Text>
+              </ScrollView>
+              <View style={{ paddingHorizontal: 20, paddingBottom: 34, paddingTop: 12, backgroundColor: '#FFF8F2' }}>
+                <TouchableOpacity
+                  style={[styles.submitBtn, { marginTop: 0 }]}
+                  onPress={() => { setAgreedToPrivacy(true); setShowPrivacyModal(false); }}
+                  activeOpacity={0.88}
+                >
+                  <Ionicons name="checkmark-circle" size={18} color="white" />
+                  <Text style={styles.submitText}>I Agree</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
+
+          {/* Terms & Conditions Modal */}
+          <Modal visible={showTermsModal} animationType="slide" presentationStyle="pageSheet">
+            <View style={styles.privacyModalContainer}>
+              <View style={styles.privacyModalHeader}>
+                <Text style={styles.privacyModalTitle}>Terms of Service</Text>
+                <TouchableOpacity onPress={() => setShowTermsModal(false)} style={styles.privacyModalClose}>
+                  <Ionicons name="close" size={22} color={colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
+              <ScrollView style={styles.privacyModalScroll} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}>
+                <Text style={styles.privacyModalDate}>Last updated October 12, 2026</Text>
+                <Text style={styles.privacyModalBody}>
+                  These Terms cover your use of the Citadel iOS app and mycitadel.us (together, "Citadel"). By creating an account or using Citadel, you agree to them and to our Privacy Policy.
+                </Text>
+                <Text style={styles.privacyModalSub}>Who Can Use Citadel</Text>
+                <Text style={styles.privacyModalBody}>
+                  You must be at least 13. If you're under 18, a parent or guardian must agree to these Terms for you. Keep your account details accurate and your login secure. You're responsible for activity on your account.
+                </Text>
+                <Text style={styles.privacyModalSub}>Your Content</Text>
+                <Text style={styles.privacyModalBody}>
+                  You own the notes and files you add. You give Citadel a limited license to store, process, and display that content only to run the service for you and for the people you share it with, including syncing, search, AI features, and study rooms. Only upload material you have the right to share.
+                </Text>
+                <Text style={styles.privacyModalSub}>Acceptable Use</Text>
+                <Text style={styles.privacyModalBody}>
+                  Don't use Citadel to:{'\n'}
+                  • Cheat or break your school's academic integrity rules{'\n'}
+                  • Upload illegal, harassing, hateful, sexual, or violent content{'\n'}
+                  • Share other people's personal information without their consent{'\n'}
+                  • Spam, spread malware, or try to hack, disrupt, or reverse engineer Citadel{'\n'}
+                  • Record or share a study room without the other participants' consent
+                </Text>
+                <Text style={styles.privacyModalBody}>
+                  You can report content or users to my.citadel.official@gmail.com. We may remove content or suspend accounts that break these rules. If we do, we'll tell you why, and you can ask us to review the decision.
+                </Text>
+                <Text style={styles.privacyModalSub}>AI Features</Text>
+                <Text style={styles.privacyModalBody}>
+                  AI-generated study guides, quizzes, and flashcards can be inaccurate or incomplete. Check them before relying on them for coursework.
+                </Text>
+                <Text style={styles.privacyModalSub}>Our App</Text>
+                <Text style={styles.privacyModalBody}>
+                  Citadel and its name, logo, and design belong to the Citadel team. We give you a personal, non-transferable, revocable license to use the app on your devices.
+                </Text>
+                <Text style={styles.privacyModalSub}>Third-Party Services</Text>
+                <Text style={styles.privacyModalBody}>
+                  Citadel relies on services such as Google Firebase and Expo, which have their own terms. Data charges from your mobile carrier are your responsibility.
+                </Text>
+                <Text style={styles.privacyModalSub}>Changes and Availability</Text>
+                <Text style={styles.privacyModalBody}>
+                  Citadel is provided "as is." We may add, change, or remove features, and we can't promise the service will be uninterrupted or error-free. If we make a significant change to these Terms, we'll notify you, and continuing to use Citadel means you accept the change.
+                </Text>
+                <Text style={styles.privacyModalSub}>Ending Your Account</Text>
+                <Text style={styles.privacyModalBody}>
+                  You can delete your account at any time in Settings. We may suspend or end access if you seriously or repeatedly break these Terms. Where we can, we'll warn you first.
+                </Text>
+                <Text style={styles.privacyModalSub}>Liability</Text>
+                <Text style={styles.privacyModalBody}>
+                  To the fullest extent the law allows, Citadel isn't liable for indirect or incidental damages or for lost data beyond our reasonable control. Since Citadel is free, our total liability is limited to the minimum the law allows. Nothing here limits rights you have under consumer protection law.
+                </Text>
+                <Text style={styles.privacyModalSub}>Governing Law</Text>
+                <Text style={styles.privacyModalBody}>
+                  These Terms are governed by the laws of the Commonwealth of Virginia, USA, except where your local law gives you protections that can't be waived.
+                </Text>
+                <Text style={styles.privacyModalSub}>Apple</Text>
+                <Text style={styles.privacyModalBody}>
+                  If you downloaded Citadel from the App Store, these Terms are between you and Citadel, not Apple. Apple has no responsibility for the app or its support, and Apple's standard terms for apps also apply.
+                </Text>
+                <Text style={styles.privacyModalSub}>Contact</Text>
+                <Text style={styles.privacyModalBody}>
+                  my.citadel.official@gmail.com
+                </Text>
+              </ScrollView>
+              <View style={{ paddingHorizontal: 20, paddingBottom: 34, paddingTop: 12, backgroundColor: '#FFF8F2' }}>
+                <TouchableOpacity
+                  style={[styles.submitBtn, { marginTop: 0 }]}
+                  onPress={() => { setAgreedToTerms(true); setShowTermsModal(false); }}
+                  activeOpacity={0.88}
+                >
+                  <Ionicons name="checkmark-circle" size={18} color="white" />
+                  <Text style={styles.submitText}>I Agree</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
 
           <TouchableOpacity
             style={[styles.submitBtn, loading && styles.submitBtnLoading]}
@@ -556,4 +810,72 @@ const styles = StyleSheet.create({
     opacity: 0.8,
   },
   submitText: { fontSize: 16, fontFamily: fonts.bold, color: 'white' },
+
+  // Consent checkboxes
+  consentSection: { marginTop: 4, marginBottom: 6 },
+  checkboxRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'flex-start' as const,
+    gap: 12,
+    paddingVertical: 10,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#F0E0D0',
+    backgroundColor: 'white',
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    marginTop: 1,
+  },
+  checkboxChecked: {
+    backgroundColor: colors.maroon,
+    borderColor: colors.maroon,
+  },
+  checkboxLabel: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: fonts.medium,
+    color: colors.textSecondary,
+    lineHeight: 20,
+  },
+  privacyLink: {
+    color: colors.maroon,
+    fontFamily: fonts.bold,
+    textDecorationLine: 'underline' as const,
+  },
+
+  // Privacy Policy Modal
+  privacyModalContainer: { flex: 1, backgroundColor: '#FFF8F2' },
+  privacyModalHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0E0D0',
+  },
+  privacyModalTitle: { fontSize: 18, fontFamily: fonts.bold, color: colors.textPrimary },
+  privacyModalClose: {
+    width: 36, height: 36, borderRadius: 14,
+    backgroundColor: 'white', borderWidth: 2, borderColor: '#F0E0D0',
+    alignItems: 'center' as const, justifyContent: 'center' as const,
+  },
+  privacyModalScroll: { flex: 1 },
+  privacyModalDate: {
+    fontSize: 12, fontFamily: fonts.medium, color: colors.textTertiary,
+    textAlign: 'center' as const, marginTop: 16, marginBottom: 12,
+  },
+  privacyModalSub: {
+    fontSize: 15, fontFamily: fonts.bold, color: colors.textPrimary,
+    marginTop: 18, marginBottom: 6,
+  },
+  privacyModalBody: {
+    fontSize: 13, fontFamily: fonts.regular, color: colors.textSecondary,
+    lineHeight: 21, marginBottom: 4,
+  },
 });

@@ -6,11 +6,6 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#3D0C11"
-    },
     "assetBundlePatterns": [
       "**/*"
     ],
@@ -42,7 +37,18 @@
           "cameraPermission": "Allow Citadel to access your camera to take profile photos and scan notes."
         }
       ],
-      "expo-font"
+      "expo-font",
+      "@react-native-community/datetimepicker",
+      "expo-sharing",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#3D0C11"
+        }
+      ],
+      "expo-status-bar"
     ],
     "extra": {
       "eas": {

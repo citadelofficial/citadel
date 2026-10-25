@@ -32,6 +32,7 @@ export interface FileData {
   previewTitle: string;
   previewText: string;
   source?: 'camera' | 'library' | 'document';
+  pageImages?: string[];
 }
 
 export interface SubUnitNote {

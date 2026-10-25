@@ -146,11 +146,11 @@ export function TutorialCoachMark({
 
   return (
     <Animated.View
-      style={[StyleSheet.absoluteFillObject, { zIndex: 9999, opacity: fadeAnim }]}
+      style={[StyleSheet.absoluteFill, { zIndex: 9999, opacity: fadeAnim }]}
       pointerEvents="box-none"
     >
       {/* Dark overlay — 4 rectangles around the cutout */}
-      <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
+      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
         {/* Top */}
         <TouchableOpacity
           activeOpacity={1}

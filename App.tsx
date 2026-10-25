@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
-import { View, StyleSheet, ActivityIndicator, Alert, Share, AppState } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Share, AppState } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useFonts, SpaceGrotesk_400Regular, SpaceGrotesk_500Medium, SpaceGrotesk_600SemiBold, SpaceGrotesk_700Bold } from '@expo-google-fonts/space-grotesk';
 import { SplashScreen } from './src/screens/SplashScreen';
@@ -17,9 +17,11 @@ import { PersonProfileScreen } from './src/screens/PersonProfileScreen';
 import { InfoPageScreen } from './src/screens/InfoPageScreen';
 import { SchoolScreen } from './src/screens/SchoolScreen';
 import type { Screen, FriendData, ClassInvite } from './src/types';
-import type { UserData, ClassData, FileData } from './src/types';
+import type { UserData, ClassData, FileData, UnitData } from './src/types';
 import { defaultClasses } from './src/data/defaultClasses';
 import { supabase } from './src/lib/supabase';
+import { Ionicons } from '@expo/vector-icons';
+import { colors, fonts } from './src/theme';
 import { uploadAvatar } from './src/lib/storage';
 import { Session } from '@supabase/supabase-js';
 
@@ -58,7 +60,7 @@ export default function App() {
 
   const [currentScreen, setCurrentScreen] = useState<Screen>('splash');
   const [signInOnly, setSignInOnly] = useState(false);
-  const [previousScreen, setPreviousScreen] = useState<Screen>('home');
+  const [navigationHistory, setNavigationHistory] = useState<Screen[]>([]);
   const [userData, setUserData] = useState<UserData>({ name: '', username: '', email: '', grade: '', schools: [], primarySchool: '', profilePicture: null });
   const [classes, setClasses] = useState<ClassData[]>(defaultClasses);
   const [shortcuts, setShortcuts] = useState<ShortcutItem[]>([]);
@@ -70,7 +72,9 @@ export default function App() {
   const [selectedPerson, setSelectedPerson] = useState<FriendData | null>(null);
   const [activeInfoPage, setActiveInfoPage] = useState<'help' | 'terms' | 'privacy'>('help');
   const [selectedSchool, setSelectedSchool] = useState<string>('');
-  const [schoolBackScreen, setSchoolBackScreen] = useState<Screen>('home');
+  const [pendingChatFriendId, setPendingChatFriendId] = useState<string | null>(null);
+  const [unreadMessageCount, setUnreadMessageCount] = useState(0);
+  const [messageNotification, setMessageNotification] = useState<{ senderName: string; text: string } | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [authInitialized, setAuthInitialized] = useState(false);
   const [tutorialStep, setTutorialStep] = useState(0);
@@ -78,6 +82,10 @@ export default function App() {
 
   // Prevent saving to Supabase until initial data is loaded
   const dataLoadedRef = useRef(false);
+  // Guards for auto-save: skip saves after load, debounce rapid updates, prevent overlapping saves
+  const skipClassesSaveRef = useRef(false);
+  const classesSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const classesSavingRef = useRef(false);
 
   // ═══════════════════════════════════════════
   // AUTH
@@ -196,6 +204,44 @@ export default function App() {
       })
       .subscribe();
 
+    // Subscribe to new messages for this user
+    const msgChannel = supabase.channel('messages-realtime')
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `receiver_id=eq.${userId}`,
+      }, async (payload: any) => {
+        const msg = payload.new;
+        if (!msg) return;
+
+        // Increment unread count
+        setUnreadMessageCount((prev) => prev + 1);
+
+        // Look up sender name for the notification
+        try {
+          const { data: senderProfile } = await supabase
+            .from('profiles')
+            .select('display_name, username')
+            .eq('id', msg.sender_id)
+            .single();
+
+          const senderName = senderProfile?.display_name || senderProfile?.username || 'Someone';
+          const preview = (msg.text || '').slice(0, 80) + ((msg.text || '').length > 80 ? '...' : '');
+
+          setMessageNotification({ senderName, text: preview });
+
+          // Auto-dismiss after 4 seconds
+          setTimeout(() => {
+            setMessageNotification(null);
+          }, 4000);
+        } catch {
+          setMessageNotification({ senderName: 'Someone', text: (msg.text || '').slice(0, 80) });
+          setTimeout(() => setMessageNotification(null), 4000);
+        }
+      })
+      .subscribe();
+
     // Refresh everything when app comes back to foreground
     const appStateListener = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active' && sessionRef.current?.user?.id) {
@@ -220,6 +266,7 @@ export default function App() {
       supabase.removeChannel(frChannel);
       supabase.removeChannel(ciChannel);
       supabase.removeChannel(friendsChannel);
+      supabase.removeChannel(msgChannel);
       appStateListener.remove();
       clearInterval(pollInterval);
     };
@@ -331,8 +378,10 @@ export default function App() {
 
       if (data && data.length > 0) {
         const loaded = data.map((row: any) => row.class_data as ClassData);
+        skipClassesSaveRef.current = true;
         setClasses(loaded);
       } else {
+        skipClassesSaveRef.current = true;
         setClasses([]);
       }
     } catch (err) {
@@ -426,11 +475,33 @@ export default function App() {
     }
   };
 
-  // Auto-save classes when they change
+  // Auto-save classes when they change (debounced to avoid rapid-fire saves)
   useEffect(() => {
-    if (dataLoadedRef.current) {
-      saveClasses(classes);
+    if (skipClassesSaveRef.current) {
+      skipClassesSaveRef.current = false;
+      return;
     }
+    if (!dataLoadedRef.current) return;
+
+    // Clear any pending save timer
+    if (classesSaveTimerRef.current) {
+      clearTimeout(classesSaveTimerRef.current);
+    }
+
+    // Debounce: wait 500ms after last change before saving
+    classesSaveTimerRef.current = setTimeout(() => {
+      if (classesSavingRef.current) return; // Skip if already saving
+      classesSavingRef.current = true;
+      saveClasses(classes).finally(() => {
+        classesSavingRef.current = false;
+      });
+    }, 500);
+
+    return () => {
+      if (classesSaveTimerRef.current) {
+        clearTimeout(classesSaveTimerRef.current);
+      }
+    };
   }, [classes, saveClasses]);
 
   // ═══════════════════════════════════════════
@@ -904,7 +975,42 @@ export default function App() {
   // ═══════════════════════════════════════════
   // HANDLERS
   // ═══════════════════════════════════════════
-  const navigate = (screen: Screen) => setCurrentScreen(screen);
+  // Navigate forward: push current screen onto history stack, then go to new screen
+  const navigateTo = useCallback((screen: Screen) => {
+    setCurrentScreen((prev) => {
+      // Don't push auth/splash screens onto the back stack
+      if (prev !== 'splash' && prev !== 'onboarding' && prev !== 'signin') {
+        setNavigationHistory((hist) => [...hist, prev]);
+      }
+      return screen;
+    });
+  }, []);
+
+  // Navigate back: pop the last screen from the history stack
+  const goBack = useCallback(() => {
+    setNavigationHistory((hist) => {
+      if (hist.length === 0) {
+        setCurrentScreen('home');
+        return hist;
+      }
+      const newHist = [...hist];
+      const prevScreen = newHist.pop()!;
+      setCurrentScreen(prevScreen);
+      return newHist;
+    });
+  }, []);
+
+  // Direct navigation (no history push) — for auth flow, splash, tab switches
+  const navigateDirect = useCallback((screen: Screen) => {
+    setCurrentScreen(screen);
+  }, []);
+
+  // Reset navigation to a root screen (clears history)
+  const navigateToRoot = useCallback((screen: Screen) => {
+    setNavigationHistory([]);
+    setCurrentScreen(screen);
+  }, []);
+
   const [pendingScanNote, setPendingScanNote] = useState<{ title: string; content: string; thumbnail: string } | null>(null);
   const goToTutorialStep = useCallback((step: number) => {
     const clampedStep = Math.max(1, Math.min(step, TUTORIAL_TOTAL_STEPS));
@@ -957,7 +1063,7 @@ export default function App() {
   const handleOnboardingComplete = (data: { name: string; username: string; grade: string; schools: string[] }) => {
     setUserData((prev) => ({ ...prev, ...data, primarySchool: data.schools[0] || '' }));
     setSignInOnly(false);
-    navigate('signin');
+    navigateDirect('signin');
   };
 
   const handleBeforeSignUp = () => {
@@ -1027,45 +1133,36 @@ export default function App() {
     await supabase.auth.signOut();
   };
 
-  const openPersonProfile = (person: FriendData, fromScreen: Screen) => {
+  const openPersonProfile = (person: FriendData) => {
     setSelectedPerson(person);
-    setPreviousScreen(fromScreen);
-    navigate('person-profile');
+    navigateTo('person-profile');
   };
 
-  const openPersonByName = (name: string, fromScreen: Screen) => {
+  const openPersonByName = (name: string) => {
     const found = friends.find(f => f.name.toLowerCase() === name.toLowerCase());
     if (found) {
-      openPersonProfile(found, fromScreen);
+      openPersonProfile(found);
     } else {
       openPersonProfile({
         id: name.toLowerCase().replace(/\s/g, '-'),
         name,
         color: '#E0E7FF',
         status: 'offline',
-      }, fromScreen);
+      });
     }
   };
 
   const openInfoPage = (page: 'help' | 'terms' | 'privacy') => {
     setActiveInfoPage(page);
-    setPreviousScreen('profile');
-    navigate('info-page');
+    navigateTo('info-page');
   };
 
-  const openSchool = (schoolName: string, fromScreen: Screen) => {
+  const openSchool = (schoolName: string) => {
     setSelectedSchool(schoolName);
-    setSchoolBackScreen(fromScreen);
-    setPreviousScreen(fromScreen);
-    navigate('school');
+    navigateTo('school');
   };
 
-  const handleRateApp = () => {
-    Alert.alert('Rate Citadel ⭐', 'Thanks for using Citadel! Rating will open the App Store.', [
-      { text: 'Not Now', style: 'cancel' },
-      { text: 'Rate 5 Stars', onPress: () => { } },
-    ]);
-  };
+
 
   const handleShareApp = async () => {
     try {
@@ -1077,7 +1174,7 @@ export default function App() {
 
   const handleOpenCourse = (classId: string) => {
     setSelectedClassId(classId);
-    navigate('course-detail');
+    navigateTo('course-detail');
   };
 
   const [initialFileId, setInitialFileId] = useState<number | null>(null);
@@ -1086,17 +1183,18 @@ export default function App() {
     if (classId) setSelectedClassId(classId);
     setInitialFileId(fileId ?? null);
     if (tutorialStep === 3) advanceTutorial();
-    navigate('files');
+    navigateTo('files');
   };
 
   const openScan = () => {
     if (tutorialStep === 4) advanceTutorial();
-    navigate('scan');
+    navigateTo('scan');
   };
 
   const openFriends = () => {
     if (tutorialStep === 5) advanceTutorial();
-    navigate('friends');
+    setUnreadMessageCount(0);
+    navigateTo('friends');
   };
 
   const handleSaveScan = (classId: string, file: FileData) => {
@@ -1114,7 +1212,24 @@ export default function App() {
       content: file.previewText || '',
       thumbnail: file.thumbnail || '',
     });
-    navigate('course-detail');
+    navigateTo('course-detail');
+  };
+
+  const handleAutoSort = (classId: string, updatedUnits: UnitData[], newFiles: FileData[]) => {
+    setClasses((prev) =>
+      prev.map((cls) =>
+        cls.id === classId
+          ? {
+              ...cls,
+              units: updatedUnits,
+              files: [...newFiles, ...cls.files],
+              documents: cls.documents + newFiles.length,
+            }
+          : cls
+      )
+    );
+    setSelectedClassId(classId);
+    navigateTo('course-detail');
   };
 
   const selectedClass = classes.find((c) => c.id === selectedClassId) || classes[0];
@@ -1132,14 +1247,14 @@ export default function App() {
       <View style={styles.container}>
         <StatusBar style="light" />
         {currentScreen === 'splash' && <SplashScreen />}
-        {currentScreen === 'onboarding' && <OnboardingScreen onGetStarted={handleOnboardingComplete} onSignIn={() => { setSignInOnly(true); navigate('signin'); }} />}
+        {currentScreen === 'onboarding' && <OnboardingScreen onGetStarted={handleOnboardingComplete} onSignIn={() => { setSignInOnly(true); navigateDirect('signin'); }} />}
         {currentScreen === 'signin' && (
           <SignInScreen
             onSignIn={handleSignIn}
-            onBack={() => navigate('onboarding')}
+            onBack={() => navigateDirect('onboarding')}
             onBeforeSignUp={handleBeforeSignUp}
             signInOnly={signInOnly}
-            onGoToSignUp={() => { setSignInOnly(false); navigate('onboarding'); }}
+            onGoToSignUp={() => { setSignInOnly(false); navigateDirect('onboarding'); }}
             userName={signInOnly ? undefined : userData.name}
             userUsername={signInOnly ? undefined : userData.username}
             userGrade={signInOnly ? undefined : userData.grade}
@@ -1153,7 +1268,7 @@ export default function App() {
             onFilesOpen={openFiles}
             onScanOpen={openScan}
             onFriendsOpen={openFriends}
-            onProfileOpen={() => navigate('profile')}
+            onProfileOpen={() => navigateTo('profile')}
             userName={userData.name}
             profilePicture={userData.profilePicture}
             grade={userData.grade}
@@ -1166,7 +1281,7 @@ export default function App() {
             onUpdateClass={handleUpdateClass}
             shortcuts={shortcuts}
             onUpdateShortcuts={handleUpdateShortcuts}
-            onSchoolOpen={(schoolName: string) => openSchool(schoolName, 'home')}
+            onSchoolOpen={(schoolName: string) => openSchool(schoolName)}
             classInvites={classInvites}
             onAcceptClassInvite={handleAcceptClassInvite}
             onDeclineClassInvite={handleDeclineClassInvite}
@@ -1174,30 +1289,34 @@ export default function App() {
             onTutorialNext={advanceTutorial}
             onTutorialBack={retreatTutorial}
             onTutorialSkip={endTutorial}
+            unreadMessageCount={unreadMessageCount}
           />
         )}
         {currentScreen === 'profile' && (
           <ProfileScreen
             userData={userData}
             onUpdateProfile={handleUpdateProfile}
-            onBack={() => navigate('home')}
+            onBack={goBack}
             onLogout={handleLogout}
             classes={classes}
             friends={friends}
-            onPersonOpen={(person) => openPersonProfile(person, 'profile')}
+            onPersonOpen={(person) => openPersonProfile(person)}
             onInfoPage={openInfoPage}
-            onRateApp={handleRateApp}
+
             onShareApp={handleShareApp}
             onReplayTutorial={replayTutorial}
             session={session}
-            onSchoolOpen={(schoolName: string) => openSchool(schoolName, 'profile')}
+            onSchoolOpen={(schoolName: string) => openSchool(schoolName)}
           />
         )}
         {currentScreen === 'person-profile' && selectedPerson && (
           <PersonProfileScreen
             person={selectedPerson}
-            onBack={() => navigate(previousScreen)}
-            onChat={() => navigate('friends')}
+            onBack={goBack}
+            onChat={() => {
+              setPendingChatFriendId(selectedPerson.id);
+              navigateTo('friends');
+            }}
             classes={classes}
             isFriend={friends.some(f => f.id === selectedPerson.id)}
             onAddFriend={async (personId) => {
@@ -1234,7 +1353,7 @@ export default function App() {
               await loadFriends(session.user.id);
               Alert.alert('Removed', 'Friend has been removed.');
             }}
-            onSchoolOpen={(schoolName: string) => openSchool(schoolName, 'person-profile')}
+            onSchoolOpen={(schoolName: string) => openSchool(schoolName)}
             onSendClassInvite={(toUserId: string, cls: ClassData[]) => handleSendClassInvite(toUserId, cls)}
             session={session}
           />
@@ -1242,19 +1361,19 @@ export default function App() {
         {currentScreen === 'info-page' && (
           <InfoPageScreen
             page={activeInfoPage}
-            onBack={() => navigate(previousScreen)}
+            onBack={goBack}
             supportEmail={SUPPORT_EMAIL}
           />
         )}
         {currentScreen === 'course-detail' && selectedClass && (
           <CourseDetailScreen
             classData={selectedClass}
-            onBack={() => navigate('home')}
+            onBack={goBack}
             onFilesOpen={() => openFiles()}
             onScan={openScan}
             onFriends={openFriends}
             onUpdateClass={handleUpdateClass}
-            onPersonOpen={(name) => openPersonByName(name, 'course-detail')}
+            onPersonOpen={(name) => openPersonByName(name)}
             unitProgress={unitProgress}
             onUpdateProgress={handleUpdateProgress}
             userName={userData.name}
@@ -1272,8 +1391,8 @@ export default function App() {
             classes={classes}
             initialClassId={selectedClassId}
             initialFileId={initialFileId}
-            onBack={() => { setInitialFileId(null); navigate('course-detail'); }}
-            onHome={() => { setInitialFileId(null); navigate('home'); }}
+            onBack={() => { setInitialFileId(null); goBack(); }}
+            onHome={() => { setInitialFileId(null); navigateToRoot('home'); }}
             onScan={() => { setInitialFileId(null); openScan(); }}
             onFriends={() => { setInitialFileId(null); openFriends(); }}
             onUpdateClass={handleUpdateClass}
@@ -1285,13 +1404,15 @@ export default function App() {
         )}
         {currentScreen === 'scan' && (
           <ScanScreen
-            onHome={() => navigate('home')}
+            onHome={() => navigateToRoot('home')}
             onFiles={() => openFiles()}
             onFriends={openFriends}
             classes={classes}
             onSaveScan={handleSaveScan}
+            onAutoSort={handleAutoSort}
             onAddClass={handleAddClass}
             onOpenFile={(classId, fileId) => openFiles(classId, fileId)}
+            userName={userData.name}
             tutorialStep={tutorialStep}
             onTutorialNext={advanceTutorial}
             onTutorialBack={retreatTutorial}
@@ -1300,14 +1421,14 @@ export default function App() {
         )}
         {currentScreen === 'friends' && (
           <FriendsScreen
-            onHome={() => navigate('home')}
+            onHome={() => navigateToRoot('home')}
             onScan={openScan}
             onFiles={() => openFiles()}
             profilePicture={userData.profilePicture}
             userName={userData.name}
             userUsername={userData.username}
-            onPersonOpen={(person) => openPersonProfile(person, 'friends')}
-            onProfileOpen={() => navigate('profile')}
+            onPersonOpen={(person) => openPersonProfile(person)}
+            onProfileOpen={() => navigateTo('profile')}
             friends={friends}
             friendRequests={friendRequests}
             onSendRequest={handleSendRequest}
@@ -1317,11 +1438,13 @@ export default function App() {
             classes={classes}
             userSchool={userData.primarySchool}
             userSchools={userData.schools}
-            onSchoolOpen={(schoolName: string) => openSchool(schoolName, 'friends')}
+            onSchoolOpen={(schoolName: string) => openSchool(schoolName)}
             classInvites={classInvites}
             onAcceptClassInvite={handleAcceptClassInvite}
             onDeclineClassInvite={handleDeclineClassInvite}
             onRefreshFriends={handleRefreshFriends}
+            initialChatFriendId={pendingChatFriendId}
+            onClearInitialChat={() => setPendingChatFriendId(null)}
             tutorialStep={tutorialStep}
             onTutorialNext={advanceTutorial}
             onTutorialBack={retreatTutorial}
@@ -1332,13 +1455,51 @@ export default function App() {
         {currentScreen === 'school' && (
           <SchoolScreen
             schoolName={selectedSchool}
-            onBack={() => navigate('home')}
-            onPersonOpen={(person) => openPersonProfile(person, 'school')}
+            onBack={goBack}
+            onPersonOpen={(person) => openPersonProfile(person)}
             classes={classes}
             currentUserId={session?.user?.id || null}
             onAddClass={handleAddClass}
             onCourseOpen={handleOpenCourse}
           />
+        )}
+
+        {/* Message Notification Banner */}
+        {messageNotification && currentScreen !== 'friends' && (
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => {
+              setMessageNotification(null);
+              setUnreadMessageCount(0);
+              navigateTo('friends');
+            }}
+            style={{
+              position: 'absolute', top: 60, left: 16, right: 16,
+              backgroundColor: 'white', borderRadius: 20, padding: 14,
+              flexDirection: 'row', alignItems: 'center', gap: 10,
+              shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 16, shadowOffset: { width: 0, height: 4 },
+              elevation: 8, borderWidth: 1.5, borderColor: '#F0E0D0',
+            }}
+          >
+            <View style={{
+              width: 38, height: 38, borderRadius: 12,
+              backgroundColor: `${colors.maroon}14`,
+              alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Ionicons name="chatbubble" size={16} color={colors.maroon} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 13, fontFamily: fonts.bold, color: colors.textPrimary }}>
+                {messageNotification.senderName}
+              </Text>
+              <Text style={{ fontSize: 12, fontFamily: fonts.regular, color: colors.textSecondary }} numberOfLines={1}>
+                {messageNotification.text}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => setMessageNotification(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Ionicons name="close" size={16} color={colors.textTertiary} />
+            </TouchableOpacity>
+          </TouchableOpacity>
         )}
       </View>
     </SafeAreaProvider>

@@ -28,11 +28,11 @@ import { FormattedText } from '../components/FormattedText';
 import { colors, fonts } from '../theme';
 import { friendsDirectory } from '../data/friends';
 import { getAPCourseFramework } from '../data/apCourseFrameworks';
-import { mergeNotesWithAI, extractTextFromImage, extractTextFromMultipleImages, generateQuizFromNotes, generateQuizHint, generateAPPracticeTest, generateAnswerExplanation, generateQuizAdvice } from '../lib/gemini';
+import { mergeNotesWithAI, extractTextFromImage, extractTextFromMultipleImages, generateQuizFromNotes, generateQuizHint, generateAPPracticeTest, generateAnswerExplanation, generateQuizAdvice, classifyNotesIntoUnits } from '../lib/gemini';
 import { uploadScanImage } from '../lib/storage';
 import * as FileSystemLegacy from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import type { ClassData, SubUnitNote, UnitData, Quiz, QuizQuestion, QuizAttempt } from '../types';
+import type { ClassData, FileData, SubUnitNote, UnitData, Quiz, QuizQuestion, QuizAttempt } from '../types';
 
 interface Props {
   classData: ClassData;
@@ -270,6 +270,14 @@ export function CourseDetailScreen({
   const [collapsedUnits, setCollapsedUnits] = useState<Set<number>>(new Set());
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
 
+  // === Auto-Sort State ===
+  type AutoSortPage = { uri: string; base64: string; mimeType: string };
+  const [showAutoSortCapture, setShowAutoSortCapture] = useState(false);
+  const [autoSortPages, setAutoSortPages] = useState<AutoSortPage[]>([]);
+  const [autoSortProcessing, setAutoSortProcessing] = useState(false);
+  const [autoSortProgress, setAutoSortProgress] = useState({ current: 0, total: 0, phase: '' });
+  const [autoSortResults, setAutoSortResults] = useState<{ noteTitle: string; unitTitle: string; isNew: boolean }[] | null>(null);
+
   const setUnitProgress = (updater: Record<string, boolean> | ((prev: Record<string, boolean>) => Record<string, boolean>)) => {
     if (typeof updater === 'function') {
       onUpdateProgress(updater(unitProgress));
@@ -420,9 +428,24 @@ export function CourseDetailScreen({
     setShowAddQuiz(false);
     setQuizTitle('');
 
-    // Call Gemini to generate questions
+    // Call Gemini with timeout + auto-retry
+    const QUIZ_TIMEOUT_MS = 30_000;
     const noteInputs = subUnit.notes.map((n) => ({ title: n.title, content: n.content }));
-    const result = await generateQuizFromNotes(noteInputs, count);
+
+    const generateWithTimeout = () =>
+      Promise.race([
+        generateQuizFromNotes(noteInputs, count),
+        new Promise<{ success: false; questions: []; title: string; error: string }>((resolve) =>
+          setTimeout(() => resolve({ success: false, questions: [], title: 'Quiz', error: 'timeout' }), QUIZ_TIMEOUT_MS)
+        ),
+      ]);
+
+    let result = await generateWithTimeout();
+
+    // Auto-retry once on timeout
+    if (!result.success && result.error === 'timeout') {
+      result = await generateWithTimeout();
+    }
 
     if (result.success) {
       updateSelectedUnitDeferred((unit) => ({
@@ -448,7 +471,12 @@ export function CourseDetailScreen({
         })),
       }));
     } else {
-      Alert.alert('Quiz Generation Failed', result.error || 'Please try again.');
+      Alert.alert(
+        'Quiz Generation Failed',
+        result.error === 'timeout'
+          ? 'Quiz took too long to generate. Please try again.'
+          : (result.error || 'Please try again.'),
+      );
       // Remove the failed quiz
       updateSelectedUnitDeferred((unit) => ({
         ...unit,
@@ -494,11 +522,33 @@ export function CourseDetailScreen({
 
     setShowAPPracticeSetup(false);
     setApPracticeLoading(true);
-    const result = await generateAPPracticeTest(classData.title, selectedOutline, questionCount, apPracticeDifficulty);
+
+    // Timeout + auto-retry for AP practice (longer timeout since AP tests are larger)
+    const AP_TIMEOUT_MS = 45_000;
+    const generateWithTimeout = () =>
+      Promise.race([
+        generateAPPracticeTest(classData.title, selectedOutline, questionCount, apPracticeDifficulty),
+        new Promise<{ success: false; questions: []; title: string; error: string }>((resolve) =>
+          setTimeout(() => resolve({ success: false, questions: [], title: '', error: 'timeout' }), AP_TIMEOUT_MS)
+        ),
+      ]);
+
+    let result = await generateWithTimeout();
+
+    // Auto-retry once on timeout
+    if (!result.success && result.error === 'timeout') {
+      result = await generateWithTimeout();
+    }
+
     setApPracticeLoading(false);
 
     if (!result.success || result.questions.length === 0) {
-      Alert.alert('Could Not Build AP Practice', result.error || 'Please try again in a moment.');
+      Alert.alert(
+        'Could Not Build AP Practice',
+        result.error === 'timeout'
+          ? 'AP practice took too long to generate. Please try again.'
+          : (result.error || 'Please try again in a moment.'),
+      );
       return;
     }
 
@@ -928,6 +978,165 @@ export function CourseDetailScreen({
     updateClassUnits((units) => [...units, newUnit]);
   };
 
+  // === Auto-Sort Functions ===
+  const autoSortCaptureFromCamera = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission Needed', 'Camera access is required to scan notes.');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.7, mediaTypes: ['images'], base64: true });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    let base64 = asset.base64 || '';
+    if (!base64 && asset.uri) {
+      const { default: FileSystem } = await import('expo-file-system');
+      base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+    }
+    const mimeType = asset.uri?.includes('.png') ? 'image/png' : 'image/jpeg';
+    setAutoSortPages((prev) => [...prev, { uri: asset.uri, base64, mimeType }]);
+  };
+
+  const autoSortCaptureFromLibrary = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission Needed', 'Photo library access is required.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.7, mediaTypes: ['images'], base64: true });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    let base64 = asset.base64 || '';
+    if (!base64 && asset.uri) {
+      const { default: FileSystem } = await import('expo-file-system');
+      base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+    }
+    const mimeType = asset.uri?.includes('.png') ? 'image/png' : 'image/jpeg';
+    setAutoSortPages((prev) => [...prev, { uri: asset.uri, base64, mimeType }]);
+  };
+
+  const handleAutoSort = async () => {
+    if (autoSortPages.length === 0) return;
+
+    setAutoSortProcessing(true);
+    const totalPages = autoSortPages.length;
+    const ocrResults: { title: string; content: string }[] = [];
+
+    try {
+      // Phase 1: OCR each page individually
+      for (let i = 0; i < autoSortPages.length; i++) {
+        setAutoSortProgress({ current: i + 1, total: totalPages, phase: `Scanning note ${i + 1} of ${totalPages}...` });
+        const page = autoSortPages[i];
+        const result = await extractTextFromImage(page.base64, page.mimeType);
+        if (result.success) {
+          ocrResults.push({ title: result.title, content: result.text });
+        } else {
+          ocrResults.push({ title: `Note ${i + 1}`, content: 'Could not extract text from this image.' });
+        }
+        if (i < autoSortPages.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+      }
+
+      // Phase 2: Classify notes into units
+      setAutoSortProgress({ current: totalPages, total: totalPages, phase: 'Sorting into units...' });
+      const existingUnits = classData.units.map((u) => ({
+        title: u.title,
+        subUnits: u.subUnits.map((s) => ({ title: s.title })),
+      }));
+
+      const classification = await classifyNotesIntoUnits(ocrResults, existingUnits);
+
+      if (!classification.success) {
+        Alert.alert('Sort Failed', classification.error || 'Could not classify notes. Try again.');
+        setAutoSortProcessing(false);
+        return;
+      }
+
+      // Phase 3: Apply classifications
+      setAutoSortProgress({ current: totalPages, total: totalPages, phase: 'Organizing notes...' });
+
+      const updatedUnits = [...classData.units.map((u) => ({ ...u, subUnits: u.subUnits.map((s) => ({ ...s, notes: [...s.notes] })) }))];
+      const newFiles: FileData[] = [];
+      const results: { noteTitle: string; unitTitle: string; isNew: boolean }[] = [];
+      const dateStr = formatToday();
+
+      for (const cls of classification.classifications) {
+        const ocrNote = ocrResults[cls.noteIndex];
+        if (!ocrNote) continue;
+
+        const noteTitle = cls.suggestedNoteTitle || ocrNote.title;
+
+        const fileId = Date.now() + cls.noteIndex;
+        const newFile: FileData = {
+          id: fileId,
+          name: `${noteTitle.replace(/[^a-zA-Z0-9 ]/g, '').slice(0, 30)}.jpg`,
+          date: dateStr,
+          thumbnail: autoSortPages[cls.noteIndex]?.uri || '',
+          pages: 1,
+          size: '0.5MB',
+          readTime: '2 Min Read',
+          previewTitle: noteTitle,
+          previewText: ocrNote.content,
+          source: 'camera' as const,
+          pageImages: [autoSortPages[cls.noteIndex]?.uri || ''],
+        };
+        newFiles.push(newFile);
+
+        const newNote = {
+          id: Date.now() + cls.noteIndex + 1000,
+          title: noteTitle,
+          author: userName || 'You',
+          date: dateStr,
+          pages: 1,
+          content: ocrNote.content,
+        };
+
+        if (cls.isNewUnit) {
+          let existingNewUnit = updatedUnits.find((u) => u.title === cls.unitTitle);
+          if (!existingNewUnit) {
+            const newUnitId = updatedUnits.length > 0 ? Math.max(...updatedUnits.map((u) => u.id)) + 1 : 1;
+            existingNewUnit = {
+              id: newUnitId,
+              title: cls.unitTitle,
+              pages: 0,
+              collaborators: 0,
+              examDate: 'TBD',
+              daysLeft: 0,
+              subUnits: [
+                { id: `${newUnitId}.1`, title: 'Core Concepts', notes: [] },
+                { id: `${newUnitId}.2`, title: 'Review Questions', notes: [] },
+              ],
+            };
+            updatedUnits.push(existingNewUnit);
+          }
+          const targetSub = existingNewUnit.subUnits.find((s) => s.title === cls.subUnitTitle) || existingNewUnit.subUnits[0];
+          if (targetSub) targetSub.notes.push(newNote);
+        } else {
+          const targetUnit = updatedUnits.find((u) => u.title === cls.unitTitle);
+          if (targetUnit) {
+            const targetSub = targetUnit.subUnits.find((s) => s.title === cls.subUnitTitle) || targetUnit.subUnits[0];
+            if (targetSub) targetSub.notes.push(newNote);
+          }
+        }
+
+        results.push({ noteTitle, unitTitle: cls.unitTitle, isNew: cls.isNewUnit });
+      }
+
+      // Apply changes
+      const updatedClass = { ...classData, units: updatedUnits, files: [...newFiles, ...classData.files], documents: classData.documents + newFiles.length };
+      onUpdateClass(updatedClass);
+
+      setAutoSortResults(results);
+      setAutoSortProcessing(false);
+      setShowAutoSortCapture(false);
+      setAutoSortPages([]);
+    } catch (err) {
+      Alert.alert('Error', 'An error occurred during auto-sort. Please try again.');
+      setAutoSortProcessing(false);
+    }
+  };
+
   const openUnitEditor = (unit: UnitData) => {
     setEditingUnitId(unit.id);
     setUnitDraftTitle(unit.title);
@@ -1290,12 +1499,15 @@ export function CourseDetailScreen({
     }
   };
 
-  // Fetch remote notes and files from registry and merge any new ones
-  const fetchRemoteNotes = useCallback(async () => {
+  // ─── Comprehensive Sync: merge ALL data from classmates ────────────────
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+
+  const syncClassFromPeers = useCallback(async (silent = false) => {
+    if (isSyncing) return;
+    if (!silent) setIsSyncing(true);
     try {
       const normalized = classData.classCode.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-
-      // Get current user ID so we skip our own registry entry
       const { data: userData } = await supabase.auth.getUser();
       const currentUserId = userData?.user?.id;
 
@@ -1304,28 +1516,79 @@ export function CourseDetailScreen({
         .select('class_data, owner_id')
         .eq('class_code', normalized);
 
-      if (error || !data || data.length === 0) return;
+      if (error || !data || data.length === 0) {
+        if (!silent) setIsSyncing(false);
+        return;
+      }
 
-      const allRemoteNotes = new Map<string, Map<number, any>>();
-
+      // Collect all remote class data from classmates
+      const remoteClasses: ClassData[] = [];
       for (const row of data) {
-        // Skip our own entry — only merge content from classmates
         if (currentUserId && (row as any).owner_id === currentUserId) continue;
+        const rc = row.class_data as ClassData;
+        if (rc) remoteClasses.push(rc);
+      }
 
-        const remoteClass = row.class_data as ClassData;
-        if (!remoteClass) continue;
+      if (remoteClasses.length === 0) {
+        if (!silent) setIsSyncing(false);
+        setLastSyncTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+        return;
+      }
 
-        // Collect remote notes
-        if (remoteClass.units) {
-          for (const remoteUnit of remoteClass.units) {
-            for (const remoteSub of remoteUnit.subUnits) {
-              if (!allRemoteNotes.has(remoteSub.id)) {
-                allRemoteNotes.set(remoteSub.id, new Map());
+      let hasChanges = false;
+
+      // ── 1. Merge units, sub-units, notes, and quizzes ──
+      const localUnitMap = new Map(classData.units.map((u) => [u.title.toLowerCase().trim(), u]));
+      const mergedUnits = [...classData.units];
+
+      for (const rc of remoteClasses) {
+        if (!rc.units) continue;
+        for (const remoteUnit of rc.units) {
+          const localKey = remoteUnit.title.toLowerCase().trim();
+          const localUnit = localUnitMap.get(localKey);
+
+          if (!localUnit) {
+            // New unit from classmate — add it
+            const newUnit = { ...remoteUnit, id: mergedUnits.length > 0 ? Math.max(...mergedUnits.map((u) => u.id)) + 1 : 1 };
+            mergedUnits.push(newUnit);
+            localUnitMap.set(localKey, newUnit);
+            hasChanges = true;
+            continue;
+          }
+
+          // Existing unit — merge sub-units
+          const localSubMap = new Map(localUnit.subUnits.map((s) => [s.id, s]));
+          const localSubTitleMap = new Map(localUnit.subUnits.map((s) => [s.title.toLowerCase().trim(), s]));
+
+          for (const remoteSub of remoteUnit.subUnits) {
+            const localSub = localSubMap.get(remoteSub.id) || localSubTitleMap.get(remoteSub.title.toLowerCase().trim());
+
+            if (!localSub) {
+              // New sub-unit from classmate
+              localUnit.subUnits.push({ ...remoteSub });
+              hasChanges = true;
+              continue;
+            }
+
+            // Merge notes into existing sub-unit
+            const localNoteIds = new Set(localSub.notes.map((n) => n.id));
+            for (const rn of remoteSub.notes) {
+              if (!localNoteIds.has(rn.id)) {
+                localSub.notes.push({ ...rn });
+                localNoteIds.add(rn.id);
+                hasChanges = true;
               }
-              const noteMap = allRemoteNotes.get(remoteSub.id)!;
-              for (const note of remoteSub.notes) {
-                if (!noteMap.has(note.id)) {
-                  noteMap.set(note.id, note);
+            }
+
+            // Merge quizzes into existing sub-unit
+            if (remoteSub.quizzes && remoteSub.quizzes.length > 0) {
+              if (!localSub.quizzes) localSub.quizzes = [];
+              const localQuizIds = new Set(localSub.quizzes.map((q) => q.id));
+              for (const rq of remoteSub.quizzes) {
+                if (!localQuizIds.has(rq.id) && rq.status === 'ready') {
+                  localSub.quizzes.push({ ...rq, score: undefined, scoreHistory: [] });
+                  localQuizIds.add(rq.id);
+                  hasChanges = true;
                 }
               }
             }
@@ -1333,40 +1596,66 @@ export function CourseDetailScreen({
         }
       }
 
-      let hasChanges = false;
-
-      // Merge notes
-      const mergedUnits = classData.units.map((localUnit) => {
-        const mergedSubUnits = localUnit.subUnits.map((localSub) => {
-          const remoteNoteMap = allRemoteNotes.get(localSub.id);
-          if (!remoteNoteMap) return localSub;
-
-          const localNoteIds = new Set(localSub.notes.map((n) => n.id));
-          const newNotes = Array.from(remoteNoteMap.values()).filter(
-            (rn) => !localNoteIds.has(rn.id)
-          );
-
-          if (newNotes.length > 0) {
+      // ── 2. Merge files ──
+      const localFileIds = new Set(classData.files.map((f) => f.id));
+      const mergedFiles = [...classData.files];
+      for (const rc of remoteClasses) {
+        if (!rc.files) continue;
+        for (const rf of rc.files) {
+          if (!localFileIds.has(rf.id)) {
+            mergedFiles.push({ ...rf });
+            localFileIds.add(rf.id);
             hasChanges = true;
-            return { ...localSub, notes: [...localSub.notes, ...newNotes] };
           }
-          return localSub;
-        });
-
-        return { ...localUnit, subUnits: mergedSubUnits };
-      });
-
-      if (hasChanges) {
-        onUpdateClass({ ...classData, units: mergedUnits });
+        }
       }
+
+      // ── 3. Merge AP practice tests ──
+      const localAPIds = new Set((classData.apPracticeTests || []).map((t) => t.id));
+      const mergedAP = [...(classData.apPracticeTests || [])];
+      for (const rc of remoteClasses) {
+        if (!rc.apPracticeTests) continue;
+        for (const rt of rc.apPracticeTests) {
+          if (!localAPIds.has(rt.id) && rt.status === 'ready') {
+            mergedAP.push({ ...rt, score: undefined, scoreHistory: [] });
+            localAPIds.add(rt.id);
+            hasChanges = true;
+          }
+        }
+      }
+
+      // ── 4. Sync classmate count ──
+      // Total unique users with this code = all registry rows + 1 (for lookup misses)
+      const totalMembers = data.length;
+      const classmateNames = new Set(classData.classmateNames || []);
+      for (const rc of remoteClasses) {
+        if (rc.classmateNames) {
+          for (const name of rc.classmateNames) classmateNames.add(name);
+        }
+      }
+
+      if (hasChanges || classData.classmates !== totalMembers || classmateNames.size !== (classData.classmateNames || []).length) {
+        onUpdateClass({
+          ...classData,
+          units: mergedUnits,
+          files: mergedFiles,
+          apPracticeTests: mergedAP,
+          classmates: Math.max(totalMembers, classData.classmates),
+          classmateNames: Array.from(classmateNames),
+        });
+      }
+
+      setLastSyncTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
     } catch (e) {
       // Silently fail
+    } finally {
+      if (!silent) setIsSyncing(false);
     }
-  }, [classData, onUpdateClass]);
+  }, [classData, onUpdateClass, isSyncing]);
 
-  // Fetch remote notes on mount and when switching units
+  // Sync on mount
   useEffect(() => {
-    fetchRemoteNotes();
+    syncClassFromPeers(true);
   }, []);
 
   const saveSectionNote = () => {
@@ -2932,6 +3221,31 @@ export function CourseDetailScreen({
             );
           })()}
 
+          {/* Sync with classmates button */}
+          {!isNewClass && (
+            <TouchableOpacity
+              style={{
+                flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                gap: 6, marginTop: 10, paddingVertical: 10, paddingHorizontal: 16,
+                borderRadius: 14, backgroundColor: `${classAccent}08`,
+                borderWidth: 1.5, borderColor: `${classAccent}20`,
+              }}
+              onPress={() => syncClassFromPeers(false)}
+              disabled={isSyncing}
+              activeOpacity={0.7}
+            >
+              <Ionicons name={isSyncing ? 'sync' : 'sync-outline'} size={15} color={classAccent} />
+              <Text style={{ fontSize: 12, fontFamily: fonts.semiBold, color: classAccent }}>
+                {isSyncing ? 'Syncing...' : 'Sync with Classmates'}
+              </Text>
+              {lastSyncTime && !isSyncing && (
+                <Text style={{ fontSize: 10, fontFamily: fonts.regular, color: colors.textTertiary, marginLeft: 4 }}>
+                  · {lastSyncTime}
+                </Text>
+              )}
+            </TouchableOpacity>
+          )}
+
           {/* Teacher row */}
           {!isNewClass && (
             <View style={styles.teacherRow}>
@@ -3086,10 +3400,19 @@ export function CourseDetailScreen({
 
           <View style={styles.sectionHeader}>
             <Text style={[styles.sectionTitle, { marginBottom: 4 }]}>Path</Text>
-            <TouchableOpacity style={[styles.addUnitBtn, { backgroundColor: classAccent }]} onPress={addUnit}>
-              <Ionicons name="add" size={16} color="white" />
-              <Text style={[styles.addUnitBtnText, { lineHeight: 16 }]}>New Unit</Text>
-            </TouchableOpacity>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity
+                style={[styles.addUnitBtn, { backgroundColor: classAccent }]}
+                onPress={() => { setAutoSortPages([]); setAutoSortResults(null); setShowAutoSortCapture(true); }}
+              >
+                <Ionicons name="sparkles" size={14} color="white" />
+                <Text style={[styles.addUnitBtnText, { lineHeight: 16 }]}>Auto-Sort</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.addUnitBtn, { backgroundColor: classAccent }]} onPress={addUnit}>
+                <Ionicons name="add" size={16} color="white" />
+                <Text style={[styles.addUnitBtnText, { lineHeight: 16 }]}>New Unit</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {classData.units.length > 0 ? (
@@ -3926,6 +4249,142 @@ export function CourseDetailScreen({
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Auto-Sort Capture Modal */}
+      <Modal visible={showAutoSortCapture} transparent animationType="slide" onRequestClose={() => { setShowAutoSortCapture(false); setAutoSortPages([]); }}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' }}>
+          <View style={{ backgroundColor: 'white', borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24, maxHeight: '80%' }}>
+            <View style={{ width: 36, height: 4, backgroundColor: '#E0D0C8', borderRadius: 2, alignSelf: 'center', marginBottom: 16 }} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+              <Ionicons name="sparkles" size={20} color={classAccent} />
+              <Text style={{ color: colors.textPrimary, fontFamily: fonts.bold, fontSize: 20 }}>Auto-Sort Notes</Text>
+            </View>
+            <Text style={{ color: colors.textSecondary, fontFamily: fonts.regular, fontSize: 13, marginBottom: 20 }}>
+              Capture photos of notes — each will be scanned and sorted into the right unit automatically.
+            </Text>
+
+            {/* Capture buttons */}
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+              <TouchableOpacity
+                style={{ flex: 1, backgroundColor: '#FFF5ED', borderWidth: 2, borderColor: '#F0E0D0', borderRadius: 18, paddingVertical: 16, alignItems: 'center', gap: 6 }}
+                onPress={autoSortCaptureFromCamera}
+              >
+                <Ionicons name="camera" size={24} color={colors.maroon} />
+                <Text style={{ color: colors.textPrimary, fontFamily: fonts.semiBold, fontSize: 13 }}>Camera</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{ flex: 1, backgroundColor: '#FFF5ED', borderWidth: 2, borderColor: '#F0E0D0', borderRadius: 18, paddingVertical: 16, alignItems: 'center', gap: 6 }}
+                onPress={autoSortCaptureFromLibrary}
+              >
+                <Ionicons name="images" size={24} color={colors.maroon} />
+                <Text style={{ color: colors.textPrimary, fontFamily: fonts.semiBold, fontSize: 13 }}>Photos</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Staged pages */}
+            {autoSortPages.length > 0 && (
+              <View style={{ marginBottom: 16 }}>
+                <Text style={{ color: colors.textTertiary, fontFamily: fonts.semiBold, fontSize: 12, marginBottom: 8 }}>
+                  {autoSortPages.length} {autoSortPages.length === 1 ? 'note' : 'notes'} captured
+                </Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                  {autoSortPages.map((page, i) => (
+                    <View key={i} style={{ position: 'relative' }}>
+                      <Image source={{ uri: page.uri }} style={{ width: 64, height: 84, borderRadius: 8, backgroundColor: '#FFF5ED' }} />
+                      <View style={{ position: 'absolute', top: 2, left: 2, backgroundColor: `${classAccent}12`, borderRadius: 4, paddingHorizontal: 4, paddingVertical: 1 }}>
+                        <Text style={{ color: classAccent, fontFamily: fonts.bold, fontSize: 9 }}>P{i + 1}</Text>
+                      </View>
+                      <TouchableOpacity
+                        style={{ position: 'absolute', top: -4, right: -4, backgroundColor: '#EF4444', borderRadius: 10, width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}
+                        onPress={() => setAutoSortPages((prev) => prev.filter((_, idx) => idx !== i))}
+                      >
+                        <Ionicons name="close" size={12} color="#FFF" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+
+            {/* Actions */}
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <TouchableOpacity
+                style={{ flex: 1, backgroundColor: '#FFF5ED', borderWidth: 2, borderColor: '#F0E0D0', paddingVertical: 14, borderRadius: 14, alignItems: 'center' }}
+                onPress={() => { setShowAutoSortCapture(false); setAutoSortPages([]); }}
+              >
+                <Text style={{ color: colors.textSecondary, fontFamily: fonts.semiBold, fontSize: 14 }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{ flex: 2, backgroundColor: autoSortPages.length > 0 ? classAccent : '#D8C8B8', paddingVertical: 14, borderRadius: 14, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 }}
+                onPress={handleAutoSort}
+                disabled={autoSortPages.length === 0}
+              >
+                <Ionicons name="sparkles" size={16} color="white" />
+                <Text style={{ color: 'white', fontFamily: fonts.bold, fontSize: 14 }}>
+                  Auto-Sort {autoSortPages.length > 0 ? `${autoSortPages.length} ${autoSortPages.length === 1 ? 'Note' : 'Notes'}` : ''}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Auto-Sort Processing Overlay */}
+      {autoSortProcessing && (
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', zIndex: 9999 }}>
+          <View style={{ backgroundColor: '#FFF8F2', borderRadius: 28, padding: 32, alignItems: 'center', width: '80%', maxWidth: 320 }}>
+            <ActivityIndicator size="large" color={classAccent} style={{ marginBottom: 20 }} />
+            <Text style={{ color: colors.textPrimary, fontFamily: fonts.bold, fontSize: 18, marginBottom: 8, textAlign: 'center' }}>Auto-Sorting Notes</Text>
+            <Text style={{ color: colors.textSecondary, fontFamily: fonts.regular, fontSize: 14, textAlign: 'center', marginBottom: 16 }}>
+              {autoSortProgress.phase}
+            </Text>
+            {autoSortProgress.total > 0 && (
+              <View style={{ width: '100%', height: 6, backgroundColor: '#F0E0D0', borderRadius: 3 }}>
+                <View style={{ height: 6, backgroundColor: classAccent, borderRadius: 3, width: `${Math.round((autoSortProgress.current / autoSortProgress.total) * 100)}%` }} />
+              </View>
+            )}
+          </View>
+        </View>
+      )}
+
+      {/* Auto-Sort Results Modal */}
+      {autoSortResults && !autoSortProcessing && (
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', zIndex: 9999 }}>
+          <View style={{ backgroundColor: '#FFF8F2', borderRadius: 28, padding: 24, width: '85%', maxWidth: 360, maxHeight: '70%' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+              <View style={{ width: 36, height: 36, borderRadius: 12, backgroundColor: '#D1FAE5', alignItems: 'center', justifyContent: 'center' }}>
+                <Ionicons name="checkmark-circle" size={20} color="#059669" />
+              </View>
+              <Text style={{ color: colors.textPrimary, fontFamily: fonts.bold, fontSize: 18 }}>Notes Sorted!</Text>
+            </View>
+            <ScrollView style={{ maxHeight: 300 }}>
+              {autoSortResults.map((r, i) => (
+                <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: i < autoSortResults.length - 1 ? 1 : 0, borderBottomColor: '#FFF5ED', gap: 10 }}>
+                  <Ionicons name="document-text" size={18} color={colors.textTertiary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.textPrimary, fontFamily: fonts.semiBold, fontSize: 14 }} numberOfLines={1}>{r.noteTitle}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                      <Ionicons name="folder-open" size={12} color={colors.textTertiary} />
+                      <Text style={{ color: colors.textSecondary, fontFamily: fonts.regular, fontSize: 12 }}>{r.unitTitle}</Text>
+                      {r.isNew && (
+                        <View style={{ backgroundColor: `${classAccent}12`, paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4, marginLeft: 4 }}>
+                          <Text style={{ color: classAccent, fontFamily: fonts.bold, fontSize: 9 }}>NEW</Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+            <TouchableOpacity
+              style={{ backgroundColor: classAccent, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginTop: 16 }}
+              onPress={() => setAutoSortResults(null)}
+            >
+              <Text style={{ color: 'white', fontFamily: fonts.bold, fontSize: 15 }}>Done ✓</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -3936,8 +4395,8 @@ const styles = StyleSheet.create({
   scrollContent: { paddingBottom: 120 },
 
   hero: { height: 260, width: '100%' },
-  heroImage: { ...StyleSheet.absoluteFillObject },
-  heroOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.28)' },
+  heroImage: { ...StyleSheet.absoluteFill },
+  heroOverlay: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.28)' },
   heroBar: {
     position: 'absolute',
     top: 48,
@@ -4394,7 +4853,7 @@ const styles = StyleSheet.create({
   uploadedFileText: { fontSize: 12, fontFamily: fonts.semiBold, flex: 1 },
 
   scanOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.55)',
     justifyContent: 'center',
     alignItems: 'center',

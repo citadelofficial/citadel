@@ -104,41 +104,78 @@ export function InfoPageScreen({ page, onBack, supportEmail }: Props) {
                     {page === 'terms' && (
                         <>
                             <Text style={styles.heading}>Terms of Service</Text>
-                            <Text style={styles.metaDate}>Last updated: March 1, 2026</Text>
+                            <Text style={styles.metaDate}>Last updated October 12, 2026</Text>
 
-                            <Text style={styles.subheading}>1. Acceptance of Terms</Text>
                             <Text style={styles.paragraph}>
-                                By accessing or using the Citadel application ("App"), you agree to be bound by these Terms of Service. If you do not agree to these terms, please do not use the App.
+                                These Terms cover your use of the Citadel iOS app and mycitadel.us (together, "Citadel"). By creating an account or using Citadel, you agree to them and to our Privacy Policy.
                             </Text>
 
-                            <Text style={styles.subheading}>2. Description of Service</Text>
+                            <Text style={styles.subheading}>Who Can Use Citadel</Text>
                             <Text style={styles.paragraph}>
-                                Citadel provides a collaborative study platform for students to organize classes, share notes, and connect with classmates. The service may include features such as class management, file scanning, note sharing, and messaging.
+                                You must be at least 13. If you're under 18, a parent or guardian must agree to these Terms for you. Keep your account details accurate and your login secure. You're responsible for activity on your account.
                             </Text>
 
-                            <Text style={styles.subheading}>3. User Accounts</Text>
+                            <Text style={styles.subheading}>Your Content</Text>
                             <Text style={styles.paragraph}>
-                                You are responsible for maintaining the confidentiality of your account. You agree to provide accurate information and to update it as necessary. You must notify us immediately of any unauthorized use of your account.
+                                You own the notes and files you add. You give Citadel a limited license to store, process, and display that content only to run the service for you and for the people you share it with, including syncing, search, AI features, and study rooms. Only upload material you have the right to share.
                             </Text>
 
-                            <Text style={styles.subheading}>4. User Content</Text>
+                            <Text style={styles.subheading}>Acceptable Use</Text>
                             <Text style={styles.paragraph}>
-                                You retain ownership of all content you upload to Citadel, including notes, documents, and messages. By uploading content, you grant Citadel a non-exclusive license to store and display your content to other users you've authorized.
+                                Don't use Citadel to:
+                            </Text>
+                            <Text style={styles.bulletItem}>•  Cheat or break your school's academic integrity rules</Text>
+                            <Text style={styles.bulletItem}>•  Upload illegal, harassing, hateful, sexual, or violent content</Text>
+                            <Text style={styles.bulletItem}>•  Share other people's personal information without their consent</Text>
+                            <Text style={styles.bulletItem}>•  Spam, spread malware, or try to hack, disrupt, or reverse engineer Citadel</Text>
+                            <Text style={styles.bulletItem}>•  Record or share a study room without the other participants' consent</Text>
+                            <Text style={styles.paragraph}>
+                                You can report content or users to {supportEmail}. We may remove content or suspend accounts that break these rules. If we do, we'll tell you why, and you can ask us to review the decision.
                             </Text>
 
-                            <Text style={styles.subheading}>5. Acceptable Use</Text>
+                            <Text style={styles.subheading}>AI Features</Text>
                             <Text style={styles.paragraph}>
-                                You agree not to use Citadel to share copyrighted material without permission, harass or bully other users, distribute spam or malware, or violate any applicable laws or regulations.
+                                AI-generated study guides, quizzes, and flashcards can be inaccurate or incomplete. Check them before relying on them for coursework.
                             </Text>
 
-                            <Text style={styles.subheading}>6. Limitation of Liability</Text>
+                            <Text style={styles.subheading}>Our App</Text>
                             <Text style={styles.paragraph}>
-                                Citadel is provided "as is" without warranties of any kind. We are not liable for any damages arising from your use of the service, including loss of data or interruptions in service.
+                                Citadel and its name, logo, and design belong to the Citadel team. We give you a personal, non-transferable, revocable license to use the app on your devices.
                             </Text>
 
-                            <Text style={styles.subheading}>7. Contact Us</Text>
+                            <Text style={styles.subheading}>Third-Party Services</Text>
                             <Text style={styles.paragraph}>
-                                For questions about these terms, please contact us at {supportEmail}.
+                                Citadel relies on services such as Google Firebase and Expo, which have their own terms. Data charges from your mobile carrier are your responsibility.
+                            </Text>
+
+                            <Text style={styles.subheading}>Changes and Availability</Text>
+                            <Text style={styles.paragraph}>
+                                Citadel is provided "as is." We may add, change, or remove features, and we can't promise the service will be uninterrupted or error-free. If we make a significant change to these Terms, we'll notify you, and continuing to use Citadel means you accept the change.
+                            </Text>
+
+                            <Text style={styles.subheading}>Ending Your Account</Text>
+                            <Text style={styles.paragraph}>
+                                You can delete your account at any time in Settings. We may suspend or end access if you seriously or repeatedly break these Terms. Where we can, we'll warn you first.
+                            </Text>
+
+                            <Text style={styles.subheading}>Liability</Text>
+                            <Text style={styles.paragraph}>
+                                To the fullest extent the law allows, Citadel isn't liable for indirect or incidental damages or for lost data beyond our reasonable control. Since Citadel is free, our total liability is limited to the minimum the law allows. Nothing here limits rights you have under consumer protection law.
+                            </Text>
+
+                            <Text style={styles.subheading}>Governing Law</Text>
+                            <Text style={styles.paragraph}>
+                                These Terms are governed by the laws of the Commonwealth of Virginia, USA, except where your local law gives you protections that can't be waived.
+                            </Text>
+
+                            <Text style={styles.subheading}>Apple</Text>
+                            <Text style={styles.paragraph}>
+                                If you downloaded Citadel from the App Store, these Terms are between you and Citadel, not Apple. Apple has no responsibility for the app or its support, and Apple's standard terms for apps also apply.
+                            </Text>
+
+                            <Text style={styles.subheading}>Contact</Text>
+                            <Text style={styles.paragraph}>
+                                {supportEmail}
                             </Text>
                         </>
                     )}
@@ -146,44 +183,80 @@ export function InfoPageScreen({ page, onBack, supportEmail }: Props) {
                     {page === 'privacy' && (
                         <>
                             <Text style={styles.heading}>Privacy Policy</Text>
-                            <Text style={styles.metaDate}>Last updated: March 1, 2026</Text>
+                            <Text style={styles.metaDate}>Last updated October 12, 2026</Text>
 
-                            <Text style={styles.subheading}>1. Information We Collect</Text>
                             <Text style={styles.paragraph}>
-                                We collect information you provide directly, including your name, grade, school, and study materials. We also collect usage data such as features accessed and time spent in the app.
+                                Citadel helps students capture, combine, and study their class notes together. This policy covers the Citadel iOS app and mycitadel.us (together, "Citadel"). It explains what we collect, why, and the choices you have. Citadel is run by a small student team. You can reach us at {supportEmail}.
                             </Text>
 
-                            <Text style={styles.subheading}>2. How We Use Your Information</Text>
+                            <Text style={styles.subheading}>What We Collect</Text>
+                            <Text style={styles.bulletItem}>•  Account info: your name, email, username, and, if you sign in with Google, basic Google profile details.</Text>
+                            <Text style={styles.bulletItem}>•  Your content: notes you write or import, files you upload (slides, PDFs, photos, recordings), and study material Citadel generates for you.</Text>
+                            <Text style={styles.bulletItem}>•  Study rooms: limited connection data needed to run live audio, video, and screen sharing.</Text>
+                            <Text style={styles.bulletItem}>•  Usage and device data: pages and features you use, time in the app, device type, operating system, and IP address. We collect this through Google Analytics for Firebase.</Text>
+
+                            <Text style={styles.subheading}>How We Use It</Text>
                             <Text style={styles.paragraph}>
-                                Your information is used to provide and improve our services, personalize your experience, connect you with classmates, and send relevant notifications about your classes and study groups.
+                                We use your information to run Citadel. That means syncing and backing up your content, powering search and AI features, running study rooms, keeping accounts secure, answering support requests, and improving the app from aggregate usage. We send account and service emails. We send product updates only if you opt in. We never sell your personal information, and we don't use your notes for advertising.
                             </Text>
 
-                            <Text style={styles.subheading}>3. Information Sharing</Text>
+                            <Text style={styles.subheading}>Your Notes and Uploads</Text>
                             <Text style={styles.paragraph}>
-                                We do not sell your personal information. We share your profile information (name, school, and grade) only with users you've connected with as friends or classmates.
+                                Your content is private to you and the groups or links you choose to share it with. It is encrypted in transit and at rest. Uploads may be processed to pull out text and make them searchable. You can delete any note or upload at any time.
                             </Text>
 
-                            <Text style={styles.subheading}>4. Data Security</Text>
+                            <Text style={styles.subheading}>AI Features</Text>
                             <Text style={styles.paragraph}>
-                                We implement industry-standard security measures to protect your data, including encryption in transit and at rest. However, no method of transmission over the internet is 100% secure.
+                                When you merge notes or generate quizzes and flashcards, the content involved is sent to our AI provider only to produce your result. We don't allow that provider to train its models on your content. AI output can be wrong, so check it before you rely on it.
                             </Text>
 
-                            <Text style={styles.subheading}>5. Your Rights</Text>
+                            <Text style={styles.subheading}>Study Rooms</Text>
                             <Text style={styles.paragraph}>
-                                You can access, update, or delete your personal information at any time through your profile settings. You may also request a complete copy of your data by contacting us.
+                                Audio and video pass between participants in real time and are not recorded unless a host starts a recording. If that happens, everyone in the room is notified.
                             </Text>
 
-                            <Text style={styles.subheading}>6. Children's Privacy</Text>
+                            <Text style={styles.subheading}>Who We Share With</Text>
                             <Text style={styles.paragraph}>
-                                Citadel is designed for students of all ages. We comply with COPPA and other applicable privacy regulations regarding children's data.
+                                We share data only with the service providers that run Citadel: Firebase/Google (hosting, sign-in, analytics), Expo (app delivery), our AI provider, and our video provider. Each one may use your data only to provide its service to us. We may also disclose information if the law requires it or to protect users' safety.
                             </Text>
 
-                            <Text style={styles.subheading}>7. Contact Us</Text>
+                            <Text style={styles.subheading}>Students and Children</Text>
                             <Text style={styles.paragraph}>
-                                For privacy questions or concerns, please contact us at {supportEmail}.
+                                Citadel is for students 13 and older. If you're under 18, use Citadel with a parent or guardian's permission. We don't knowingly collect data from children under 13. If we learn we have, we delete it. Parents can contact us at any time to review or delete their child's data.
+                            </Text>
+
+                            <Text style={styles.subheading}>Keeping and Deleting Data</Text>
+                            <Text style={styles.paragraph}>
+                                We keep your content while your account is active. You can delete your account in the app under Settings. When you do, we permanently remove your data within 30 days, except limited records the law requires us to keep.
+                            </Text>
+
+                            <Text style={styles.subheading}>Your Rights</Text>
+                            <Text style={styles.paragraph}>
+                                You can access, correct, export, or delete your information, and you can withdraw any consent you've given. Depending on where you live, including California and the EU, you may have more rights under local law. To make a request, email {supportEmail}. We'll respond within 30 days.
+                            </Text>
+
+                            <Text style={styles.subheading}>Security</Text>
+                            <Text style={styles.paragraph}>
+                                We use reasonable technical and organizational safeguards, but no system is perfectly secure. If a breach affects your personal data, we'll notify you as the law requires.
+                            </Text>
+
+                            <Text style={styles.subheading}>Where Data Is Stored</Text>
+                            <Text style={styles.paragraph}>
+                                Citadel is based in the United States, and your data is processed there. If you use Citadel from outside the U.S., your data is transferred to the U.S. with the safeguards the law requires.
+                            </Text>
+
+                            <Text style={styles.subheading}>Changes</Text>
+                            <Text style={styles.paragraph}>
+                                If we make a significant change to this policy, we'll update the date at the top and notify you in the app or by email.
+                            </Text>
+
+                            <Text style={styles.subheading}>Contact</Text>
+                            <Text style={styles.paragraph}>
+                                {supportEmail}
                             </Text>
                         </>
                     )}
+
 
                     <View style={{ height: 40 }} />
                 </Animated.View>
@@ -228,6 +301,13 @@ const styles = StyleSheet.create({
     metaDate: {
         fontSize: 12, fontFamily: fonts.medium, color: colors.textTertiary,
         textAlign: 'center', marginBottom: 16,
+    },
+    bulletItem: {
+        fontSize: 14, fontFamily: fonts.regular, color: colors.textSecondary,
+        lineHeight: 22, paddingHorizontal: 32, marginBottom: 4,
+    },
+    linkText: {
+        color: colors.maroon, textDecorationLine: 'underline' as const,
     },
 
     card: {

@@ -194,7 +194,7 @@ function TapToRevealCard({ emoji, label, revealText, accentColor }: { emoji: str
       >
         <Animated.View
           style={[
-            StyleSheet.absoluteFillObject,
+            StyleSheet.absoluteFill,
             { backgroundColor: accentColor, opacity: bgOpacity, borderRadius: 16 },
           ]}
         />
@@ -392,8 +392,8 @@ export function TutorialModal({ visible, onClose, userName }: Props) {
     <Modal visible={visible} transparent animationType="fade" onRequestClose={handleSkip} statusBarTranslucent>
       <Animated.View style={[styles.fullScreen, { opacity: fadeIn }]}>
         {/* Gradient Background — simulated with overlaying views */}
-        <View style={[StyleSheet.absoluteFillObject, { backgroundColor: page.gradient[0] }]} />
-        <View style={[StyleSheet.absoluteFillObject, { backgroundColor: page.gradient[1], opacity: 0.6 }]} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: page.gradient[0] }]} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: page.gradient[1], opacity: 0.6 }]} />
 
         {/* Floating orbs for ambiance */}
         <FloatingOrb color="rgba(255,255,255,0.04)" size={200} x={-50} y={100} delay={0} />
@@ -436,7 +436,7 @@ export function TutorialModal({ visible, onClose, userName }: Props) {
             <View key={pg.id} style={styles.page}>
               {/* Confetti for welcome and ready pages */}
               {pg.hasConfetti && currentPage === idx && (
-                <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
+                <View style={StyleSheet.absoluteFill} pointerEvents="none">
                   {Array.from({ length: 40 }).map((_, i) => (
                     <ConfettiParticle
                       key={i}

@@ -29,9 +29,10 @@ interface Props {
     onSchoolOpen?: (schoolName: string) => void;
     onSendClassInvite?: (toUserId: string, classes: ClassData[]) => void;
     session?: Session | null;
+    onBlockUser?: (userId: string) => void;
 }
 
-export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend, onAddFriend, onRemoveFriend, onSchoolOpen, onSendClassInvite, session }: Props) {
+export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend, onAddFriend, onRemoveFriend, onSchoolOpen, onSendClassInvite, session, onBlockUser }: Props) {
     const headerFade = useRef(new Animated.Value(0)).current;
     const headerSlide = useRef(new Animated.Value(-30)).current;
     const contentFade = useRef(new Animated.Value(0)).current;
@@ -128,6 +129,80 @@ export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend,
             (person.course && cls.title.toLowerCase().includes(person.course.toLowerCase().replace('ap ', '')))
         );
     }, [classes, person]);
+
+    const handleBlock = () => {
+        Alert.alert(
+            `Block ${firstName}?`,
+            `${firstName} won't be able to message you or see your profile. They won't be notified.`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Block',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            const { data: authData } = await supabase.auth.getUser();
+                            const userId = authData?.user?.id;
+                            if (userId) {
+                                await supabase.from('blocked_users').insert({
+                                    blocker_id: userId,
+                                    blocked_id: person.id,
+                                });
+                            }
+                        } catch {
+                            // Table may not exist yet — still proceed locally
+                        }
+                        onBlockUser?.(person.id);
+                        onRemoveFriend(person.id);
+                        onBack();
+                    },
+                },
+            ]
+        );
+    };
+
+    const handleReport = () => {
+        Alert.alert(
+            `Report ${firstName}?`,
+            'Select a reason for reporting this user.',
+            [
+                {
+                    text: 'Harassment or bullying',
+                    onPress: () => submitReport('harassment'),
+                },
+                {
+                    text: 'Inappropriate content',
+                    onPress: () => submitReport('inappropriate_content'),
+                },
+                {
+                    text: 'Spam',
+                    onPress: () => submitReport('spam'),
+                },
+                {
+                    text: 'Other',
+                    onPress: () => submitReport('other'),
+                },
+                { text: 'Cancel', style: 'cancel' },
+            ]
+        );
+    };
+
+    const submitReport = async (reason: string) => {
+        try {
+            const { data: authData } = await supabase.auth.getUser();
+            const userId = authData?.user?.id;
+            if (userId) {
+                await supabase.from('reports').insert({
+                    reporter_id: userId,
+                    reported_id: person.id,
+                    reason,
+                });
+            }
+        } catch {
+            // Table may not exist yet
+        }
+        Alert.alert('Report Submitted', `Thank you for reporting. We'll review this as soon as possible.`);
+    };
 
     return (
         <View style={styles.container}>
@@ -293,6 +368,18 @@ export function PersonProfileScreen({ person, onBack, onChat, classes, isFriend,
                                 </View>
                             </>
                         ) : null}
+                    </View>
+
+                    {/* Block & Report */}
+                    <View style={styles.dangerSection}>
+                        <TouchableOpacity style={styles.dangerBtn} onPress={handleBlock} activeOpacity={0.7}>
+                            <Ionicons name="ban-outline" size={18} color="#b91c1c" />
+                            <Text style={styles.dangerBtnText}>Block {firstName}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.dangerBtn} onPress={handleReport} activeOpacity={0.7}>
+                            <Ionicons name="flag-outline" size={18} color="#b91c1c" />
+                            <Text style={styles.dangerBtnText}>Report {firstName}</Text>
+                        </TouchableOpacity>
                     </View>
 
                     <View style={{ height: 40 }} />
@@ -463,4 +550,26 @@ const styles = StyleSheet.create({
     emptyRow: { alignItems: 'center', padding: 24, gap: 6 },
     emptyText: { fontSize: 14, fontFamily: fonts.bold, color: colors.textPrimary },
     emptySub: { fontSize: 12, fontFamily: fonts.regular, color: colors.textSecondary },
+
+    dangerSection: {
+        marginTop: 28,
+        marginHorizontal: 20,
+        gap: 10,
+    },
+    dangerBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        height: 48,
+        borderRadius: 18,
+        backgroundColor: '#FFF5F5',
+        borderWidth: 2,
+        borderColor: '#FECACA',
+    },
+    dangerBtnText: {
+        fontSize: 14,
+        fontFamily: fonts.bold,
+        color: '#b91c1c',
+    },
 });

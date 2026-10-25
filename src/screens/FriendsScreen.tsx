@@ -25,6 +25,7 @@ import { InlineTutorialCard } from '../components/InlineTutorialCard';
 import { colors, fonts } from '../theme';
 import type { FriendData, ClassData, ClassInvite } from '../types';
 import DateTimePickerModal from "react-native-modal-datetime-picker";
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { supabase } from '../lib/supabase';
 
 interface FriendRequest {
@@ -64,6 +65,8 @@ interface Props {
   onAcceptClassInvite?: (inviteId: string) => void;
   onDeclineClassInvite?: (inviteId: string) => void;
   onRefreshFriends?: () => Promise<void>;
+  initialChatFriendId?: string | null;
+  onClearInitialChat?: () => void;
   tutorialStep?: number;
   onTutorialNext?: () => void;
   onTutorialBack?: () => void;
@@ -364,6 +367,8 @@ export function FriendsScreen({
   userSchool, userSchools, onSchoolOpen,
   classInvites = [], onAcceptClassInvite, onDeclineClassInvite,
   onRefreshFriends,
+  initialChatFriendId,
+  onClearInitialChat,
   tutorialStep = 0,
   onTutorialNext = () => { },
   onTutorialBack = () => { },
@@ -381,8 +386,19 @@ export function FriendsScreen({
   const tabsScrollRef = useRef<ScrollView>(null);
 
 
+  // Nudge tracking
+  const [nudgedIds, setNudgedIds] = useState<Set<string>>(new Set());
+  const [nudgingIds, setNudgingIds] = useState<Set<string>>(new Set());
 
   const [messagesByFriend, setMessagesByFriend] = useState<Record<string, Message[]>>({});
+
+  // Auto-open a specific friend's DM when navigating from person profile
+  useEffect(() => {
+    if (initialChatFriendId) {
+      setActiveChatId(initialChatFriendId);
+      onClearInitialChat?.();
+    }
+  }, [initialChatFriendId]);
 
   // Sessions
   const [upcomingSessions, setUpcomingSessions] = useState<StudySession[]>([]);
@@ -392,6 +408,7 @@ export function FriendsScreen({
   const [sessionDraftTime, setSessionDraftTime] = useState('');
   const [sessionDraftLocation, setSessionDraftLocation] = useState('');
   const [isDatePickerVisible, setDatePickerVisibility] = useState(false);
+  const [draftDate, setDraftDate] = useState(new Date());
 
   const fetchSessions = async () => {
     try {
@@ -761,6 +778,47 @@ export function FriendsScreen({
     showFeedback(`Cancelled request to ${name}.`, '#6B7280');
   };
 
+  const handleNudge = async (request: FriendRequest) => {
+    const toUserId = request.to_user_id;
+    const displayName = request.to_display_name || request.from_display_name;
+    setNudgingIds(prev => { const next = new Set(prev); next.add(request.id); return next; });
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData?.user?.id;
+      if (!userId) throw new Error('Not authenticated');
+
+      // Insert a nudge notification record for the recipient
+      await supabase.from('nudges').insert({
+        from_user_id: userId,
+        to_user_id: toUserId,
+        from_display_name: userName || userUsername || 'Someone',
+        request_id: request.id,
+      });
+
+      setNudgedIds(prev => new Set(prev).add(request.id));
+      showFeedback(`Nudged ${displayName}!`, '#166534');
+    } catch (e) {
+      // If the nudges table doesn't exist yet, use messages as a fallback
+      try {
+        const { data: authData } = await supabase.auth.getUser();
+        const userId = authData?.user?.id;
+        if (userId) {
+          await supabase.from('messages').insert({
+            sender_id: userId,
+            receiver_id: toUserId,
+            text: `${userName || userUsername || 'Someone'} nudged you to accept their friend request!`,
+            created_at: new Date().toISOString(),
+          });
+        }
+      } catch {
+        // Silently fail
+      }
+      setNudgedIds(prev => new Set(prev).add(request.id));
+      showFeedback(`Nudged ${displayName}!`, '#166534');
+    } finally {
+      setNudgingIds(prev => { const next = new Set(prev); next.delete(request.id); return next; });
+    }
+  };
 
 
   // ==================== CHAT SCREEN (REDESIGNED) ====================
@@ -1060,7 +1118,7 @@ export function FriendsScreen({
                 {/* All Friends */}
                 <Text style={[styles.sectionLabel, { marginTop: 0 }]}>All Friends</Text>
                 {filteredFriends.map((friend) => (
-                  <TouchableOpacity key={friend.id} style={styles.friendRow} onPress={() => onPersonOpen?.(friend)} activeOpacity={0.7}>
+                  <TouchableOpacity key={friend.id} style={styles.friendRow} onPress={() => setActiveChatId(friend.id)} activeOpacity={0.7}>
                     <View style={[styles.friendAvatar, { backgroundColor: friend.color, overflow: 'hidden' }]}>
                       {friend.avatarUrl ? (
                         <Image source={{ uri: friend.avatarUrl }} style={{ width: 44, height: 44, borderRadius: 16 }} />
@@ -1075,8 +1133,8 @@ export function FriendsScreen({
                       </Text>
                     </View>
                     <View style={styles.friendActions}>
-                      <TouchableOpacity style={styles.actionBtn} onPress={() => setActiveChatId(friend.id)}>
-                        <Ionicons name="chatbubble-outline" size={18} color={colors.maroon} />
+                      <TouchableOpacity style={styles.actionBtn} onPress={() => onPersonOpen?.(friend)}>
+                        <Ionicons name="person-circle-outline" size={18} color={colors.maroon} />
                       </TouchableOpacity>
                     </View>
                   </TouchableOpacity>
@@ -1163,6 +1221,30 @@ export function FriendsScreen({
                             >
                               <Ionicons name="close" size={14} color={colors.textSecondary} />
                               <Text style={styles.requestDeclineText}>Cancel</Text>
+                            </AnimatedPressable>
+                            <AnimatedPressable
+                              style={[
+                                styles.requestAccept,
+                                nudgedIds.has(request.id) && { backgroundColor: '#D8C8B8' },
+                                nudgingIds.has(request.id) && { opacity: 0.7 },
+                              ]}
+                              onPress={() => handleNudge(request)}
+                              scaleDown={0.92}
+                              disabled={nudgedIds.has(request.id) || nudgingIds.has(request.id)}
+                            >
+                              {nudgingIds.has(request.id) ? (
+                                <ActivityIndicator size="small" color="white" />
+                              ) : nudgedIds.has(request.id) ? (
+                                <>
+                                  <Ionicons name="checkmark" size={14} color="white" />
+                                  <Text style={styles.requestAcceptText}>Nudged</Text>
+                                </>
+                              ) : (
+                                <>
+                                  <Ionicons name="notifications-outline" size={14} color="white" />
+                                  <Text style={styles.requestAcceptText}>Nudge</Text>
+                                </>
+                              )}
                             </AnimatedPressable>
                           </View>
                         </View>
@@ -1456,6 +1538,7 @@ export function FriendsScreen({
                   <Ionicons name="close" size={22} color={colors.textPrimary} />
                 </TouchableOpacity>
               </View>
+              <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
               <Text style={styles.modalSub}>Plan an in-person study session with your classmates.</Text>
               <Text style={styles.editorLabel}>Session Title</Text>
               <TextInput style={styles.editorInput} value={sessionDraftTitle} onChangeText={setSessionDraftTitle} placeholder="Ex: Unit 7 Review Blitz" placeholderTextColor={colors.textTertiary} />
@@ -1488,22 +1571,47 @@ export function FriendsScreen({
               <Text style={styles.editorLabel}>Date & Time</Text>
               <TouchableOpacity
                 style={[styles.editorInput, { flexDirection: 'row', alignItems: 'center', gap: 8 }]}
-                onPress={() => setDatePickerVisibility(true)}
+                onPress={() => {
+                  setDraftDate(new Date());
+                  setDatePickerVisibility(true);
+                }}
               >
                 <Ionicons name="calendar-outline" size={18} color={colors.textTertiary} />
                 <Text style={{ color: sessionDraftTime ? colors.textPrimary : colors.textTertiary, fontSize: 14, fontFamily: fonts.medium }}>
                   {sessionDraftTime || 'Select date & time'}
                 </Text>
               </TouchableOpacity>
-              <DateTimePickerModal
-                isVisible={isDatePickerVisible}
-                mode="datetime"
-                onConfirm={(date) => {
-                  setSessionDraftTime(formatSessionTime(date));
-                  setDatePickerVisibility(false);
-                }}
-                onCancel={() => setDatePickerVisibility(false)}
-              />
+              {isDatePickerVisible && Platform.OS === 'ios' && (
+                <View style={{ marginTop: 8, backgroundColor: '#FFF5ED', borderRadius: 16, padding: 12, borderWidth: 2, borderColor: '#F0E0D0', alignItems: 'center', overflow: 'hidden' }}>
+                  <DateTimePicker
+                    value={draftDate}
+                    mode="datetime"
+                    display="spinner"
+                    onChange={(event, selectedDate) => {
+                      if (selectedDate) setDraftDate(selectedDate);
+                    }}
+                    textColor={colors.textPrimary}
+                    minimumDate={new Date()}
+                  />
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, alignSelf: 'stretch' }}>
+                    <TouchableOpacity
+                      style={{ flex: 1, height: 40, borderRadius: 14, backgroundColor: '#FFF5ED', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#F0E0D0' }}
+                      onPress={() => setDatePickerVisibility(false)}
+                    >
+                      <Text style={{ fontSize: 14, fontFamily: fonts.bold, color: colors.textSecondary }}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={{ flex: 1, height: 40, borderRadius: 14, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' }}
+                      onPress={() => {
+                        setSessionDraftTime(formatSessionTime(draftDate));
+                        setDatePickerVisibility(false);
+                      }}
+                    >
+                      <Text style={{ fontSize: 14, fontFamily: fonts.bold, color: 'white' }}>Confirm</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
               <TouchableOpacity style={styles.modalSendBtn} onPress={async () => {
                 const title = sessionDraftTitle.trim() || 'Study Session';
                 const course = sessionDraftCourse.trim() || 'Custom Session';
@@ -1550,10 +1658,24 @@ export function FriendsScreen({
                 <Ionicons name="checkmark" size={16} color="white" />
                 <Text style={styles.modalSendText}>{sessionEditor?.mode === 'edit' ? 'Save Changes' : 'Create Session'}</Text>
               </TouchableOpacity>
+              </ScrollView>
             </View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* DateTimePickerModal for Android only (native Android dialogs work fine from within a RN Modal) */}
+      {Platform.OS === 'android' && (
+        <DateTimePickerModal
+          isVisible={isDatePickerVisible}
+          mode="datetime"
+          onConfirm={(date) => {
+            setSessionDraftTime(formatSessionTime(date));
+            setDatePickerVisibility(false);
+          }}
+          onCancel={() => setDatePickerVisibility(false)}
+        />
+      )}
 
       <BottomNav active="people" onHome={onHome} onScan={onScan} onFriends={() => { }} onFiles={onFiles} />
     </View>

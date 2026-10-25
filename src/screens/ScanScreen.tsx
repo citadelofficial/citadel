@@ -14,6 +14,7 @@ import {
   GestureResponderEvent,
   PanResponderGestureState,
   ActivityIndicator,
+  Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -24,8 +25,8 @@ import { BottomNav } from '../components/BottomNav';
 import { AnimatedPressable } from '../components/AnimatedPressable';
 import { InlineTutorialCard } from '../components/InlineTutorialCard';
 import { colors, fonts } from '../theme';
-import type { ClassData, FileData } from '../types';
-import { extractTextFromImage, extractTextFromMultipleImages } from '../lib/gemini';
+import type { ClassData, FileData, UnitData } from '../types';
+import { extractTextFromImage, extractTextFromMultipleImages, classifyNotesIntoUnits } from '../lib/gemini';
 import * as FileSystem from 'expo-file-system/legacy';
 
 interface Props {
@@ -34,6 +35,8 @@ interface Props {
   onFriends: () => void;
   classes: ClassData[];
   onSaveScan: (classId: string, file: FileData) => void;
+  onAutoSort: (classId: string, updatedUnits: UnitData[], newFiles: FileData[]) => void;
+  userName: string;
   onAddClass?: (newClass: ClassData) => void;
   onOpenFile?: (classId: string, fileId: number) => void;
   tutorialStep?: number;
@@ -103,6 +106,8 @@ export function ScanScreen({
   onFriends,
   classes,
   onSaveScan,
+  onAutoSort,
+  userName,
   onAddClass,
   onOpenFile,
   tutorialStep = 0,
@@ -120,6 +125,9 @@ export function ScanScreen({
   const [newClassName, setNewClassName] = useState('');
   const [newClassTeacher, setNewClassTeacher] = useState('');
   const [newClassBlock, setNewClassBlock] = useState('');
+  const [autoSortProcessing, setAutoSortProcessing] = useState(false);
+  const [autoSortProgress, setAutoSortProgress] = useState({ current: 0, total: 0, phase: '' });
+  const [autoSortResults, setAutoSortResults] = useState<{ noteTitle: string; unitTitle: string; isNew: boolean }[] | null>(null);
   const tutorialGuide = tutorialStep === 5 ? {
     step: 5,
     title: 'Capture the next handout',
@@ -441,12 +449,153 @@ export function ScanScreen({
       previewTitle,
       previewText,
       source: pending.source,
+      pageImages: scannedPages.length > 0
+        ? scannedPages.map(p => p.uri)
+        : (pending.source !== 'document' ? [pending.uri] : undefined),
     };
 
     onSaveScan(destinationClassId, file);
     setSaving(false);
     setPending(null);
     setScannedPages([]);
+  };
+
+  const handleAutoSort = async () => {
+    if (!destinationClassId || scannedPages.length === 0) return;
+    
+    const targetClass = classes.find((c) => c.id === destinationClassId);
+    if (!targetClass) {
+      Alert.alert('Error', 'Please select a class first.');
+      return;
+    }
+
+    setAutoSortProcessing(true);
+    const totalPages = scannedPages.length;
+    const ocrResults: { title: string; content: string }[] = [];
+
+    try {
+      // Phase 1: OCR each page individually
+      for (let i = 0; i < scannedPages.length; i++) {
+        setAutoSortProgress({ current: i + 1, total: totalPages, phase: `Scanning note ${i + 1} of ${totalPages}...` });
+        const page = scannedPages[i];
+        const result = await extractTextFromImage(page.base64, page.mimeType);
+        if (result.success) {
+          ocrResults.push({ title: result.title, content: result.text });
+        } else {
+          ocrResults.push({ title: `Note ${i + 1}`, content: 'Could not extract text from this image.' });
+        }
+        // Small delay between OCR calls to avoid rate limiting
+        if (i < scannedPages.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+      }
+
+      // Phase 2: Classify notes into units
+      setAutoSortProgress({ current: totalPages, total: totalPages, phase: 'Sorting into units...' });
+      const existingUnits = targetClass.units.map((u) => ({
+        title: u.title,
+        subUnits: u.subUnits.map((s) => ({ title: s.title })),
+      }));
+      
+      const classification = await classifyNotesIntoUnits(ocrResults, existingUnits);
+      
+      if (!classification.success) {
+        Alert.alert('Sort Failed', classification.error || 'Could not classify notes. Try again.');
+        setAutoSortProcessing(false);
+        return;
+      }
+
+      // Phase 3: Apply classifications - build updated units and files
+      setAutoSortProgress({ current: totalPages, total: totalPages, phase: 'Organizing notes...' });
+      
+      const updatedUnits = [...targetClass.units];
+      const newFiles: FileData[] = [];
+      const results: { noteTitle: string; unitTitle: string; isNew: boolean }[] = [];
+      const today = new Date();
+      const dateStr = `${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getDate()).padStart(2, '0')}/${today.getFullYear()}`;
+
+      for (const cls of classification.classifications) {
+        const ocrNote = ocrResults[cls.noteIndex];
+        if (!ocrNote) continue;
+
+        const noteTitle = cls.suggestedNoteTitle || ocrNote.title;
+
+        // Create FileData entry
+        const fileId = Date.now() + cls.noteIndex;
+        const newFile: FileData = {
+          id: fileId,
+          name: `${noteTitle.replace(/[^a-zA-Z0-9 ]/g, '').slice(0, 30)}.jpg`,
+          date: dateStr,
+          thumbnail: scannedPages[cls.noteIndex]?.uri || '',
+          pages: 1,
+          size: '0.5MB',
+          readTime: '2 Min Read',
+          previewTitle: noteTitle,
+          previewText: ocrNote.content,
+          source: 'camera' as const,
+          pageImages: [scannedPages[cls.noteIndex]?.uri || ''],
+        };
+        newFiles.push(newFile);
+
+        // Create SubUnitNote
+        const newNote = {
+          id: Date.now() + cls.noteIndex + 1000,
+          title: noteTitle,
+          author: userName || 'You',
+          date: dateStr,
+          pages: 1,
+          content: ocrNote.content,
+        };
+
+        if (cls.isNewUnit) {
+          // Check if we already created this new unit in this batch
+          let existingNewUnit = updatedUnits.find((u) => u.title === cls.unitTitle);
+          if (!existingNewUnit) {
+            const newUnitId = updatedUnits.length > 0
+              ? Math.max(...updatedUnits.map((u) => u.id)) + 1
+              : 1;
+            existingNewUnit = {
+              id: newUnitId,
+              title: cls.unitTitle,
+              pages: 0,
+              collaborators: 0,
+              examDate: 'TBD',
+              daysLeft: 0,
+              subUnits: [
+                { id: `${newUnitId}.1`, title: 'Core Concepts', notes: [] },
+                { id: `${newUnitId}.2`, title: 'Review Questions', notes: [] },
+              ],
+            };
+            updatedUnits.push(existingNewUnit);
+          }
+          // Add note to the first sub-unit (Core Concepts) or matched sub-unit
+          const targetSub = existingNewUnit.subUnits.find((s) => s.title === cls.subUnitTitle) || existingNewUnit.subUnits[0];
+          if (targetSub) {
+            targetSub.notes.push(newNote);
+          }
+        } else {
+          // Find existing unit and sub-unit
+          const targetUnit = updatedUnits.find((u) => u.title === cls.unitTitle);
+          if (targetUnit) {
+            const targetSub = targetUnit.subUnits.find((s) => s.title === cls.subUnitTitle) || targetUnit.subUnits[0];
+            if (targetSub) {
+              targetSub.notes.push(newNote);
+            }
+          }
+        }
+
+        results.push({ noteTitle, unitTitle: cls.unitTitle, isNew: cls.isNewUnit });
+      }
+
+      // Save and show results
+      setAutoSortResults(results);
+      setAutoSortProcessing(false);
+      onAutoSort(destinationClassId, updatedUnits, newFiles);
+      setScannedPages([]);
+    } catch (err) {
+      Alert.alert('Error', 'An error occurred during auto-sort. Please try again.');
+      setAutoSortProcessing(false);
+    }
   };
 
   const modeIcon = (mode: ScanMode): keyof typeof Ionicons.glyphMap => {
@@ -607,10 +756,25 @@ export function ScanScreen({
               </TouchableOpacity>
             </View>
 
+            {/* Select destination class */}
+            <Text style={styles.destinationTitle}>Destination Class</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              {classes.map((cls) => (
+                <TouchableOpacity
+                  key={cls.id}
+                  onPress={() => setDestinationClassId(cls.id)}
+                  style={[styles.destinationChip, destinationClassId === cls.id && styles.destinationChipActive]}
+                >
+                  <Ionicons name={destinationClassId === cls.id ? 'book' : 'book-outline'} size={13} color={destinationClassId === cls.id ? colors.maroon : colors.textTertiary} />
+                  <Text style={[styles.destinationChipText, destinationClassId === cls.id && styles.destinationChipTextActive]}>{cls.title}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
             {/* Analyze button */}
             <TouchableOpacity
               style={{
-                marginTop: 16, backgroundColor: colors.maroon, borderRadius: 14,
+                marginTop: 4, backgroundColor: colors.maroon, borderRadius: 14,
                 paddingVertical: 14, alignItems: 'center', flexDirection: 'row',
                 justifyContent: 'center', gap: 8,
               }}
@@ -619,6 +783,29 @@ export function ScanScreen({
               <Ionicons name="sparkles" size={18} color="white" />
               <Text style={{ fontSize: 15, fontFamily: fonts.bold, color: 'white' }}>
                 Analyze {scannedPages.length} Page{scannedPages.length > 1 ? 's' : ''} as One Note
+              </Text>
+            </TouchableOpacity>
+
+            {/* Auto-Sort Button */}
+            <TouchableOpacity
+              style={{
+                marginTop: 10,
+                backgroundColor: !destinationClassId ? '#D8C8B8' : colors.maroon,
+                borderRadius: 14,
+                paddingVertical: 14,
+                alignItems: 'center',
+                flexDirection: 'row',
+                justifyContent: 'center',
+                gap: 8,
+                borderWidth: 2,
+                borderColor: !destinationClassId ? '#D8C8B8' : colors.maroon,
+              }}
+              onPress={handleAutoSort}
+              disabled={!destinationClassId || autoSortProcessing}
+            >
+              <Ionicons name="git-branch-outline" size={18} color="white" />
+              <Text style={{ fontSize: 15, fontFamily: fonts.bold, color: 'white' }}>
+                Auto-Sort {scannedPages.length} {scannedPages.length === 1 ? 'Note' : 'Notes'} into Units
               </Text>
             </TouchableOpacity>
           </View>
@@ -900,6 +1087,115 @@ export function ScanScreen({
           </View>
         </View>
       </Modal>
+
+      {/* Auto-Sort Processing Modal */}
+      {autoSortProcessing && (
+        <View style={{
+          position: 'absolute',
+          top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.4)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 9999,
+          padding: 24,
+        }}>
+          <View style={{
+            backgroundColor: '#FFF8F2',
+            borderRadius: 28,
+            padding: 32,
+            alignItems: 'center',
+            width: '100%',
+            maxWidth: 320,
+          }}>
+            <ActivityIndicator size="large" color={colors.maroon} style={{ marginBottom: 20 }} />
+            <Text style={{ color: colors.textPrimary, fontFamily: fonts.bold, fontSize: 18, marginBottom: 8, textAlign: 'center' }}>
+              Auto-Sorting Notes
+            </Text>
+            <Text style={{ color: colors.textSecondary, fontFamily: fonts.regular, fontSize: 14, textAlign: 'center', marginBottom: 16 }}>
+              {autoSortProgress.phase}
+            </Text>
+            {autoSortProgress.total > 0 && (
+              <View style={{ width: '100%', height: 6, backgroundColor: '#F0E0D0', borderRadius: 3 }}>
+                <View style={{
+                  height: 6,
+                  backgroundColor: colors.maroon,
+                  borderRadius: 3,
+                  width: `${Math.round((autoSortProgress.current / autoSortProgress.total) * 100)}%`,
+                }} />
+              </View>
+            )}
+          </View>
+        </View>
+      )}
+
+      {/* Auto-Sort Results Modal */}
+      {autoSortResults && !autoSortProcessing && (
+        <View style={{
+          position: 'absolute',
+          top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.4)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 9999,
+          padding: 24,
+        }}>
+          <View style={{
+            backgroundColor: '#FFF8F2',
+            borderRadius: 28,
+            padding: 24,
+            width: '100%',
+            maxWidth: 360,
+            maxHeight: '70%',
+          }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+              <View style={{ width: 36, height: 36, borderRadius: 12, backgroundColor: '#D1FAE5', alignItems: 'center', justifyContent: 'center' }}>
+                <Ionicons name="checkmark-circle" size={20} color="#059669" />
+              </View>
+              <Text style={{ color: colors.textPrimary, fontFamily: fonts.bold, fontSize: 18 }}>
+                Notes Sorted!
+              </Text>
+            </View>
+            <ScrollView style={{ maxHeight: 300 }}>
+              {autoSortResults.map((r, i) => (
+                <View key={i} style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  paddingVertical: 10,
+                  borderBottomWidth: i < autoSortResults.length - 1 ? 1 : 0,
+                  borderBottomColor: '#FFF5ED',
+                  gap: 10,
+                }}>
+                  <Ionicons name="document-text" size={18} color={colors.textTertiary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.textPrimary, fontFamily: fonts.semiBold, fontSize: 14 }} numberOfLines={1}>
+                      {r.noteTitle}
+                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                      <Ionicons name="folder-open" size={12} color={colors.textTertiary} />
+                      <Text style={{ color: colors.textSecondary, fontFamily: fonts.regular, fontSize: 12 }}>
+                        {r.unitTitle}
+                      </Text>
+                      {r.isNew && (
+                        <View style={{ backgroundColor: `${colors.maroon}12`, paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4, marginLeft: 4 }}>
+                          <Text style={{ color: colors.maroon, fontFamily: fonts.bold, fontSize: 9 }}>NEW</Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+              <TouchableOpacity
+                style={{ flex: 1, height: 48, borderRadius: 18, backgroundColor: colors.maroon, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                onPress={() => setAutoSortResults(null)}
+              >
+                <Text style={{ fontSize: 14, fontFamily: fonts.bold, color: 'white' }}>View in Class →</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
     </View>
   );
 }

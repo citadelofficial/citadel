@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, Text } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../theme';
@@ -14,6 +14,7 @@ interface Props {
   onFiles?: () => void;
   onTabLayout?: (tabId: TabId, rect: { x: number; y: number; width: number; height: number }) => void;
   highlightedTab?: TabId;
+  messageBadge?: number;
 }
 
 const items: { id: TabId; icon: keyof typeof Ionicons.glyphMap; label: string }[] = [
@@ -23,7 +24,7 @@ const items: { id: TabId; icon: keyof typeof Ionicons.glyphMap; label: string }[
   { id: 'files', icon: 'folder', label: 'Files' },
 ];
 
-export function BottomNav({ active, onHome, onScan, onFriends, onFiles, onTabLayout, highlightedTab }: Props) {
+export function BottomNav({ active, onHome, onScan, onFriends, onFiles, onTabLayout, highlightedTab, messageBadge = 0 }: Props) {
   const insets = useSafeAreaInsets();
 
   const actions: Record<TabId, (() => void) | undefined> = {
@@ -64,6 +65,18 @@ export function BottomNav({ active, onHome, onScan, onFriends, onFiles, onTabLay
                   size={22}
                   color={active === item.id ? colors.maroon : 'rgba(255,255,255,0.7)'}
                 />
+                {item.id === 'people' && messageBadge > 0 && (
+                  <View style={{
+                    position: 'absolute', top: 4, right: 4,
+                    minWidth: 16, height: 16, borderRadius: 8,
+                    backgroundColor: '#EF4444', alignItems: 'center', justifyContent: 'center',
+                    paddingHorizontal: 4,
+                  }}>
+                    <Text style={{ fontSize: 9, fontWeight: '800', color: 'white' }}>
+                      {messageBadge > 9 ? '9+' : messageBadge}
+                    </Text>
+                  </View>
+                )}
               </View>
             </TouchableOpacity>
           ))}
@@ -110,13 +123,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.06)',
   },
   highlightHalo: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     borderRadius: 26,
     borderWidth: 2,
     borderColor: '#F3D3A7',
   },
   activePill: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     borderRadius: 26,
     backgroundColor: 'rgba(255, 255, 255, 0.92)',
   },

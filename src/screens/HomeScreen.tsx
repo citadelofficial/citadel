@@ -21,11 +21,14 @@ import * as ImagePicker from 'expo-image-picker';
 import { BottomNav } from '../components/BottomNav';
 import { AnimatedPressable } from '../components/AnimatedPressable';
 import { InlineTutorialCard } from '../components/InlineTutorialCard';
+import { SATDailyPractice } from '../components/SATDailyPractice';
 import { colors, fonts } from '../theme';
 import type { ClassData, FriendData, UserData, UnitData, ClassInvite } from '../types';
 import { friendsDirectory } from '../data/friends';
 import { supabase } from '../lib/supabase';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { getClassImage } from '../data/classImages';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const CARD_WIDTH = SCREEN_WIDTH - 48 - 56;
@@ -74,6 +77,7 @@ interface Props {
   onTutorialNext?: () => void;
   onTutorialBack?: () => void;
   onTutorialSkip?: () => void;
+  unreadMessageCount?: number;
 }
 
 const blocks = ['Block 1', 'Block 2', 'Block 3', 'Block 4', 'Block 5', 'Block 6', 'Block 7', 'Block 8'];
@@ -342,6 +346,7 @@ export function HomeScreen({
   onTutorialNext = () => { },
   onTutorialBack = () => { },
   onTutorialSkip = () => { },
+  unreadMessageCount = 0,
 }: Props) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFilter, setSearchFilter] = useState<SearchFilter>('all');
@@ -386,11 +391,13 @@ export function HomeScreen({
   const [newTaskClassId, setNewTaskClassId] = useState<string | null>(null);
   const [newTaskDueDate, setNewTaskDueDate] = useState<string | null>(null);
   const [showTaskDatePicker, setShowTaskDatePicker] = useState(false);
+  const [draftNewTaskDate, setDraftNewTaskDate] = useState(new Date());
   const [editingTask, setEditingTask] = useState<TaskItem | null>(null);
   const [editTaskTitle, setEditTaskTitle] = useState('');
   const [editTaskClassId, setEditTaskClassId] = useState<string | null>(null);
   const [editTaskDueDate, setEditTaskDueDate] = useState<string | null>(null);
   const [showEditTaskDatePicker, setShowEditTaskDatePicker] = useState(false);
+  const [draftEditTaskDate, setDraftEditTaskDate] = useState(new Date());
 
   const formatToday = () => {
     const d = new Date();
@@ -884,14 +891,12 @@ export function HomeScreen({
   const saveNewClass = () => {
     const title = newClassName.trim() || 'New Class';
 
-    const templateImage =
-      newClassTemplate === 'AP Class'
-        ? 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=600&h=500&fit=crop'
-        : 'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?w=600&h=500&fit=crop';
+    const effectiveTitle = newClassTemplate === 'AP Class' && selectedAPCourse ? selectedAPCourse : title;
+    const templateImage = getClassImage(effectiveTitle);
 
     const newClass: ClassData = {
       id: Date.now().toString(),
-      title: newClassTemplate === 'AP Class' && selectedAPCourse ? selectedAPCourse : title,
+      title: effectiveTitle,
       block: newClassBlock,
       classCode: makeClassCode(title),
       image: newClassImage || templateImage,
@@ -1030,12 +1035,14 @@ export function HomeScreen({
           color: typeof parsed.color === 'string' ? parsed.color.slice(0, 20) : '',
           classCode: String(parsed.classCode || '').slice(0, 50),
           classmates: Math.max(0, Math.min(Number(parsed.classmates) || 0, 9999)) + 1,
-          classmateNames: Array.isArray(parsed.classmateNames) ? parsed.classmateNames.filter((n: unknown) => typeof n === 'string').slice(0, 100).map((n: string) => n.slice(0, 100)) : [],
+          classmateNames: [...(Array.isArray(parsed.classmateNames) ? parsed.classmateNames.filter((n: unknown) => typeof n === 'string').slice(0, 100).map((n: string) => n.slice(0, 100)) : []), ...(userName ? [userName] : [])],
           units: Array.isArray(parsed.units) ? parsed.units : [],
           files: Array.isArray(parsed.files) ? parsed.files : [],
           documents: Number(parsed.documents) || 0,
           image: typeof parsed.image === 'string' ? parsed.image.slice(0, 500) : '',
           school: typeof parsed.school === 'string' ? parsed.school.slice(0, 200) : undefined,
+          teacher: typeof parsed.teacher === 'string' ? parsed.teacher.slice(0, 200) : undefined,
+          apPracticeTests: Array.isArray(parsed.apPracticeTests) ? parsed.apPracticeTests : [],
         };
         addClassWithSchoolGate(joinedClass, () => {
           setShowJoinClassModal(false);
@@ -1170,7 +1177,7 @@ export function HomeScreen({
             <Ionicons name="search" size={18} color={colors.textTertiary} />
             <TextInput
               style={styles.searchInput}
-              placeholder="Smart Search: classes, files, friends, actions"
+              placeholder="Smart Search"
               placeholderTextColor={colors.textTertiary}
               value={searchQuery}
               onChangeText={setSearchQuery}
@@ -1280,7 +1287,7 @@ export function HomeScreen({
                   const accentColor = item.type === 'class' ? '#7C3AED' : item.type === 'file' ? '#2563EB' : item.type === 'friend' ? '#059669' : '#F59E0B';
                   const typeBadge = item.type === 'class' ? 'Class' : item.type === 'file' ? 'Note' : item.type === 'friend' ? 'Person' : 'Action';
                   return (
-                    <TouchableOpacity key={item.id} style={styles.searchResultRow} onPress={() => handleSearchSelect(item)} activeOpacity={0.6}>
+                    <TouchableOpacity key={`${item.type}-${item.id}`} style={styles.searchResultRow} onPress={() => handleSearchSelect(item)} activeOpacity={0.6}>
                       <View style={[styles.searchResultIcon, { backgroundColor: `${accentColor}12` }]}>
                         <Ionicons name={iconName} size={16} color={accentColor} />
                       </View>
@@ -1377,7 +1384,7 @@ export function HomeScreen({
               const index = Math.round(e.nativeEvent.contentOffset.x / (CARD_WIDTH + CARD_GAP));
               setCurrentCardIndex(Math.min(index, classes.length));
             }}
-            keyExtractor={(item) => item.id}
+            keyExtractor={(item, index) => `${item.id}-${index}`}
             renderItem={({ item }) => {
               if ('isAdd' in item && item.isAdd) {
                 return (
@@ -1534,8 +1541,8 @@ export function HomeScreen({
                   return bc.length === 0 ? 'No classes in this block' : `${bc.length} class${bc.length > 1 ? 'es' : ''}`;
                 })()}</Text>
 
-                {activeBlock && classes.filter(c => c.block === activeBlock).map((cls) => (
-                  <View key={cls.id} style={styles.blockModalClassRow}>
+                {activeBlock && classes.filter(c => c.block === activeBlock).map((cls, idx) => (
+                  <View key={`${cls.id}-${idx}`} style={styles.blockModalClassRow}>
                     <View style={[styles.blockModalClassDot, { backgroundColor: cls.color }]} />
                     <View style={{ flex: 1 }}>
                       <Text style={styles.blockModalClassName}>{cls.title}</Text>
@@ -1681,9 +1688,9 @@ export function HomeScreen({
                   >
                     <Text style={[styles.taskClassChipText, !newTaskClassId && styles.taskClassChipTextActive]}>None</Text>
                   </TouchableOpacity>
-                  {classes.map((cls) => (
+                  {classes.map((cls, idx) => (
                     <TouchableOpacity
-                      key={cls.id}
+                      key={`${cls.id}-${idx}`}
                       style={[styles.taskClassChip, newTaskClassId === cls.id && styles.taskClassChipActive]}
                       onPress={() => setNewTaskClassId(cls.id)}
                     >
@@ -1693,7 +1700,10 @@ export function HomeScreen({
                 </ScrollView>
                 <TouchableOpacity
                   style={styles.dueDatePickerBtn}
-                  onPress={() => setShowTaskDatePicker(true)}
+                  onPress={() => {
+                    setDraftNewTaskDate(new Date());
+                    setShowTaskDatePicker(true);
+                  }}
                 >
                   <Ionicons name="calendar-outline" size={14} color={newTaskDueDate ? '#b45309' : colors.textTertiary} />
                   <Text style={[styles.dueDatePickerText, newTaskDueDate && { color: '#b45309' }]}>
@@ -1705,15 +1715,47 @@ export function HomeScreen({
                     </TouchableOpacity>
                   )}
                 </TouchableOpacity>
-                <DateTimePickerModal
-                  isVisible={showTaskDatePicker}
-                  mode="date"
-                  onConfirm={(date) => {
-                    setNewTaskDueDate(date.toISOString());
-                    setShowTaskDatePicker(false);
-                  }}
-                  onCancel={() => setShowTaskDatePicker(false)}
-                />
+                {showTaskDatePicker && Platform.OS === 'ios' && (
+                  <View style={{ marginTop: 8, backgroundColor: '#FFF5ED', borderRadius: 16, padding: 12, borderWidth: 2, borderColor: '#F0E0D0', alignItems: 'center', overflow: 'hidden' }}>
+                    <DateTimePicker
+                      value={draftNewTaskDate}
+                      mode="date"
+                      display="spinner"
+                      onChange={(event, selectedDate) => {
+                        if (selectedDate) setDraftNewTaskDate(selectedDate);
+                      }}
+                      textColor={colors.textPrimary}
+                    />
+                    <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, alignSelf: 'stretch' }}>
+                      <TouchableOpacity
+                        style={{ flex: 1, height: 40, borderRadius: 14, backgroundColor: '#FFF5ED', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#F0E0D0' }}
+                        onPress={() => setShowTaskDatePicker(false)}
+                      >
+                        <Text style={{ fontSize: 14, fontFamily: fonts.bold, color: colors.textSecondary }}>Cancel</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={{ flex: 1, height: 40, borderRadius: 14, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' }}
+                        onPress={() => {
+                          setNewTaskDueDate(draftNewTaskDate.toISOString());
+                          setShowTaskDatePicker(false);
+                        }}
+                      >
+                        <Text style={{ fontSize: 14, fontFamily: fonts.bold, color: 'white' }}>Confirm</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+                {showTaskDatePicker && Platform.OS === 'android' && (
+                  <DateTimePickerModal
+                    isVisible={showTaskDatePicker}
+                    mode="date"
+                    onConfirm={(date) => {
+                      setNewTaskDueDate(date.toISOString());
+                      setShowTaskDatePicker(false);
+                    }}
+                    onCancel={() => setShowTaskDatePicker(false)}
+                  />
+                )}
                 <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
                   <TouchableOpacity style={styles.cancelTaskBtn} onPress={() => { setShowAddTask(false); setNewTaskTitle(''); setNewTaskDueDate(null); }}>
                     <Text style={styles.cancelTaskBtnText}>Cancel</Text>
@@ -1725,6 +1767,12 @@ export function HomeScreen({
               </View>
             )}
           </View>
+        </View>
+
+        {/* Daily SAT Practice */}
+        <View style={{ marginTop: 28 }}>
+          <Text style={[styles.sectionTitle, { marginBottom: 14 }]}>Daily SAT Practice</Text>
+          <SATDailyPractice />
         </View>
 
         <Animated.View style={{ opacity: sectionFade3, transform: [{ translateY: sectionSlide3 }] }}>
@@ -1803,7 +1851,7 @@ export function HomeScreen({
         )
       }
 
-      <BottomNav active="home" onHome={() => { }} onScan={onScanOpen} onFriends={onFriendsOpen} onFiles={() => onFilesOpen()} />
+      <BottomNav active="home" onHome={() => { }} onScan={onScanOpen} onFriends={onFriendsOpen} onFiles={() => onFilesOpen()} messageBadge={unreadMessageCount} />
 
       {/* Notification Tray Modal */}
       <Modal visible={showNotificationTray} transparent animationType="fade" onRequestClose={() => setShowNotificationTray(false)}>
@@ -1923,11 +1971,11 @@ export function HomeScreen({
               {classes.length > 0 && (
                 <Text style={{ fontSize: 11, fontFamily: fonts.bold, color: colors.textTertiary, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Classes</Text>
               )}
-              {classes.map((cls) => {
+              {classes.map((cls, idx) => {
                 const alreadyAdded = shortcuts.some(s => s.type === 'class' && s.refId === cls.id);
                 return (
                   <TouchableOpacity
-                    key={cls.id}
+                    key={`${cls.id}-${idx}`}
                     style={[styles.shortcutOptionRow, alreadyAdded && { opacity: 0.5 }]}
                     onPress={() => addShortcut('class', cls.title, cls.id)}
                     disabled={alreadyAdded}
@@ -2471,9 +2519,9 @@ export function HomeScreen({
                 >
                   <Text style={[styles.taskClassChipText, !editTaskClassId && styles.taskClassChipTextActive]}>None</Text>
                 </TouchableOpacity>
-                {classes.map((cls) => (
+                {classes.map((cls, idx) => (
                   <TouchableOpacity
-                    key={cls.id}
+                    key={`${cls.id}-${idx}`}
                     style={[styles.taskClassChip, editTaskClassId === cls.id && styles.taskClassChipActive]}
                     onPress={() => setEditTaskClassId(cls.id)}
                   >
@@ -2483,7 +2531,10 @@ export function HomeScreen({
               </ScrollView>
               <TouchableOpacity
                 style={[styles.dueDatePickerBtn, { marginTop: 12 }]}
-                onPress={() => setShowEditTaskDatePicker(true)}
+                onPress={() => {
+                  setDraftEditTaskDate(editTaskDueDate ? new Date(editTaskDueDate) : new Date());
+                  setShowEditTaskDatePicker(true);
+                }}
               >
                 <Ionicons name="calendar-outline" size={14} color={editTaskDueDate ? '#b45309' : colors.textTertiary} />
                 <Text style={[styles.dueDatePickerText, editTaskDueDate && { color: '#b45309' }]}>
@@ -2495,15 +2546,47 @@ export function HomeScreen({
                   </TouchableOpacity>
                 )}
               </TouchableOpacity>
-              <DateTimePickerModal
-                isVisible={showEditTaskDatePicker}
-                mode="date"
-                onConfirm={(date) => {
-                  setEditTaskDueDate(date.toISOString());
-                  setShowEditTaskDatePicker(false);
-                }}
-                onCancel={() => setShowEditTaskDatePicker(false)}
-              />
+              {showEditTaskDatePicker && Platform.OS === 'ios' && (
+                <View style={{ marginTop: 8, backgroundColor: '#FFF5ED', borderRadius: 16, padding: 12, borderWidth: 2, borderColor: '#F0E0D0', alignItems: 'center', overflow: 'hidden' }}>
+                  <DateTimePicker
+                    value={draftEditTaskDate}
+                    mode="date"
+                    display="spinner"
+                    onChange={(event, selectedDate) => {
+                      if (selectedDate) setDraftEditTaskDate(selectedDate);
+                    }}
+                    textColor={colors.textPrimary}
+                  />
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, alignSelf: 'stretch' }}>
+                    <TouchableOpacity
+                      style={{ flex: 1, height: 40, borderRadius: 14, backgroundColor: '#FFF5ED', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#F0E0D0' }}
+                      onPress={() => setShowEditTaskDatePicker(false)}
+                    >
+                      <Text style={{ fontSize: 14, fontFamily: fonts.bold, color: colors.textSecondary }}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={{ flex: 1, height: 40, borderRadius: 14, backgroundColor: colors.maroon, alignItems: 'center', justifyContent: 'center' }}
+                      onPress={() => {
+                        setEditTaskDueDate(draftEditTaskDate.toISOString());
+                        setShowEditTaskDatePicker(false);
+                      }}
+                    >
+                      <Text style={{ fontSize: 14, fontFamily: fonts.bold, color: 'white' }}>Confirm</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+              {showEditTaskDatePicker && Platform.OS === 'android' && (
+                <DateTimePickerModal
+                  isVisible={showEditTaskDatePicker}
+                  mode="date"
+                  onConfirm={(date) => {
+                    setEditTaskDueDate(date.toISOString());
+                    setShowEditTaskDatePicker(false);
+                  }}
+                  onCancel={() => setShowEditTaskDatePicker(false)}
+                />
+              )}
               <TouchableOpacity
                 style={[styles.modalSaveBtn, { marginTop: 16 }, !editTaskTitle.trim() && { opacity: 0.5 }]}
                 onPress={saveEditTask}
@@ -2735,8 +2818,8 @@ const styles = StyleSheet.create({
   addCardPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' },
   addCardPill: { backgroundColor: '#FFF5ED', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 7, borderWidth: 2, borderColor: '#F0E0D0' },
   addCardPillText: { fontSize: 11, color: colors.textSecondary, fontFamily: fonts.semiBold },
-  classImage: { ...StyleSheet.absoluteFillObject },
-  classOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.46)' },
+  classImage: { ...StyleSheet.absoluteFill },
+  classOverlay: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.46)' },
   heartBtn: { position: 'absolute', top: 20, right: 20, width: 38, height: 38, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.22)', alignItems: 'center', justifyContent: 'center', zIndex: 10 },
   trashBtn: { position: 'absolute', top: 20, left: 20, width: 38, height: 38, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.22)', alignItems: 'center', justifyContent: 'center', zIndex: 10 },
   tutorialClassBadge: {

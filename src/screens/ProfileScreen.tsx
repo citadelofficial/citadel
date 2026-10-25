@@ -34,7 +34,7 @@ interface Props {
     session: Session | null;
     onPersonOpen?: (person: FriendData) => void;
     onInfoPage?: (page: 'help' | 'terms' | 'privacy') => void;
-    onRateApp?: () => void;
+
     onShareApp?: () => void;
     onReplayTutorial?: () => void;
     onSchoolOpen?: (schoolName: string) => void;
@@ -153,7 +153,7 @@ export function ProfileScreen({
     session,
     onPersonOpen,
     onInfoPage,
-    onRateApp,
+
     onShareApp,
     onReplayTutorial,
     onSchoolOpen,
@@ -739,14 +739,6 @@ export function ProfileScreen({
                         <TouchableOpacity style={styles.menuRow} onPress={() => onInfoPage?.('privacy')}>
                             <View style={styles.infoIcon}><Ionicons name="shield-outline" size={18} color={colors.maroon} /></View>
                             <Text style={styles.menuLabel}>Privacy Policy</Text>
-                            <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
-                        </TouchableOpacity>
-
-                        <View style={styles.separator} />
-
-                        <TouchableOpacity style={styles.menuRow} onPress={onRateApp}>
-                            <View style={styles.infoIcon}><Ionicons name="star-outline" size={18} color={colors.maroon} /></View>
-                            <Text style={styles.menuLabel}>Rate Citadel</Text>
                             <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
                         </TouchableOpacity>
 
